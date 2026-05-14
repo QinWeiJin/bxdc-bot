@@ -12,6 +12,8 @@ export interface ApiConfigDraft {
   operation: string
   method: string
   endpoint: string
+  /** HTTP 超时秒数，默认 30 */
+  timeoutSeconds: number
   /** 默认 query；POST/PUT/PATCH 等 JSON 接口选 jsonBody；仅接受表单的接口选 formBody */
   parameterBinding: ApiParameterBinding
   responseTimestampField: string
@@ -20,6 +22,10 @@ export interface ApiConfigDraft {
   bodyText: string
   interfaceDescription: string
   parameterContractText: string
+  /** 是否启用异步轮询模式 */
+  asyncPollEnabled: boolean
+  /** 异步轮询配置 JSON */
+  asyncPollText: string
 }
 
 export interface SshConfigDraft {
@@ -75,6 +81,8 @@ const API_ALLOWED_KEYS = [
   'interfaceDescription',
   'parameterContract',
   'parameterBinding',
+  'timeoutSeconds',
+  'asyncPoll',
 ]
 
 const SSH_ALLOWED_KEYS = [
@@ -115,6 +123,17 @@ function readString(record: JsonRecord, key: string, fallback = ''): string {
     throw new Error(`${key} 必须是字符串`)
   }
   return value
+}
+
+function readPositiveInt(record: JsonRecord, key: string, fallback: number): number {
+  const value = record[key]
+  if (value == null) return fallback
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return Math.floor(value)
+  if (typeof value === 'string') {
+    const n = parseInt(value, 10)
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  throw new Error(`${key} 必须是正整数`)
 }
 
 function readPreset(record: JsonRecord): string {
@@ -177,6 +196,7 @@ function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', preset === 'current-time' ? 'current-time' : ''),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
+    timeoutSeconds: readPositiveInt(configuration, 'timeoutSeconds', 30),
     parameterBinding: readParameterBinding(configuration),
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: formatJsonText(configuration.headers),
@@ -184,6 +204,8 @@ function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
     bodyText: formatJsonText(configuration.body),
     interfaceDescription: readString(configuration, 'interfaceDescription'),
     parameterContractText: formatJsonText(configuration.parameterContract),
+    asyncPollEnabled: configuration.asyncPoll != null,
+    asyncPollText: formatJsonText(configuration.asyncPoll),
   }
 }
 
@@ -195,6 +217,7 @@ function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', 'current-time'),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
+    timeoutSeconds: 30,
     parameterBinding: 'query',
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: '',
@@ -202,6 +225,8 @@ function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
     bodyText: '',
     interfaceDescription: '',
     parameterContractText: '',
+    asyncPollEnabled: false,
+    asyncPollText: '',
   }
 }
 
@@ -307,6 +332,7 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       operation: '',
       method: 'GET',
       endpoint: '',
+      timeoutSeconds: 30,
       parameterBinding: 'query',
       responseTimestampField: '',
       headersText: '',
@@ -314,6 +340,8 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       bodyText: '',
       interfaceDescription: '',
       parameterContractText: '',
+      asyncPollEnabled: false,
+      asyncPollText: '',
     }
 }
 
@@ -384,12 +412,14 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
     const query = parseJsonText(draft.queryText, 'Query')
     const body = parseJsonText(draft.bodyText, 'Body')
     const parameterContract = parseJsonText(draft.parameterContractText, '参数契约')
+    const asyncPoll = draft.asyncPollEnabled ? parseJsonText(draft.asyncPollText, '异步轮询配置') : undefined
     return JSON.stringify({
       kind: 'api',
       ...(draft.preset !== 'none' ? { preset: draft.preset } : {}),
       operation: requireNonEmpty(draft.operation, '操作标识'),
       method: requireNonEmpty(draft.method, '请求方法'),
       endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
+      ...(draft.timeoutSeconds !== 30 ? { timeoutSeconds: draft.timeoutSeconds } : {}),
       ...(draft.parameterBinding !== 'query' ? { parameterBinding: draft.parameterBinding } : {}),
       ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
       ...(headers !== undefined ? { headers } : {}),
@@ -397,6 +427,7 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       ...(body !== undefined ? { body } : {}),
       ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
       ...(parameterContract !== undefined ? { parameterContract } : {}),
+      ...(asyncPoll !== undefined && asyncPoll !== null ? { asyncPoll } : {}),
     })
   }
 

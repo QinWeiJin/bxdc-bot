@@ -14,6 +14,7 @@ const health_controller_1 = require("./controller/health.controller");
 const memory_controller_1 = require("./controller/memory.controller");
 const user_controller_1 = require("./controller/user.controller");
 const avatar_controller_1 = require("./features/avatar/avatar.controller");
+const optimize_text_controller_1 = require("./features/optimize-text/optimize-text.controller");
 const skill_proxy_controller_1 = require("./features/skills/skill-proxy.controller");
 const memory_service_1 = require("./mem/memory.service");
 const skill_manager_1 = require("./skills/skill.manager");
@@ -24,7 +25,7 @@ exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [config_1.ConfigModule.forRoot()],
-        controllers: [agent_controller_1.AgentController, health_controller_1.HealthController, memory_controller_1.MemoryController, user_controller_1.UserController, avatar_controller_1.AvatarController, skill_proxy_controller_1.SkillProxyController],
+        controllers: [agent_controller_1.AgentController, health_controller_1.HealthController, memory_controller_1.MemoryController, user_controller_1.UserController, avatar_controller_1.AvatarController, optimize_text_controller_1.OptimizeTextController, skill_proxy_controller_1.SkillProxyController],
         providers: [memory_service_1.MemoryService, skill_manager_1.SkillManager, logger_service_1.LoggerService],
     })
 ], AppModule);

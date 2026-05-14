@@ -30,8 +30,11 @@ public class GatewayHttpClientAuditInterceptor implements ClientHttpRequestInter
             ClientHttpResponse response = execution.execute(request, body);
             outboundAuditService.recordHttpOutboundSuccess(request, body, response, SKILL_CONTEXT);
             return response;
-        } catch (IOException e) {
+        } catch (Exception e) {
             outboundAuditService.recordHttpOutboundFailure(request, body, e, SKILL_CONTEXT);
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
             throw e;
         }
     }

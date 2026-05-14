@@ -27,6 +27,7 @@ import { HealthController } from './controller/health.controller';
 import { MemoryController } from './controller/memory.controller';
 import { UserController } from './controller/user.controller';
 import { AvatarController } from './features/avatar/avatar.controller';
+import { OptimizeTextController } from './features/optimize-text/optimize-text.controller';
 import { SkillProxyController } from './features/skills/skill-proxy.controller';
 import { MemoryService } from './mem/memory.service';
 import { SkillManager } from './skills/skill.manager';
@@ -45,7 +46,7 @@ import { LoggerService } from './utils/logger.service';
  */
 @Module({
   imports: [ConfigModule.forRoot()],
-  controllers: [AgentController, HealthController, MemoryController, UserController, AvatarController, SkillProxyController],
+  controllers: [AgentController, HealthController, MemoryController, UserController, AvatarController, OptimizeTextController, SkillProxyController],
   providers: [MemoryService, SkillManager, LoggerService],
 })
 export class AppModule {}

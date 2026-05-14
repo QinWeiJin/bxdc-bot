@@ -139,6 +139,46 @@ const skillGeneratorBooleanOptionalSchema = zod_1.z.preprocess((val) => {
     }
     return val;
 }, zod_1.z.boolean().optional());
+const skillGeneratorTimeoutSecondsSchema = zod_1.z.preprocess((val) => {
+    if (val === undefined || val === null)
+        return undefined;
+    if (typeof val === "number")
+        return val;
+    if (typeof val === "string") {
+        const n = Number(val.trim());
+        if (Number.isFinite(n))
+            return n;
+    }
+    return val;
+}, zod_1.z.number().int().min(1).max(3600).optional());
+const skillGeneratorAsyncPollSchema = zod_1.z.preprocess((val) => {
+    if (val === undefined || val === null)
+        return undefined;
+    if (typeof val === "object" && !Array.isArray(val))
+        return val;
+    if (typeof val === "string") {
+        try {
+            const p = JSON.parse(val.trim());
+            if (p && typeof p === "object" && !Array.isArray(p))
+                return p;
+        }
+        catch {
+            return val;
+        }
+    }
+    return val;
+}, zod_1.z.object({
+    pollEndpoint: zod_1.z.string(),
+    idJsonPath: zod_1.z.string().optional(),
+    pollMethod: zod_1.z.string().optional(),
+    pollIntervalSeconds: zod_1.z.number().int().min(1).optional(),
+    maxWaitSeconds: zod_1.z.number().int().min(1).optional(),
+    completionJsonPath: zod_1.z.string().optional(),
+    completionValue: zod_1.z.string().optional(),
+    failedValues: zod_1.z.array(zod_1.z.string()).optional(),
+    resultJsonPath: zod_1.z.string().optional(),
+    pollHeaders: zod_1.z.record(zod_1.z.string()).optional(),
+}).optional());
 const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
     zod_1.z.object({
         targetType: zod_1.z.literal("api"),
@@ -152,6 +192,14 @@ const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
         body: zod_1.z.any().optional(),
         interfaceDescription: zod_1.z.string().optional(),
         parameterContract: skillGeneratorParameterContractSchema,
+        parameterBinding: zod_1.z.enum(["query", "jsonBody", "formBody"]).optional()
+            .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
+        timeoutSeconds: skillGeneratorTimeoutSecondsSchema
+            .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
+        asyncPoll: skillGeneratorAsyncPollSchema
+            .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
+            + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
+            + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
         testInput: skillGeneratorTestInputSchema,
         enabled: skillGeneratorBooleanOptionalSchema,
         requiresConfirmation: skillGeneratorBooleanOptionalSchema,
@@ -697,17 +745,20 @@ function buildGeneratedSkill(input) {
             } })()
             : rawPc;
         const methodUpper = typeof input.method === "string" ? input.method.trim().toUpperCase() : "";
-        const defaultJsonBody = ["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper);
+        const resolvedBinding = normalizeParameterBindingValue(input.parameterBinding)
+            ?? (["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper) ? "jsonBody" : undefined);
         config = {
             kind: "api",
             operation: normalizeGeneratedOperation(name),
             method: input.method?.trim().toUpperCase(),
             endpoint: input.endpoint?.trim(),
-            ...(defaultJsonBody ? { parameterBinding: "jsonBody" } : {}),
+            ...(resolvedBinding ? { parameterBinding: resolvedBinding } : {}),
             ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
             ...(input.query && Object.keys(input.query).length > 0 ? { query: input.query } : {}),
             ...(input.interfaceDescription?.trim() ? { interfaceDescription: input.interfaceDescription.trim() } : {}),
             ...(parameterContract ? { parameterContract } : {}),
+            ...(input.timeoutSeconds !== undefined && input.timeoutSeconds !== 30 ? { timeoutSeconds: input.timeoutSeconds } : {}),
+            ...(input.asyncPoll ? { asyncPoll: input.asyncPoll } : {}),
         };
     }
     else if (targetType === "ssh") {
@@ -861,6 +912,9 @@ function collectMergedScalarFields(merged) {
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
             out[key] = value;
         }
+        else if (Array.isArray(value)) {
+            out[key] = value;
+        }
     }
     return out;
 }
@@ -891,17 +945,26 @@ function isFormUrlEncodableScalar(v) {
 }
 function formUrlEncodeFlatBodyObject(bodyObj) {
     for (const [key, v] of Object.entries(bodyObj)) {
-        if (!isFormUrlEncodableScalar(v)) {
+        if (!isFormUrlEncodableScalar(v) && !Array.isArray(v)) {
             return {
                 ok: false,
-                error: "Parameter value not allowed for formBody binding: only flat string, number, or boolean values are supported. "
+                error: "Parameter value not allowed for formBody binding: only flat string, number, boolean, or array values are supported. "
                     + (key ? `Key '${key}' has an unsupported value type or nested shape.` : ""),
             };
         }
     }
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(bodyObj)) {
-        params.set(k, String(v));
+        if (Array.isArray(v)) {
+            for (const item of v) {
+                if (item !== null && item !== undefined) {
+                    params.append(k, String(item));
+                }
+            }
+        }
+        else {
+            params.set(k, String(v));
+        }
     }
     return { ok: true, body: params.toString() };
 }
@@ -912,16 +975,71 @@ function mergeHeadersForApiProxy(configHeaders, method, outboundBody) {
     const m = method.toUpperCase();
     if (!["POST", "PUT", "PATCH", "DELETE"].includes(m))
         return out;
-    const hasContentType = Object.keys(out).some((k) => k.toLowerCase() === "content-type");
-    if (!hasContentType) {
-        if (outboundBody === "json") {
-            out["Content-Type"] = "application/json";
-        }
-        else {
-            out["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
-        }
+    if (outboundBody === "json") {
+        out["Content-Type"] = "application/json";
+    }
+    else {
+        out["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
     }
     return out;
+}
+function validateTimeoutSeconds(raw) {
+    const DEFAULT_TIMEOUT = 30;
+    const MAX_TIMEOUT = 3600;
+    if (raw === undefined || raw === null)
+        return DEFAULT_TIMEOUT;
+    if (typeof raw !== "number" || !Number.isFinite(raw))
+        return DEFAULT_TIMEOUT;
+    if (raw < 1) {
+        console.warn(`[api-skill] timeoutSeconds ${raw} clamped to 1`);
+        return 1;
+    }
+    if (raw > MAX_TIMEOUT) {
+        console.warn(`[api-skill] timeoutSeconds ${raw} exceeds max ${MAX_TIMEOUT}, clamped`);
+        return MAX_TIMEOUT;
+    }
+    return Math.floor(raw);
+}
+function coerceMergedTypes(merged, properties) {
+    for (const [key, prop] of Object.entries(properties)) {
+        const val = merged[key];
+        if (val === undefined || val === null)
+            continue;
+        if (typeof val === "string" && prop.type === "number") {
+            const n = Number(val);
+            if (Number.isFinite(n)) {
+                merged[key] = n;
+            }
+        }
+        else if (typeof val === "string" && prop.type === "boolean") {
+            const lower = val.trim().toLowerCase();
+            if (lower === "true" || lower === "1" || lower === "yes") {
+                merged[key] = true;
+            }
+            else if (lower === "false" || lower === "0" || lower === "no" || lower === "") {
+                merged[key] = false;
+            }
+        }
+        else if (typeof val === "string" && prop.type === "array") {
+            const trimmed = val.trim();
+            if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    if (Array.isArray(parsed)) {
+                        merged[key] = parsed;
+                    }
+                }
+                catch {
+                }
+            }
+        }
+        else if (typeof val === "string" && prop.type === "integer") {
+            const n = parseInt(val, 10);
+            if (Number.isFinite(n)) {
+                merged[key] = n;
+            }
+        }
+    }
 }
 async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, config, skillId) {
     const method = (config.method || "GET").toUpperCase();
@@ -938,6 +1056,9 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
     payload = normalizeApiSkillPayload(payload);
     const defaults = collectParameterDefaults(config.parameterContract);
     const merged = { ...defaults, ...payload };
+    if (config.parameterContract && config.parameterContract.properties) {
+        coerceMergedTypes(merged, config.parameterContract.properties);
+    }
     if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
         const validate = ajv.compile(config.parameterContract);
         const valid = validate(merged);
@@ -989,7 +1110,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
             return JSON.stringify({
                 error: "Form body parameter merge failed",
                 details: [enc.error],
-                hint: "With parameterBinding formBody, only flat string, number, or boolean fields are allowed; nested values are not supported. "
+                hint: "With parameterBinding formBody, only flat string, number, boolean, or array values are allowed; nested objects are not supported. "
                     + "Adjust the parameter contract and arguments, then try again.",
             });
         }
@@ -1001,14 +1122,20 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
         outboundBody = "json";
     }
     const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
+    const timeoutSeconds = validateTimeoutSeconds(config.timeoutSeconds);
+    if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
+        return await executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, config.asyncPoll, skillId);
+    }
     try {
         const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
             url: endpoint,
             method,
             headers: headersOut,
             body: requestBody,
+            timeoutSeconds,
         }, {
             headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            timeout: (timeoutSeconds + 5) * 1000,
         });
         return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
     }
@@ -1016,6 +1143,15 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
         if (axios_1.default.isAxiosError(error)) {
             const status = error.response?.status;
             const data = error.response?.data;
+            const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+            if (isTimeout) {
+                return JSON.stringify({
+                    error: "API Skill HTTP request timed out",
+                    timeoutSeconds,
+                    hint: `The request exceeded the configured timeout of ${timeoutSeconds} seconds. `
+                        + "You may ask the user if they want to increase timeoutSeconds or configure asyncPoll for long-running tasks.",
+                });
+            }
             const details = typeof data === "string"
                 ? data
                 : data !== undefined && data !== null
@@ -1030,6 +1166,93 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
             });
         }
         throw error;
+    }
+}
+async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, asyncPoll, skillId) {
+    try {
+        const submitResponse = await axios_1.default.post(`${gatewayUrl}/api/skills/api/async`, {
+            url: endpoint,
+            method,
+            headers: headersOut,
+            body: requestBody,
+            timeoutSeconds,
+            asyncPoll,
+        }, {
+            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            timeout: (timeoutSeconds + 5) * 1000,
+        });
+        const { asyncTaskId, externalTaskId } = submitResponse.data;
+        if (!asyncTaskId) {
+            return JSON.stringify({
+                error: "Async task submission failed",
+                details: submitResponse.data,
+            });
+        }
+        const maxWaitMs = asyncPoll.maxWaitSeconds
+            ? asyncPoll.maxWaitSeconds * 1000
+            : (asyncPoll.maxWaitMs || 600000);
+        const waitResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`, {
+            params: { timeoutMs: maxWaitMs },
+            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            timeout: maxWaitMs + 10000,
+        });
+        const { status, result, errorMessage } = waitResponse.data;
+        if (status === "COMPLETED") {
+            return JSON.stringify({
+                asyncTaskId,
+                externalTaskId,
+                status: "COMPLETED",
+                result: result ? (typeof result === "string" ? tryParseJson(result) ?? result : result) : null,
+                note: `Async task ${externalTaskId || asyncTaskId} completed successfully. Present the result to the user.`,
+            });
+        }
+        if (status === "FAILED") {
+            return JSON.stringify({
+                asyncTaskId,
+                externalTaskId,
+                status: "FAILED",
+                error: errorMessage || "Task execution failed",
+            });
+        }
+        if (status === "TIMEOUT") {
+            return JSON.stringify({
+                asyncTaskId,
+                externalTaskId,
+                status: "TIMEOUT",
+                error: errorMessage || "Task timed out",
+            });
+        }
+        return JSON.stringify({
+            asyncTaskId,
+            externalTaskId,
+            status: status || "POLLING",
+            result: null,
+            hint: `The task (${externalTaskId || asyncTaskId}) is still being processed. You can check the status later or wait for it to complete.`,
+        });
+    }
+    catch (error) {
+        if (axios_1.default.isAxiosError(error)) {
+            const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+            if (isTimeout) {
+                return JSON.stringify({
+                    error: "Async task submission or wait timed out",
+                    hint: "The async task may still be running. You can retry or check with the user if the task is expected to take longer.",
+                });
+            }
+            return JSON.stringify({
+                error: "Async API request failed",
+                details: error.response?.data ?? error.message,
+            });
+        }
+        throw error;
+    }
+}
+function tryParseJson(raw) {
+    try {
+        return JSON.parse(raw);
+    }
+    catch {
+        return raw;
     }
 }
 async function invokeToolDirect(tool, input) {
@@ -1417,12 +1640,14 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                         let execInput = args;
                         let currentSkill = workingSkill;
                         let currentConfig = config;
-                        if (!currentSkill.configuration?.trim()) {
+                        try {
                             const detailResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/${skill.id}`, {
                                 headers: gatewaySkillReadHeaders(apiToken, userId),
                             });
                             currentSkill = detailResponse.data;
                             currentConfig = parseSkillConfig(currentSkill);
+                        }
+                        catch {
                         }
                         const executionMode = normalizeExecutionMode(currentSkill.executionMode);
                         const needsConfirmation = Boolean(currentSkill.requiresConfirmation);

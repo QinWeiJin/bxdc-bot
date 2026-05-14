@@ -4,6 +4,8 @@ import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.service.UserService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
@@ -15,6 +17,7 @@ import java.util.Map;
 public class UserController {
 
     private static final String HEADER_USER_ID = "X-User-Id";
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
     private final UserService userService;
 
@@ -155,6 +158,29 @@ public class UserController {
             return ResponseEntity.ok(res);
         } catch (Exception e) {
             return ResponseEntity.status(502).body(Map.of("error", "Avatar service error: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping("/{id}/optimize-text")
+    public ResponseEntity<?> optimizeText(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> body
+    ) {
+        User user = userService.getUser(id);
+        if (user == null) {
+            return ResponseEntity.notFound().build();
+        }
+        log.info("[optimize-text] userId={} fieldId={} currentTextLen={}",
+                id, body.get("fieldId"),
+                body.get("currentText") instanceof String ? ((String) body.get("currentText")).length() : 0);
+        try {
+            Object res = userService.proxyTextOptimize(id, body);
+            return ResponseEntity.ok(res);
+        } catch (Exception e) {
+            return ResponseEntity.status(502).body(Map.of(
+                    "error", "AI 优化服务异常",
+                    "hint", e.getMessage()
+            ));
         }
     }
 }

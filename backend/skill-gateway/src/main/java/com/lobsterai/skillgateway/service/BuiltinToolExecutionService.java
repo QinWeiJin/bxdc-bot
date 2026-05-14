@@ -46,6 +46,17 @@ public class BuiltinToolExecutionService {
     }
 
     public Object callExternalApi(SkillController.ApiRequest request) throws Exception {
+        Integer timeoutSeconds = request.getTimeoutSeconds();
+        if (timeoutSeconds != null && timeoutSeconds > 0) {
+            return apiProxyService.callApi(
+                    request.getUrl(),
+                    request.getMethod(),
+                    request.getHeaders(),
+                    request.getBody(),
+                    HttpClientAuditMode.SKILL_OUTBOUND,
+                    timeoutSeconds
+            );
+        }
         return apiProxyService.callApi(
                 request.getUrl(),
                 request.getMethod(),

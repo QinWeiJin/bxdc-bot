@@ -53,6 +53,8 @@ public class SecurityConfig {
             .authorizeRequests(auth -> auth
                 .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/skills/async-tasks/*/wait").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/skills/text-prompts", "/api/skills/text-prompts/**").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/system-skills/**").permitAll()
                 .antMatchers("/api/skills/**").authenticated()
                 .antMatchers("/api/system-skills/**").authenticated()
@@ -69,7 +71,7 @@ public class SecurityConfig {
                 .map(String::trim)
                 .filter(origin -> !origin.isEmpty())
                 .toList();
-        configuration.setAllowedOrigins(origins);
+        configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);

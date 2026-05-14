@@ -205,6 +205,41 @@ const skillGeneratorBooleanOptionalSchema = z.preprocess((val) => {
   return val;
 }, z.boolean().optional());
 
+const skillGeneratorTimeoutSecondsSchema = z.preprocess((val) => {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val === "number") return val;
+  if (typeof val === "string") {
+    const n = Number(val.trim());
+    if (Number.isFinite(n)) return n;
+  }
+  return val;
+}, z.number().int().min(1).max(3600).optional());
+
+const skillGeneratorAsyncPollSchema = z.preprocess((val) => {
+  if (val === undefined || val === null) return undefined;
+  if (typeof val === "object" && !Array.isArray(val)) return val;
+  if (typeof val === "string") {
+    try {
+      const p = JSON.parse(val.trim()) as unknown;
+      if (p && typeof p === "object" && !Array.isArray(p)) return p;
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}, z.object({
+  pollEndpoint: z.string(),
+  idJsonPath: z.string().optional(),
+  pollMethod: z.string().optional(),
+  pollIntervalSeconds: z.number().int().min(1).optional(),
+  maxWaitSeconds: z.number().int().min(1).optional(),
+  completionJsonPath: z.string().optional(),
+  completionValue: z.string().optional(),
+  failedValues: z.array(z.string()).optional(),
+  resultJsonPath: z.string().optional(),
+  pollHeaders: z.record(z.string()).optional(),
+}).optional());
+
 /** Skill generator discriminated union - forces model to provide correct fields per targetType */
 const skillGeneratorToolInputSchema = z.discriminatedUnion("targetType", [
   z.object({
@@ -219,6 +254,14 @@ const skillGeneratorToolInputSchema = z.discriminatedUnion("targetType", [
     body: z.any().optional(),
     interfaceDescription: z.string().optional(),
     parameterContract: skillGeneratorParameterContractSchema,
+    parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
+      .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
+    timeoutSeconds: skillGeneratorTimeoutSecondsSchema
+      .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
+    asyncPoll: skillGeneratorAsyncPollSchema
+      .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
+          + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
+          + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
     /** Overrides default validation payload after save (e.g. { query: { env: "prod" } }). */
     testInput: skillGeneratorTestInputSchema,
     enabled: skillGeneratorBooleanOptionalSchema,
@@ -334,6 +377,10 @@ interface ExtendedSkillConfig {
   prompt?: string;
   headers?: Record<string, string>;
   query?: Record<string, string | number | boolean>;
+  /** HTTP 超时秒数，默认 30；同时作用于 Agent Core → Gateway 和 Gateway → 外部 API 两段 */
+  timeoutSeconds?: number;
+  /** 异步轮询配置，存在时走异步路径 */
+  asyncPoll?: AsyncPollConfig;
   /**
    * How merged scalar contract fields map to the outbound HTTP call (after `parameterContract` validation).
    * - `query` (default): append scalars to URL query; `merged.body` alone is the proxy body (legacy).
@@ -353,6 +400,33 @@ interface ExtendedSkillConfig {
     }>;
     required?: string[];
   };
+}
+
+interface AsyncPollConfig {
+  /** 轮询端点模板，{id} 会被替换为外部任务 ID */
+  pollEndpoint: string;
+  /** 从初始响应中提取任务 ID 的 JSON 路径，如 "data.task_id" */
+  idJsonPath?: string;
+  /** 轮询 HTTP method，默认 GET */
+  pollMethod?: string;
+  /** 轮询间隔（毫秒），默认 5000 */
+  pollIntervalMs?: number;
+  /** 轮询间隔（秒），优先于 pollIntervalMs */
+  pollIntervalSeconds?: number;
+  /** 最大等待时间（毫秒），默认 600000（10分钟） */
+  maxWaitMs?: number;
+  /** 最大等待时间（秒），优先于 maxWaitMs */
+  maxWaitSeconds?: number;
+  /** 判断完成的 JSON 路径 */
+  completionJsonPath?: string;
+  /** 完成时的字段值 */
+  completionValue?: string;
+  /** 失败状态的字段值列表 */
+  failedValues?: string[];
+  /** 结果提取的 JSON 路径 */
+  resultJsonPath?: string;
+  /** 轮询请求头 */
+  pollHeaders?: Record<string, string>;
 }
 
 function readPreset(config: ExtendedSkillConfig): string | undefined {
@@ -462,6 +536,9 @@ interface SkillGeneratorInput {
   body?: unknown;
   interfaceDescription?: string;
   parameterContract?: any;
+  parameterBinding?: "query" | "jsonBody" | "formBody";
+  timeoutSeconds?: number;
+  asyncPoll?: AsyncPollConfig;
   // SSH specific
   command?: string;
   // OPENCLAW specific
@@ -939,19 +1016,22 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
       : rawPc;
 
     const methodUpper = typeof input.method === "string" ? input.method.trim().toUpperCase() : "";
-    /** POST/PUT/PATCH/DELETE: flat `parameterContract` fields default to JSON body (see `executeConfiguredApiSkill`). */
-    const defaultJsonBody =
-      ["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper);
+    /** POST/PUT/PATCH/DELETE: flat `parameterContract` fields default to JSON body (see `executeConfiguredApiSkill`).
+        LLM can override via `input.parameterBinding` (e.g. "formBody" for form-encoded APIs). */
+    const resolvedBinding = normalizeParameterBindingValue(input.parameterBinding)
+      ?? (["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper) ? "jsonBody" as const : undefined);
     config = {
       kind: "api",
       operation: normalizeGeneratedOperation(name),
       method: input.method?.trim().toUpperCase(),
       endpoint: input.endpoint?.trim(),
-      ...(defaultJsonBody ? { parameterBinding: "jsonBody" as const } : {}),
+      ...(resolvedBinding ? { parameterBinding: resolvedBinding } : {}),
       ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
       ...(input.query && Object.keys(input.query).length > 0 ? { query: input.query } : {}),
       ...(input.interfaceDescription?.trim() ? { interfaceDescription: input.interfaceDescription.trim() } : {}),
       ...(parameterContract ? { parameterContract } : {}),
+      ...(input.timeoutSeconds !== undefined && input.timeoutSeconds !== 30 ? { timeoutSeconds: input.timeoutSeconds } : {}),
+      ...(input.asyncPoll ? { asyncPoll: input.asyncPoll } : {}),
     };
   } else if (targetType === "ssh") {
     config = {
@@ -1131,11 +1211,13 @@ async function executeServerResourceStatusSkill(
 }
 
 /** Scalar fields from merged payload that may map to query or JSON body (excludes reserved keys). */
-function collectMergedScalarFields(merged: Record<string, unknown>): Record<string, string | number | boolean> {
-  const out: Record<string, string | number | boolean> = {};
+function collectMergedScalarFields(merged: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(merged)) {
     if (["query", "headers", "body"].includes(key)) continue;
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      out[key] = value;
+    } else if (Array.isArray(value)) {
       out[key] = value;
     }
   }
@@ -1150,7 +1232,7 @@ function isMethodAllowingJsonBodyBinding(method: string): boolean {
 
 function mergeJsonBodyForProxy(
   merged: Record<string, unknown>,
-  flatScalars: Record<string, string | number | boolean>,
+  flatScalars: Record<string, unknown>,
 ): Record<string, unknown> {
   let bodyObj: Record<string, unknown> = { ...flatScalars };
   const raw = merged.body;
@@ -1173,25 +1255,30 @@ function isFormUrlEncodableScalar(v: unknown): v is string | number | boolean {
   return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
 }
 
-/**
- * Merged object for form body MUST be a flat map of string/number/boolean only (no nested object/array).
- */
 function formUrlEncodeFlatBodyObject(bodyObj: Record<string, unknown>):
   | { ok: true; body: string }
   | { ok: false; error: string } {
   for (const [key, v] of Object.entries(bodyObj)) {
-    if (!isFormUrlEncodableScalar(v)) {
+    if (!isFormUrlEncodableScalar(v) && !Array.isArray(v)) {
       return {
         ok: false,
         error:
-          "Parameter value not allowed for formBody binding: only flat string, number, or boolean values are supported. "
+          "Parameter value not allowed for formBody binding: only flat string, number, boolean, or array values are supported. "
             + (key ? `Key '${key}' has an unsupported value type or nested shape.` : ""),
       };
     }
   }
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(bodyObj)) {
-    params.set(k, String(v));
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item !== null && item !== undefined) {
+          params.append(k, String(item));
+        }
+      }
+    } else {
+      params.set(k, String(v));
+    }
   }
   return { ok: true, body: params.toString() };
 }
@@ -1207,15 +1294,69 @@ function mergeHeadersForApiProxy(
   if (outboundBody === "none") return out;
   const m = method.toUpperCase();
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(m)) return out;
-  const hasContentType = Object.keys(out).some((k) => k.toLowerCase() === "content-type");
-  if (!hasContentType) {
-    if (outboundBody === "json") {
-      out["Content-Type"] = "application/json";
-    } else {
-      out["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
-    }
+  if (outboundBody === "json") {
+    out["Content-Type"] = "application/json";
+  } else {
+    out["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
   }
   return out;
+}
+
+function validateTimeoutSeconds(raw: number | undefined): number {
+  const DEFAULT_TIMEOUT = 30;
+  const MAX_TIMEOUT = 3600;
+  if (raw === undefined || raw === null) return DEFAULT_TIMEOUT;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return DEFAULT_TIMEOUT;
+  if (raw < 1) {
+    console.warn(`[api-skill] timeoutSeconds ${raw} clamped to 1`);
+    return 1;
+  }
+  if (raw > MAX_TIMEOUT) {
+    console.warn(`[api-skill] timeoutSeconds ${raw} exceeds max ${MAX_TIMEOUT}, clamped`);
+    return MAX_TIMEOUT;
+  }
+  return Math.floor(raw);
+}
+
+function coerceMergedTypes(
+  merged: Record<string, unknown>,
+  properties: Record<string, { type?: string; items?: { type?: string } }>,
+): void {
+  for (const [key, prop] of Object.entries(properties)) {
+    const val = merged[key];
+    if (val === undefined || val === null) continue;
+
+    if (typeof val === "string" && prop.type === "number") {
+      const n = Number(val);
+      if (Number.isFinite(n)) {
+        merged[key] = n;
+      }
+    } else if (typeof val === "string" && prop.type === "boolean") {
+      const lower = val.trim().toLowerCase();
+      if (lower === "true" || lower === "1" || lower === "yes") {
+        merged[key] = true;
+      } else if (lower === "false" || lower === "0" || lower === "no" || lower === "") {
+        merged[key] = false;
+      }
+    } else if (typeof val === "string" && prop.type === "array") {
+      const trimmed = val.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed)) {
+            merged[key] = parsed;
+          }
+        } catch {
+          // not valid JSON array, leave as-is
+        }
+      }
+    } else if (typeof val === "string" && prop.type === "integer") {
+      const n = parseInt(val, 10);
+      if (Number.isFinite(n)) {
+        merged[key] = n;
+      }
+    }
+  }
 }
 
 async function executeConfiguredApiSkill(
@@ -1238,6 +1379,10 @@ async function executeConfiguredApiSkill(
   payload = normalizeApiSkillPayload(payload);
   const defaults = collectParameterDefaults(config.parameterContract);
   const merged: Record<string, unknown> = { ...defaults, ...payload };
+
+  if (config.parameterContract && config.parameterContract.properties) {
+    coerceMergedTypes(merged, config.parameterContract.properties);
+  }
 
   // Validate merged payload against parameterContract if defined (JSON Schema shape)
   if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
@@ -1297,7 +1442,7 @@ async function executeConfiguredApiSkill(
       return JSON.stringify({
         error: "Form body parameter merge failed",
         details: [enc.error],
-        hint: "With parameterBinding formBody, only flat string, number, or boolean fields are allowed; nested values are not supported. "
+        hint: "With parameterBinding formBody, only flat string, number, boolean, or array values are allowed; nested objects are not supported. "
           + "Adjust the parameter contract and arguments, then try again.",
       });
     }
@@ -1309,6 +1454,14 @@ async function executeConfiguredApiSkill(
   }
 
   const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
+  const timeoutSeconds = validateTimeoutSeconds(config.timeoutSeconds);
+
+  if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
+    return await executeConfiguredApiSkillAsync(
+      gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody,
+      timeoutSeconds, config.asyncPoll, skillId
+    );
+  }
 
   try {
     const response = await axios.post(
@@ -1318,9 +1471,11 @@ async function executeConfiguredApiSkill(
         method,
         headers: headersOut,
         body: requestBody,
+        timeoutSeconds,
       },
       {
         headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        timeout: (timeoutSeconds + 5) * 1000,
       }
     );
 
@@ -1329,6 +1484,16 @@ async function executeConfiguredApiSkill(
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const data = error.response?.data;
+      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+      if (isTimeout) {
+        return JSON.stringify({
+          error: "API Skill HTTP request timed out",
+          timeoutSeconds,
+          hint:
+            `The request exceeded the configured timeout of ${timeoutSeconds} seconds. `
+            + "You may ask the user if they want to increase timeoutSeconds or configure asyncPoll for long-running tasks.",
+        });
+      }
       const details =
         typeof data === "string"
           ? data
@@ -1348,7 +1513,127 @@ async function executeConfiguredApiSkill(
   }
 }
 
-/** Agent / OPENCLAW tools: string-input tools or structured tools (e.g. compute). */
+async function executeConfiguredApiSkillAsync(
+  gatewayUrl: string,
+  apiToken: string,
+  userId: string | undefined,
+  endpoint: string,
+  method: string,
+  headersOut: Record<string, string>,
+  requestBody: unknown,
+  timeoutSeconds: number,
+  asyncPoll: AsyncPollConfig,
+  skillId?: number,
+): Promise<string> {
+  try {
+    const submitResponse = await axios.post(
+      `${gatewayUrl}/api/skills/api/async`,
+      {
+        url: endpoint,
+        method,
+        headers: headersOut,
+        body: requestBody,
+        timeoutSeconds,
+        asyncPoll,
+      },
+      {
+        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        timeout: (timeoutSeconds + 5) * 1000,
+      }
+    );
+
+    const { asyncTaskId, externalTaskId } = submitResponse.data as {
+      asyncTaskId: number;
+      status: string;
+      externalTaskId: string;
+    };
+
+    if (!asyncTaskId) {
+      return JSON.stringify({
+        error: "Async task submission failed",
+        details: submitResponse.data,
+      });
+    }
+
+    const maxWaitMs = asyncPoll.maxWaitSeconds
+      ? asyncPoll.maxWaitSeconds * 1000
+      : (asyncPoll.maxWaitMs || 600000);
+
+    const waitResponse = await axios.get(
+      `${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`,
+      {
+        params: { timeoutMs: maxWaitMs },
+        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        timeout: maxWaitMs + 10000,
+      }
+    );
+
+    const { status, result, errorMessage } = waitResponse.data as {
+      status: string;
+      result: unknown;
+      errorMessage?: string;
+    };
+
+    if (status === "COMPLETED") {
+      return JSON.stringify({
+        asyncTaskId,
+        externalTaskId,
+        status: "COMPLETED",
+        result: result ? (typeof result === "string" ? tryParseJson(result) ?? result : result) : null,
+        note: `Async task ${externalTaskId || asyncTaskId} completed successfully. Present the result to the user.`,
+      });
+    }
+
+    if (status === "FAILED") {
+      return JSON.stringify({
+        asyncTaskId,
+        externalTaskId,
+        status: "FAILED",
+        error: errorMessage || "Task execution failed",
+      });
+    }
+
+    if (status === "TIMEOUT") {
+      return JSON.stringify({
+        asyncTaskId,
+        externalTaskId,
+        status: "TIMEOUT",
+        error: errorMessage || "Task timed out",
+      });
+    }
+
+    return JSON.stringify({
+      asyncTaskId,
+      externalTaskId,
+      status: status || "POLLING",
+      result: null,
+      hint: `The task (${externalTaskId || asyncTaskId}) is still being processed. You can check the status later or wait for it to complete.`,
+    });
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+      if (isTimeout) {
+        return JSON.stringify({
+          error: "Async task submission or wait timed out",
+          hint: "The async task may still be running. You can retry or check with the user if the task is expected to take longer.",
+        });
+      }
+      return JSON.stringify({
+        error: "Async API request failed",
+        details: error.response?.data ?? error.message,
+      });
+    }
+    throw error;
+  }
+}
+
+function tryParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
 export type BindableAgentTool = Tool | DynamicTool | StructuredTool;
 
 async function invokeToolDirect(tool: BindableAgentTool, input: unknown): Promise<string> {
@@ -1834,12 +2119,17 @@ export async function loadGatewayExtendedTools(
             let execInput: unknown = args;
             let currentSkill = workingSkill;
             let currentConfig = config;
-            if (!currentSkill.configuration?.trim()) {
+
+            // Always fetch latest config from Gateway so edits (timeoutSeconds, parameterBinding,
+            // asyncPoll, etc.) take effect immediately without restarting Agent Core.
+            try {
               const detailResponse = await axios.get(`${gatewayUrl}/api/skills/${skill.id}`, {
                 headers: gatewaySkillReadHeaders(apiToken, userId),
               });
               currentSkill = detailResponse.data as GatewaySkill;
               currentConfig = parseSkillConfig(currentSkill);
+            } catch {
+              // Gateway unavailable; fall back to cached config
             }
 
             const executionMode = normalizeExecutionMode(currentSkill.executionMode);

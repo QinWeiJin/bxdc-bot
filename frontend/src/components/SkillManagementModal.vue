@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
+import TextOptimizeModal from './TextOptimizeModal.vue';
 import {
   BUILT_IN_SKILLS,
   type Skill,
@@ -51,6 +52,33 @@ const currentId = ref<number | null>(null);
 const parseError = ref<string | null>(null);
 const rawConfiguration = ref('{}');
 const configDraft = ref<SkillConfigDraft>(createDefaultSkillDraft('CONFIG'));
+
+const optimizeVisible = ref(false);
+const optimizeFieldId = ref('');
+const optimizeFieldLabel = ref('');
+const optimizeOriginalText = ref('');
+const optimizeContext = ref('');
+
+function openTextOptimize(fieldId: string, fieldLabel: string, text: string) {
+  optimizeFieldId.value = fieldId;
+  optimizeFieldLabel.value = fieldLabel;
+  optimizeOriginalText.value = text;
+  optimizeContext.value = `Skill 名称: ${formData.name}`;
+  optimizeVisible.value = true;
+}
+
+function handleOptimizeConfirm(optimizedText: string) {
+  const fid = optimizeFieldId.value;
+  if (fid === 'description') formData.description = optimizedText;
+  else if (fid === 'api_interface_description' && apiDraft.value) apiDraft.value.interfaceDescription = optimizedText;
+  else if (fid === 'api_parameter_contract' && apiDraft.value) apiDraft.value.parameterContractText = optimizedText;
+  else if (fid === 'api_async_poll' && apiDraft.value) apiDraft.value.asyncPollText = optimizedText;
+  else if (fid === 'api_headers' && apiDraft.value) apiDraft.value.headersText = optimizedText;
+  else if (fid === 'api_query' && apiDraft.value) apiDraft.value.queryText = optimizedText;
+  else if (fid === 'api_body' && apiDraft.value) apiDraft.value.bodyText = optimizedText;
+  else if (fid === 'ssh_command' && sshDraft.value) sshDraft.value.command = optimizedText;
+  else if (fid === 'openclaw_prompt' && openClawDraft.value) openClawDraft.value.systemPromptMarkdown = optimizedText;
+}
 
 const formData = reactive({
   name: '',
@@ -319,7 +347,12 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
         <t-input v-model="formData.name" placeholder="例如：获取时间" />
       </t-form-item>
       <t-form-item label="技能介绍" name="description">
-        <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+        <div class="optimize-textarea-wrap">
+          <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+          <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('description', '技能介绍', formData.description)">
+            ✨ AI 优化
+          </t-button>
+        </div>
       </t-form-item>
       <t-form-item label="可见性" name="visibility">
         <t-radio-group v-model="formData.visibility">
@@ -390,19 +423,85 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
             <t-input v-model="apiDraft.responseTimestampField" placeholder="例如：t" />
           </t-form-item>
           <t-form-item label="接口说明" name="apiInterfaceDescription">
-            <t-textarea v-model="apiDraft.interfaceDescription" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="例如：该接口用于获取笑话列表，包含入参说明、出参说明、核心字段意义、限制、字典值和默认值" />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="apiDraft.interfaceDescription" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="例如：该接口用于获取笑话列表，包含入参说明、出参说明、核心字段意义、限制、字典值和默认值" />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_interface_description', '接口说明', apiDraft!.interfaceDescription)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
           <t-form-item label="参数格式契约 (JSON)" name="apiParameterContract">
-            <t-textarea v-model="apiDraft.parameterContractText" :autosize="{ minRows: 3, maxRows: 8 }" placeholder='例如：{"type":"object","properties":{"page":{"type":"number"}}}' />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="apiDraft.parameterContractText" :autosize="{ minRows: 3, maxRows: 8 }" placeholder='例如：{"type":"object","properties":{"page":{"type":"number"}}}' />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_parameter_contract', '参数格式契约', apiDraft!.parameterContractText)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
           <t-form-item label="Headers (JSON，可选)" name="apiHeaders">
-            <t-textarea v-model="apiDraft.headersText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"Authorization":"Bearer token"}' />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="apiDraft.headersText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"Authorization":"Bearer token"}' />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_headers', 'Headers', apiDraft!.headersText)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
           <t-form-item label="Query (JSON，可选)" name="apiQuery">
-            <t-textarea v-model="apiDraft.queryText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"page":1,"pagesize":1}' />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="apiDraft.queryText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"page":1,"pagesize":1}' />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_query', 'Query', apiDraft!.queryText)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
           <t-form-item label="Body (JSON，可选)" name="apiBody">
-            <t-textarea v-model="apiDraft.bodyText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"foo":"bar"}' />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="apiDraft.bodyText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"foo":"bar"}' />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_body', 'Body', apiDraft!.bodyText)">
+                ✨ AI 优化
+              </t-button>
+            </div>
+          </t-form-item>
+          <t-form-item label="HTTP 超时（秒）" name="apiTimeoutSeconds">
+            <t-input-number
+              v-model="apiDraft.timeoutSeconds"
+              :min="1"
+              :max="3600"
+              placeholder="默认 30"
+              style="width: 160px"
+            />
+            <p class="skill-param-binding-hint">
+              调用上游 API 的超时等待秒数（1 ~ 3600）。默认 30 秒，超时未响应将返回错误。
+              长时间运行的任务建议启用下方「异步轮询」模式。
+            </p>
+          </t-form-item>
+          <t-form-item label="异步轮询" name="apiAsyncPoll">
+            <t-checkbox v-model="apiDraft.asyncPollEnabled">启用异步轮询模式</t-checkbox>
+            <p class="skill-param-binding-hint">
+              适用于上游 API 返回 task_id 后需要轮询结果的场景（批量任务、数据导出等）。
+              要求上游提供独立的状态查询端点（见文档）。
+            </p>
+          </t-form-item>
+          <t-form-item v-if="apiDraft.asyncPollEnabled" label="异步轮询配置 (JSON)" name="apiAsyncPollText">
+            <div class="optimize-textarea-wrap">
+              <t-textarea
+                v-model="apiDraft.asyncPollText"
+                :autosize="{ minRows: 6, maxRows: 14 }"
+                placeholder='{
+  "pollEndpoint": "https://api.example.com/tasks/{id}/status",
+  "idJsonPath": "data.task_id",
+  "completionJsonPath": "status",
+  "completionValue": "completed",
+  "failedValues": ["failed", "error"],
+  "resultJsonPath": "result",
+  "maxWaitSeconds": 600,
+  "pollIntervalSeconds": 5
+}'
+              />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_async_poll', '异步轮询配置', apiDraft!.asyncPollText)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
         </template>
 
@@ -427,7 +526,12 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
             />
           </t-form-item>
           <t-form-item label="执行命令" name="sshCommand">
-            <t-textarea v-model="sshDraft.command" :autosize="{ minRows: 5, maxRows: 10 }" />
+            <div class="optimize-textarea-wrap">
+              <t-textarea v-model="sshDraft.command" :autosize="{ minRows: 5, maxRows: 10 }" />
+              <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('ssh_command', '执行命令', sshDraft!.command)">
+                ✨ AI 优化
+              </t-button>
+            </div>
           </t-form-item>
           <t-form-item label="只读模式" name="sshReadOnly">
             <t-checkbox v-model="sshDraft.readOnly">该 SSH 预配置 Skill 只允许只读命令</t-checkbox>
@@ -447,11 +551,16 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
 
       <template v-else-if="openClawDraft">
         <t-form-item label="提示词（Markdown）" name="openclawPrompt">
-          <t-textarea
-            v-model="openClawDraft.systemPromptMarkdown"
-            :autosize="{ minRows: 8, maxRows: 16 }"
-            placeholder="直接输入 Markdown 格式提示词，保存时会写入 systemPrompt。"
-          />
+          <div class="optimize-textarea-wrap">
+            <t-textarea
+              v-model="openClawDraft.systemPromptMarkdown"
+              :autosize="{ minRows: 8, maxRows: 16 }"
+              placeholder="直接输入 Markdown 格式提示词，保存时会写入 systemPrompt。"
+            />
+            <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('openclaw_prompt', '自主规划提示词', openClawDraft!.systemPromptMarkdown)">
+              ✨ AI 优化
+            </t-button>
+          </div>
         </t-form-item>
         <t-form-item label="编排模式" name="openclawMode">
           <t-input :model-value="openClawDraft.orchestrationMode" readonly />
@@ -494,6 +603,17 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
       </t-space>
     </t-form>
   </t-dialog>
+
+  <TextOptimizeModal
+    :visible="optimizeVisible"
+    :field-id="optimizeFieldId"
+    :field-label="optimizeFieldLabel"
+    :original-text="optimizeOriginalText"
+    :context="optimizeContext"
+    :user-id="currentUser?.id || ''"
+    @update:visible="(val: boolean) => optimizeVisible = val"
+    @confirm="handleOptimizeConfirm"
+  />
 </template>
 
 <style scoped>
@@ -538,5 +658,17 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
   font-size: 12px;
   line-height: 1.5;
   color: var(--td-text-color-secondary);
+}
+
+.optimize-textarea-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.optimize-btn {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  z-index: 1;
 }
 </style>

@@ -5,6 +5,8 @@ import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
 import com.lobsterai.skillgateway.exception.RegistrationNotAllowedException;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.mapper.UserMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -17,6 +19,8 @@ import java.util.Map;
 
 @Service
 public class UserService {
+
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
 
     private final UserMapper userMapper;
     private final ApiProxyService apiProxyService;
@@ -123,6 +127,25 @@ public class UserService {
                 Map.of("Content-Type", "application/json"),
                 payload
         );
+    }
+
+    public Object proxyTextOptimize(String userId, Map<String, Object> payload) {
+        long t0 = System.currentTimeMillis();
+        User u = userId != null ? getUser(userId) : null;
+        Map<String, String> dbOverrides = userLlmOverridesFromDb(u);
+        Map<String, Object> body = new LinkedHashMap<>(payload);
+        dbOverrides.forEach(body::putIfAbsent);
+        String url = agentCoreUrl + "/features/optimize-text";
+        log.info("[optimize-text] forwarding to agent-core url={} hasLlmKey={} fieldId={}",
+                url, dbOverrides.get("llmApiKey") != null, body.get("fieldId"));
+        Object result = apiProxyService.callApi(
+                url,
+                "POST",
+                Map.of("Content-Type", "application/json"),
+                body
+        );
+        log.info("[optimize-text] agent-core responded in {}ms", System.currentTimeMillis() - t0);
+        return result;
     }
 
     private void validateRegistrationGate(String systemAdminPassword) {

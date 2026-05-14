@@ -79,6 +79,53 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     body: z.ZodOptional<z.ZodAny>;
     interfaceDescription: z.ZodOptional<z.ZodString>;
     parameterContract: z.ZodEffects<z.ZodOptional<z.ZodAny>, any, unknown>;
+    parameterBinding: z.ZodOptional<z.ZodEnum<["query", "jsonBody", "formBody"]>>;
+    timeoutSeconds: z.ZodEffects<z.ZodOptional<z.ZodNumber>, number, unknown>;
+    asyncPoll: z.ZodEffects<z.ZodOptional<z.ZodObject<{
+        pollEndpoint: z.ZodString;
+        idJsonPath: z.ZodOptional<z.ZodString>;
+        pollMethod: z.ZodOptional<z.ZodString>;
+        pollIntervalSeconds: z.ZodOptional<z.ZodNumber>;
+        maxWaitSeconds: z.ZodOptional<z.ZodNumber>;
+        completionJsonPath: z.ZodOptional<z.ZodString>;
+        completionValue: z.ZodOptional<z.ZodString>;
+        failedValues: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+        resultJsonPath: z.ZodOptional<z.ZodString>;
+        pollHeaders: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+    }, "strip", z.ZodTypeAny, {
+        pollEndpoint?: string;
+        idJsonPath?: string;
+        pollMethod?: string;
+        pollIntervalSeconds?: number;
+        maxWaitSeconds?: number;
+        completionJsonPath?: string;
+        completionValue?: string;
+        failedValues?: string[];
+        resultJsonPath?: string;
+        pollHeaders?: Record<string, string>;
+    }, {
+        pollEndpoint?: string;
+        idJsonPath?: string;
+        pollMethod?: string;
+        pollIntervalSeconds?: number;
+        maxWaitSeconds?: number;
+        completionJsonPath?: string;
+        completionValue?: string;
+        failedValues?: string[];
+        resultJsonPath?: string;
+        pollHeaders?: Record<string, string>;
+    }>>, {
+        pollEndpoint?: string;
+        idJsonPath?: string;
+        pollMethod?: string;
+        pollIntervalSeconds?: number;
+        maxWaitSeconds?: number;
+        completionJsonPath?: string;
+        completionValue?: string;
+        failedValues?: string[];
+        resultJsonPath?: string;
+        pollHeaders?: Record<string, string>;
+    }, unknown>;
     testInput: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>, Record<string, unknown>, unknown>;
     enabled: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
     requiresConfirmation: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
@@ -95,6 +142,20 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     query?: Record<string, string | number | boolean>;
     interfaceDescription?: string;
     parameterContract?: any;
+    parameterBinding?: "query" | "jsonBody" | "formBody";
+    timeoutSeconds?: number;
+    asyncPoll?: {
+        pollEndpoint?: string;
+        idJsonPath?: string;
+        pollMethod?: string;
+        pollIntervalSeconds?: number;
+        maxWaitSeconds?: number;
+        completionJsonPath?: string;
+        completionValue?: string;
+        failedValues?: string[];
+        resultJsonPath?: string;
+        pollHeaders?: Record<string, string>;
+    };
     testInput?: Record<string, unknown>;
     enabled?: boolean;
     requiresConfirmation?: boolean;
@@ -111,6 +172,9 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     query?: unknown;
     interfaceDescription?: string;
     parameterContract?: unknown;
+    parameterBinding?: "query" | "jsonBody" | "formBody";
+    timeoutSeconds?: unknown;
+    asyncPoll?: unknown;
     testInput?: unknown;
     enabled?: unknown;
     requiresConfirmation?: unknown;

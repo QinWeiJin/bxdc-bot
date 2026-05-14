@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
 import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
@@ -9,12 +10,17 @@ import com.lobsterai.skillgateway.service.SkillService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.ServerLedger;
+import com.lobsterai.skillgateway.entity.SkillTextPrompt;
+import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
 
 /**
  * Skill 控制器。
@@ -33,19 +39,28 @@ public class SkillController {
     private final ServerLedgerService serverLedgerService;
     private final BuiltinToolExecutionService builtinToolExecutionService;
     private final GatewayOutboundAuditService gatewayOutboundAuditService;
+    private final AsyncTaskPollingService asyncTaskPollingService;
+    private final SkillTextPromptMapper skillTextPromptMapper;
+    private final ObjectMapper objectMapper;
 
     public SkillController(
             SkillService skillService,
             LinuxScriptExecutionService linuxScriptExecutionService,
             ServerLedgerService serverLedgerService,
             BuiltinToolExecutionService builtinToolExecutionService,
-            GatewayOutboundAuditService gatewayOutboundAuditService
+            GatewayOutboundAuditService gatewayOutboundAuditService,
+            AsyncTaskPollingService asyncTaskPollingService,
+            SkillTextPromptMapper skillTextPromptMapper,
+            ObjectMapper objectMapper
     ) {
         this.skillService = skillService;
         this.linuxScriptExecutionService = linuxScriptExecutionService;
         this.serverLedgerService = serverLedgerService;
         this.builtinToolExecutionService = builtinToolExecutionService;
         this.gatewayOutboundAuditService = gatewayOutboundAuditService;
+        this.asyncTaskPollingService = asyncTaskPollingService;
+        this.skillTextPromptMapper = skillTextPromptMapper;
+        this.objectMapper = objectMapper;
     }
 
     // --- Skill Management (CRUD) ---
@@ -167,6 +182,167 @@ public class SkillController {
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body("API call failed: " + e.getMessage());
         }
+    }
+
+    @PostMapping("/api/async")
+    public ResponseEntity<?> callApiAsync(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestHeader(value = "X-Skill-Id", required = false) Long skillId,
+            @RequestBody ApiRequest request
+    ) {
+        try {
+            Map<String, Object> asyncPoll = request.getAsyncPoll();
+            if (asyncPoll == null || !asyncPoll.containsKey("pollEndpoint")) {
+                return ResponseEntity.badRequest().body(Map.of("error", "asyncPoll.pollEndpoint is required for async API calls"));
+            }
+
+            int timeoutSeconds = request.getTimeoutSeconds() != null ? request.getTimeoutSeconds() : 30;
+            Object initialResponse = builtinToolExecutionService.callExternalApi(request);
+
+            String initialResponseStr = initialResponse instanceof String
+                    ? (String) initialResponse
+                    : objectMapper.writeValueAsString(initialResponse);
+
+            String idJsonPath = (String) asyncPoll.get("idJsonPath");
+            String externalTaskId = asyncTaskPollingService.extractTaskId(initialResponseStr, idJsonPath);
+            if (externalTaskId == null || externalTaskId.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "Failed to extract task id from initial response",
+                        "idJsonPath", idJsonPath,
+                        "initialResponse", initialResponseStr
+                ));
+            }
+
+            String pollEndpoint = ((String) asyncPoll.get("pollEndpoint")).replace("{id}", externalTaskId);
+
+            if (!((String) asyncPoll.get("pollEndpoint")).contains("{id}")) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "asyncPoll.pollEndpoint must contain {id} placeholder",
+                        "hint", "The {id} placeholder is replaced with the extracted task ID. Example: /status?task_id={id}"
+                ));
+            }
+            int pollIntervalSeconds = asyncPoll.get("pollIntervalSeconds") instanceof Number
+                    ? ((Number) asyncPoll.get("pollIntervalSeconds")).intValue()
+                    : (asyncPoll.get("pollIntervalMs") instanceof Number
+                            ? Math.max(1, ((Number) asyncPoll.get("pollIntervalMs")).intValue() / 1000)
+                            : 5);
+            int maxWaitSeconds = asyncPoll.get("maxWaitSeconds") instanceof Number
+                    ? ((Number) asyncPoll.get("maxWaitSeconds")).intValue()
+                    : (asyncPoll.get("maxWaitMs") instanceof Number
+                            ? Math.max(1, ((Number) asyncPoll.get("maxWaitMs")).intValue() / 1000)
+                            : 600);
+
+            AsyncTask task = new AsyncTask();
+            task.setSkillId(skillId);
+            task.setUserId(userId);
+            task.setExternalTaskId(externalTaskId);
+            task.setPollEndpoint(pollEndpoint);
+            task.setPollMethod(asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET");
+            task.setPollIntervalSeconds(pollIntervalSeconds);
+            task.setMaxWaitSeconds(maxWaitSeconds);
+            task.setCompletionJsonPath((String) asyncPoll.get("completionJsonPath"));
+            task.setCompletionValue((String) asyncPoll.get("completionValue"));
+            task.setResultJsonPath((String) asyncPoll.get("resultJsonPath"));
+
+            if (asyncPoll.get("failedValues") != null) {
+                task.setFailedValues(objectMapper.writeValueAsString(asyncPoll.get("failedValues")));
+            }
+            if (asyncPoll.get("pollHeaders") != null) {
+                task.setPollHeaders(objectMapper.writeValueAsString(asyncPoll.get("pollHeaders")));
+            }
+            task.setInitialResponse(initialResponseStr);
+
+            asyncTaskPollingService.createTask(task);
+
+            return ResponseEntity.ok(Map.of(
+                    "asyncTaskId", task.getId(),
+                    "status", "PENDING",
+                    "externalTaskId", externalTaskId
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "Async API call failed: " + e.getMessage()));
+        }
+    }
+
+    @GetMapping("/async-tasks/{id}/wait")
+    public ResponseEntity<?> waitForAsyncTask(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "300000") long timeoutMs
+    ) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+
+        while (System.currentTimeMillis() < deadline) {
+            AsyncTask task = asyncTaskPollingService.findById(id);
+            if (task == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            String status = task.getStatus();
+            if ("COMPLETED".equals(status)) {
+                return ResponseEntity.ok(Map.of(
+                        "status", "COMPLETED",
+                        "result", (Object) task.getPollResult()
+                ));
+            }
+            if ("FAILED".equals(status)) {
+                return ResponseEntity.ok(Map.of(
+                        "status", "FAILED",
+                        "errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task failed"
+                ));
+            }
+            if ("TIMEOUT".equals(status)) {
+                return ResponseEntity.ok(Map.of(
+                        "status", "TIMEOUT",
+                        "errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task timed out"
+                ));
+            }
+
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return ResponseEntity.ok(Map.of(
+                        "status", task.getStatus(),
+                        "result", null
+                ));
+            }
+        }
+
+        AsyncTask task = asyncTaskPollingService.findById(id);
+        return ResponseEntity.ok(Map.of(
+                "status", task != null ? task.getStatus() : "UNKNOWN",
+                "result", null
+        ));
+    }
+
+    // --- Text Prompts (AI optimization) ---
+
+    @GetMapping("/text-prompts")
+    public List<SkillTextPrompt> getAllTextPrompts() {
+        return skillTextPromptMapper.selectList(null);
+    }
+
+    @GetMapping("/text-prompts/{fieldId}")
+    public ResponseEntity<SkillTextPrompt> getTextPrompt(@PathVariable String fieldId) {
+        return skillTextPromptMapper.findByFieldId(fieldId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PutMapping("/text-prompts/{fieldId}")
+    public ResponseEntity<?> updateTextPrompt(
+            @PathVariable String fieldId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody SkillTextPrompt body
+    ) {
+        return skillTextPromptMapper.findByFieldId(fieldId)
+                .map(existing -> {
+                    if (body.getSystemPrompt() != null) existing.setSystemPrompt(body.getSystemPrompt());
+                    if (body.getUserPromptTemplate() != null) existing.setUserPromptTemplate(body.getUserPromptTemplate());
+                    skillTextPromptMapper.updateById(existing);
+                    return ResponseEntity.ok(existing);
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     /**
@@ -293,6 +469,8 @@ public class SkillController {
          */
         private Map<String, Object> headers;
         private Object body;
+        private Integer timeoutSeconds;
+        private Map<String, Object> asyncPoll;
         // getters/setters
         public String getUrl() { return url; }
         public void setUrl(String url) { this.url = url; }
@@ -302,6 +480,10 @@ public class SkillController {
         public void setHeaders(Map<String, Object> headers) { this.headers = headers; }
         public Object getBody() { return body; }
         public void setBody(Object body) { this.body = body; }
+        public Integer getTimeoutSeconds() { return timeoutSeconds; }
+        public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+        public Map<String, Object> getAsyncPoll() { return asyncPoll; }
+        public void setAsyncPoll(Map<String, Object> asyncPoll) { this.asyncPoll = asyncPoll; }
     }
 
     /**
