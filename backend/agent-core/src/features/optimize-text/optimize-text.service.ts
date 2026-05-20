@@ -16,8 +16,8 @@ const DEFAULT_PROMPTS: Record<string, { systemPrompt: string; userPromptTemplate
     userPromptTemplate: "优化以下接口说明，结构化描述参数含义、枚举值、默认值、注意事项。\n\n当前文本：\n{{currentText}}\n{{context}}",
   },
   api_parameter_contract: {
-    systemPrompt: "你是 JSON Schema 专家。修正 JSON 语法错误（补引号、补逗号、修正括号），补充字段的 description/type/enum。只返回严格 JSON 对象：{\"optimizedText\":\"...\",\"explanation\":\"...\"}，optimizedText 必须是合法的 JSON Schema 字符串。",
-    userPromptTemplate: "修正以下 JSON Schema 的语法错误并补充字段描述。\n\n当前文本：\n{{currentText}}\n{{context}}",
+    systemPrompt: "你是 JSON Schema 专家。修正参数格式契约的 JSON 语法错误（补引号、补逗号、修正括号），自动补充字段的 description/type/enum。\n\n严格规则：\n1. 必须输出标准 JSON Schema 格式：{\"type\":\"object\",\"properties\":{...}}，每个属性含 type/description，可选 enum/enumSource/default\n2. enum 支持 string[] 或 [{label,value}]（带展示名的键值对）\n3. enumSource 字段只包含 url/method/headers/jsonPath/valueKey/labelKey/searchParam/refreshIntervalSec\n4. 如果当前输入是扁平格式（如 {\"env\":{\"type\":\"string\"}}），自动包裹为 {\"type\":\"object\",\"properties\":{...}}\n5. 只返回严格 JSON 对象：{\"optimizedText\":\"...\",\"explanation\":\"...\"}，optimizedText 必须是合法的 JSON 字符串",
+    userPromptTemplate: "修正以下参数格式契约的语法，补全缺失字段，将扁平格式自动包裹为标准 JSON Schema 格式。enum 按场景换成 label/value 格式，需动态获取的枚举补 enumSource。\n\n当前文本：\n{{currentText}}\n{{context}}",
   },
   api_async_poll: {
     systemPrompt: "你是 API Skill 配置助手。修正异步轮询配置 JSON 语法，补充缺失的关键字段。\n\n严格规则：\n1. 只输出以下字段：pollEndpoint、idJsonPath、pollMethod、pollIntervalSeconds、maxWaitSeconds、completionJsonPath、completionValue、failedValues、resultJsonPath、pollHeaders\n2. JSON Path 使用点分隔格式（如 status、data.task_id），严禁使用 $ 前缀\n3. 只返回严格 JSON 对象：{\"optimizedText\":\"...\",\"explanation\":\"...\"}，optimizedText 必须是合法的 JSON 字符串",
@@ -55,6 +55,7 @@ export class OptimizeTextService {
       configuration: {
         ...(baseUrl ? { baseURL: baseUrl.replace(/\/+$/, "") } : {}),
         fetch: composeOpenAiCompatibleFetch(),
+        timeout: 110000,
       },
       temperature: 0.3,
     });

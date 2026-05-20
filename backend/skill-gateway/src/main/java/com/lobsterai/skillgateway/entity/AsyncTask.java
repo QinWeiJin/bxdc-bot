@@ -19,6 +19,9 @@ public class AsyncTask {
     @TableField("user_id")
     private String userId;
 
+    @TableField("session_id")
+    private String sessionId;
+
     @TableField("external_task_id")
     private String externalTaskId;
 
@@ -89,6 +92,9 @@ public class AsyncTask {
 
     public String getUserId() { return userId; }
     public void setUserId(String userId) { this.userId = userId; }
+
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
 
     public String getExternalTaskId() { return externalTaskId; }
     public void setExternalTaskId(String externalTaskId) { this.externalTaskId = externalTaskId; }

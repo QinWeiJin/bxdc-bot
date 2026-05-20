@@ -24,11 +24,12 @@ export async function confirmAction(
   sessionId: string,
   toolCallId: string,
   confirmed: boolean,
+  adjustedParams?: Record<string, unknown>,
 ): Promise<void> {
   const response = await fetch(agentUrl('/agent/confirm'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, toolCallId, confirmed }),
+    body: JSON.stringify({ sessionId, toolCallId, confirmed, adjustedParams }),
   })
 
   if (!response.ok) {

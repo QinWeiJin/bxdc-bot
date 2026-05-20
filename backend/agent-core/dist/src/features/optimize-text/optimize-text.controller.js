@@ -35,8 +35,8 @@ let OptimizeTextController = class OptimizeTextController {
         const svc = new optimize_text_service_1.OptimizeTextService(llm.apiKey || '', llm.modelName, llm.baseUrl);
         const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({
             optimizedText: body.currentText,
-            explanation: 'AI 优化超时（60s），请稍后重试。',
-        }), 60000));
+            explanation: 'AI 优化超时（120s），请稍后重试。',
+        }), 120000));
         const result = await Promise.race([
             svc.optimize(body.fieldId, body.currentText, body.context),
             timeoutPromise,
@@ -71,6 +71,17 @@ const JSON_FIELD_IDS = new Set([
     'api_body',
 ]);
 function formatOptimizedText(fieldId, text) {
+    if (typeof text !== 'string') {
+        if (text && typeof text === 'object') {
+            try {
+                return JSON.stringify(text, null, 2);
+            }
+            catch {
+                return String(text);
+            }
+        }
+        return text;
+    }
     if (!JSON_FIELD_IDS.has(fieldId))
         return text;
     const trimmed = text.trim();

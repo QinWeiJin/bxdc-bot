@@ -253,7 +253,12 @@ const skillGeneratorToolInputSchema = z.discriminatedUnion("targetType", [
     query: skillGeneratorQuerySchema,
     body: z.any().optional(),
     interfaceDescription: z.string().optional(),
-    parameterContract: skillGeneratorParameterContractSchema,
+    parameterContract: skillGeneratorParameterContractSchema
+      .describe("JSON Schema object describing API parameters. Each property supports: "
+        + "type/description/required/default (standard JSON Schema), "
+        + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
+        + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
+        + "for dynamic dropdown options fetched from an API."),
     parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
       .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
     timeoutSeconds: skillGeneratorTimeoutSecondsSchema
@@ -791,6 +796,34 @@ function pushScalarDefault(
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     out[key] = value;
   }
+}
+
+function normalizeEnumForValidation(raw: unknown): unknown[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: unknown) => {
+    if (typeof item === 'string') return item;
+    if (item && typeof item === 'object' && 'value' in item) return (item as { value: unknown }).value;
+    return item;
+  });
+}
+
+function normalizeParameterContractForValidation(contract: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...contract };
+  const props = out.properties as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return out;
+  const normalizedProps: Record<string, Record<string, unknown>> = {};
+  for (const [key, prop] of Object.entries(props)) {
+    const p = { ...prop };
+    if (Array.isArray(p.enum)) {
+      p.enum = normalizeEnumForValidation(p.enum);
+    }
+    if (p.enumSource !== undefined) {
+      delete p.enumSource;
+    }
+    normalizedProps[key] = p;
+  }
+  out.properties = normalizedProps;
+  return out;
 }
 
 /**
@@ -1366,6 +1399,7 @@ async function executeConfiguredApiSkill(
   input: unknown,
   config: ExtendedSkillConfig,
   skillId?: number,
+  sessionId?: string,
 ): Promise<string> {
   const method = (config.method || "GET").toUpperCase();
   let payload: Record<string, unknown>;
@@ -1386,7 +1420,8 @@ async function executeConfiguredApiSkill(
 
   // Validate merged payload against parameterContract if defined (JSON Schema shape)
   if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
-    const validate = ajv.compile(config.parameterContract);
+    const normalizedContract = normalizeParameterContractForValidation(config.parameterContract);
+    const validate = ajv.compile(normalizedContract);
     const valid = validate(merged);
 
     if (!valid) {
@@ -1459,7 +1494,7 @@ async function executeConfiguredApiSkill(
   if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
     return await executeConfiguredApiSkillAsync(
       gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody,
-      timeoutSeconds, config.asyncPoll, skillId
+      timeoutSeconds, config.asyncPoll, skillId, sessionId
     );
   }
 
@@ -1474,7 +1509,7 @@ async function executeConfiguredApiSkill(
         timeoutSeconds,
       },
       {
-        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId),
         timeout: (timeoutSeconds + 5) * 1000,
       }
     );
@@ -1524,7 +1559,10 @@ async function executeConfiguredApiSkillAsync(
   timeoutSeconds: number,
   asyncPoll: AsyncPollConfig,
   skillId?: number,
+  sessionId?: string,
 ): Promise<string> {
+  const auditHeaders = gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId);
+
   try {
     const submitResponse = await axios.post(
       `${gatewayUrl}/api/skills/api/async`,
@@ -1537,7 +1575,7 @@ async function executeConfiguredApiSkillAsync(
         asyncPoll,
       },
       {
-        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        headers: auditHeaders,
         timeout: (timeoutSeconds + 5) * 1000,
       }
     );
@@ -1559,11 +1597,20 @@ async function executeConfiguredApiSkillAsync(
       ? asyncPoll.maxWaitSeconds * 1000
       : (asyncPoll.maxWaitMs || 600000);
 
+    postPollingAudit(gatewayUrl, auditHeaders, {
+      asyncTaskId,
+      skillId,
+      userId,
+      sessionId,
+      phase: "AGENT_REQUEST",
+      extraJson: JSON.stringify({ timeoutMs: maxWaitMs, pollMethod: asyncPoll.pollMethod || "GET" }),
+    });
+
     const waitResponse = await axios.get(
       `${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`,
       {
         params: { timeoutMs: maxWaitMs },
-        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+        headers: auditHeaders,
         timeout: maxWaitMs + 10000,
       }
     );
@@ -1573,6 +1620,16 @@ async function executeConfiguredApiSkillAsync(
       result: unknown;
       errorMessage?: string;
     };
+
+    postPollingAudit(gatewayUrl, auditHeaders, {
+      asyncTaskId,
+      skillId,
+      userId,
+      sessionId,
+      phase: "AGENT_RESPONSE",
+      responseBody: JSON.stringify(waitResponse.data),
+      status,
+    });
 
     if (status === "COMPLETED") {
       return JSON.stringify({
@@ -1610,6 +1667,43 @@ async function executeConfiguredApiSkillAsync(
       hint: `The task (${externalTaskId || asyncTaskId}) is still being processed. You can check the status later or wait for it to complete.`,
     });
   } catch (error) {
+    const auditLog: {
+      skillId?: number;
+      userId?: string;
+      sessionId?: string;
+      phase: string;
+      responseBody?: string;
+      status?: string;
+      errorMessage?: string;
+      errorStack?: string;
+      extraJson?: string;
+    } = {
+      skillId,
+      userId,
+      sessionId,
+      phase: "AGENT_ERROR",
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    };
+
+    if (axios.isAxiosError(error)) {
+      if (error.response?.status) {
+        auditLog.status = String(error.response.status);
+      }
+      if (error.response?.data) {
+        auditLog.responseBody = typeof error.response.data === 'string'
+          ? error.response.data
+          : JSON.stringify(error.response.data);
+      }
+      auditLog.extraJson = JSON.stringify({
+        code: error.code,
+        url: error.config?.url,
+        method: error.config?.method,
+      });
+    }
+
+    postPollingAudit(gatewayUrl, gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId), auditLog);
+
     if (axios.isAxiosError(error)) {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
       if (isTimeout) {
@@ -1625,6 +1719,46 @@ async function executeConfiguredApiSkillAsync(
     }
     throw error;
   }
+}
+
+function postPollingAudit(
+  gatewayUrl: string,
+  headers: Record<string, string>,
+  log: {
+    asyncTaskId?: number;
+    skillId?: number;
+    userId?: string;
+    sessionId?: string;
+    phase: string;
+    responseBody?: string;
+    status?: string;
+    errorMessage?: string;
+    errorStack?: string;
+    extraJson?: string;
+  },
+): void {
+  axios.post(
+    `${gatewayUrl}/api/internal/polling-audit/events`,
+    [{
+      asyncTaskId: log.asyncTaskId,
+      skillId: log.skillId,
+      userId: log.userId,
+      sessionId: log.sessionId,
+      phase: log.phase,
+      recordedAt: new Date().toISOString(),
+      responseBody: log.responseBody,
+      status: log.status,
+      errorMessage: log.errorMessage,
+      errorStack: log.errorStack,
+      extraJson: log.extraJson,
+    }],
+    {
+      headers,
+      timeout: 5000,
+    },
+  ).catch(() => {
+    // audit failure never blocks business
+  });
 }
 
 function tryParseJson(raw: string): unknown {
@@ -1890,13 +2024,14 @@ function optionalSkillIdHeader(skillId?: number): Record<string, string> {
 function gatewayApiProxyInboundHeaders(
   apiToken: string,
   userId?: string,
-  /** Extension skill id (`skills.id`); e.g. `workingSkill.id` from `loadGatewayExtendedTools`. */
   skillId?: number,
+  sessionId?: string,
 ): Record<string, string> {
   return {
     ...gatewaySkillReadHeaders(apiToken, userId),
     "Content-Type": "application/json",
     ...optionalSkillIdHeader(skillId),
+    ...(sessionId ? { "X-Session-Id": sessionId } : {}),
   };
 }
 
@@ -1995,10 +2130,12 @@ function applyExtendedSkillConfirmationGate(
     details: "",
     parametersPreview: previewExtendedSkillToolInput(execInput),
   });
-  if (!resume.confirmed) {
+  const result = resume as { confirmed: boolean; adjustedParams?: Record<string, unknown> };
+  if (!result.confirmed) {
     return { proceed: false, cancelled: true };
   }
-  return { proceed: true, payload: execInput };
+  const finalInput = result.adjustedParams ? { ...(execInput as Record<string, unknown>), ...result.adjustedParams } : execInput;
+  return { proceed: true, payload: finalInput };
 }
 
 async function saveGeneratedSkill(
@@ -2195,7 +2332,8 @@ export async function loadGatewayExtendedTools(
               });
             }
             if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
-              return await executeConfiguredApiSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id);
+              const sessionId = runConfig?.configurable?.thread_id as string | undefined;
+              return await executeConfiguredApiSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id, sessionId);
             }
             if ((currentConfig.kind || "").toLowerCase() === "ssh") {
               return JSON.stringify({

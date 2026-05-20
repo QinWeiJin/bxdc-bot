@@ -55,6 +55,7 @@ public class SecurityConfig {
                 .antMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/skills/async-tasks/*/wait").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/skills/text-prompts", "/api/skills/text-prompts/**").permitAll()
+                .antMatchers(HttpMethod.POST, "/api/skills/enum-source").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/system-skills/**").permitAll()
                 .antMatchers("/api/skills/**").authenticated()
                 .antMatchers("/api/system-skills/**").authenticated()
@@ -115,10 +116,13 @@ public class SecurityConfig {
             boolean isSkillRoute = uri.startsWith("/api/skills");
             boolean isSystemSkillRoute = uri.startsWith("/api/system-skills");
             boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(method);
+            boolean isEnumSource = uri.equals("/api/skills/enum-source") && "POST".equalsIgnoreCase(method);
             boolean internalAuditPost = uri.startsWith("/api/internal/llm-http-audit") && "POST".equalsIgnoreCase(method);
-            boolean needsToken = (isSkillRoute && !isReadOnlySkillRequest)
+            boolean isPollingAudit = uri.startsWith("/api/internal/polling-audit") && "POST".equalsIgnoreCase(method);
+            boolean needsToken = ((isSkillRoute && !isReadOnlySkillRequest) && !isEnumSource)
                     || (isSystemSkillRoute && !isReadOnlySkillRequest)
-                    || internalAuditPost;
+                    || internalAuditPost
+                    || isPollingAudit;
             if (!needsToken) {
                 filterChain.doFilter(request, response);
                 return;

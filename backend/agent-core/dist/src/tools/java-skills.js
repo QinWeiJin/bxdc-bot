@@ -191,7 +191,12 @@ const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
         query: skillGeneratorQuerySchema,
         body: zod_1.z.any().optional(),
         interfaceDescription: zod_1.z.string().optional(),
-        parameterContract: skillGeneratorParameterContractSchema,
+        parameterContract: skillGeneratorParameterContractSchema
+            .describe("JSON Schema object describing API parameters. Each property supports: "
+            + "type/description/required/default (standard JSON Schema), "
+            + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
+            + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
+            + "for dynamic dropdown options fetched from an API."),
         parameterBinding: zod_1.z.enum(["query", "jsonBody", "formBody"]).optional()
             .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
         timeoutSeconds: skillGeneratorTimeoutSecondsSchema
@@ -547,6 +552,36 @@ function pushScalarDefault(out, key, value) {
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
         out[key] = value;
     }
+}
+function normalizeEnumForValidation(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    return raw.map((item) => {
+        if (typeof item === 'string')
+            return item;
+        if (item && typeof item === 'object' && 'value' in item)
+            return item.value;
+        return item;
+    });
+}
+function normalizeParameterContractForValidation(contract) {
+    const out = { ...contract };
+    const props = out.properties;
+    if (!props)
+        return out;
+    const normalizedProps = {};
+    for (const [key, prop] of Object.entries(props)) {
+        const p = { ...prop };
+        if (Array.isArray(p.enum)) {
+            p.enum = normalizeEnumForValidation(p.enum);
+        }
+        if (p.enumSource !== undefined) {
+            delete p.enumSource;
+        }
+        normalizedProps[key] = p;
+    }
+    out.properties = normalizedProps;
+    return out;
 }
 function collectParameterDefaults(parameterContract) {
     const out = {};
@@ -1041,7 +1076,7 @@ function coerceMergedTypes(merged, properties) {
         }
     }
 }
-async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, config, skillId) {
+async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, config, skillId, sessionId) {
     const method = (config.method || "GET").toUpperCase();
     let payload;
     if (typeof input === "string") {
@@ -1060,7 +1095,8 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
         coerceMergedTypes(merged, config.parameterContract.properties);
     }
     if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
-        const validate = ajv.compile(config.parameterContract);
+        const normalizedContract = normalizeParameterContractForValidation(config.parameterContract);
+        const validate = ajv.compile(normalizedContract);
         const valid = validate(merged);
         if (!valid) {
             const errors = validate.errors?.map(err => {
@@ -1124,7 +1160,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
     const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
     const timeoutSeconds = validateTimeoutSeconds(config.timeoutSeconds);
     if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
-        return await executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, config.asyncPoll, skillId);
+        return await executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, config.asyncPoll, skillId, sessionId);
     }
     try {
         const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
@@ -1134,7 +1170,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
             body: requestBody,
             timeoutSeconds,
         }, {
-            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId),
             timeout: (timeoutSeconds + 5) * 1000,
         });
         return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
@@ -1168,7 +1204,8 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
         throw error;
     }
 }
-async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, asyncPoll, skillId) {
+async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, asyncPoll, skillId, sessionId) {
+    const auditHeaders = gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId);
     try {
         const submitResponse = await axios_1.default.post(`${gatewayUrl}/api/skills/api/async`, {
             url: endpoint,
@@ -1178,7 +1215,7 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
             timeoutSeconds,
             asyncPoll,
         }, {
-            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            headers: auditHeaders,
             timeout: (timeoutSeconds + 5) * 1000,
         });
         const { asyncTaskId, externalTaskId } = submitResponse.data;
@@ -1191,12 +1228,29 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
         const maxWaitMs = asyncPoll.maxWaitSeconds
             ? asyncPoll.maxWaitSeconds * 1000
             : (asyncPoll.maxWaitMs || 600000);
+        postPollingAudit(gatewayUrl, auditHeaders, {
+            asyncTaskId,
+            skillId,
+            userId,
+            sessionId,
+            phase: "AGENT_REQUEST",
+            extraJson: JSON.stringify({ timeoutMs: maxWaitMs, pollMethod: asyncPoll.pollMethod || "GET" }),
+        });
         const waitResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`, {
             params: { timeoutMs: maxWaitMs },
-            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
+            headers: auditHeaders,
             timeout: maxWaitMs + 10000,
         });
         const { status, result, errorMessage } = waitResponse.data;
+        postPollingAudit(gatewayUrl, auditHeaders, {
+            asyncTaskId,
+            skillId,
+            userId,
+            sessionId,
+            phase: "AGENT_RESPONSE",
+            responseBody: JSON.stringify(waitResponse.data),
+            status,
+        });
         if (status === "COMPLETED") {
             return JSON.stringify({
                 asyncTaskId,
@@ -1231,6 +1285,30 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
         });
     }
     catch (error) {
+        const auditLog = {
+            skillId,
+            userId,
+            sessionId,
+            phase: "AGENT_ERROR",
+            errorMessage: error instanceof Error ? error.message : String(error),
+            errorStack: error instanceof Error ? error.stack : undefined,
+        };
+        if (axios_1.default.isAxiosError(error)) {
+            if (error.response?.status) {
+                auditLog.status = String(error.response.status);
+            }
+            if (error.response?.data) {
+                auditLog.responseBody = typeof error.response.data === 'string'
+                    ? error.response.data
+                    : JSON.stringify(error.response.data);
+            }
+            auditLog.extraJson = JSON.stringify({
+                code: error.code,
+                url: error.config?.url,
+                method: error.config?.method,
+            });
+        }
+        postPollingAudit(gatewayUrl, gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId), auditLog);
         if (axios_1.default.isAxiosError(error)) {
             const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
             if (isTimeout) {
@@ -1246,6 +1324,25 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
         }
         throw error;
     }
+}
+function postPollingAudit(gatewayUrl, headers, log) {
+    axios_1.default.post(`${gatewayUrl}/api/internal/polling-audit/events`, [{
+            asyncTaskId: log.asyncTaskId,
+            skillId: log.skillId,
+            userId: log.userId,
+            sessionId: log.sessionId,
+            phase: log.phase,
+            recordedAt: new Date().toISOString(),
+            responseBody: log.responseBody,
+            status: log.status,
+            errorMessage: log.errorMessage,
+            errorStack: log.errorStack,
+            extraJson: log.extraJson,
+        }], {
+        headers,
+        timeout: 5000,
+    }).catch(() => {
+    });
 }
 function tryParseJson(raw) {
     try {
@@ -1470,11 +1567,12 @@ function optionalSkillIdHeader(skillId) {
     }
     return {};
 }
-function gatewayApiProxyInboundHeaders(apiToken, userId, skillId) {
+function gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId) {
     return {
         ...gatewaySkillReadHeaders(apiToken, userId),
         "Content-Type": "application/json",
         ...optionalSkillIdHeader(skillId),
+        ...(sessionId ? { "X-Session-Id": sessionId } : {}),
     };
 }
 function previewExtendedSkillToolInput(rawInput) {
@@ -1543,10 +1641,12 @@ function applyExtendedSkillConfirmationGate(execInput, needsConfirmation, runCon
         details: "",
         parametersPreview: previewExtendedSkillToolInput(execInput),
     });
-    if (!resume.confirmed) {
+    const result = resume;
+    if (!result.confirmed) {
         return { proceed: false, cancelled: true };
     }
-    return { proceed: true, payload: execInput };
+    const finalInput = result.adjustedParams ? { ...execInput, ...result.adjustedParams } : execInput;
+    return { proceed: true, payload: finalInput };
 }
 async function saveGeneratedSkill(gatewayUrl, apiToken, payload, allowOverwrite, userId) {
     const headers = gatewaySkillMutationHeaders(apiToken, userId);
@@ -1689,7 +1789,8 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             });
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
-                            return await executeConfiguredApiSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id);
+                            const sessionId = runConfig?.configurable?.thread_id;
+                            return await executeConfiguredApiSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id, sessionId);
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "ssh") {
                             return JSON.stringify({

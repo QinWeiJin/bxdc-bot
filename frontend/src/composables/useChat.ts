@@ -105,7 +105,8 @@ export interface ChatState {
   sendMessage: (content: string, userId?: string) => Promise<void>
   addMessage: (message: Message) => void
   fetchGreeting: () => Promise<void>
-  confirmSkillAction: (toolCallId: string, confirmed: boolean) => Promise<void>
+  confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
+  updateConfirmationArguments: (toolCallId: string, adjustedParams: Record<string, unknown>) => void
 }
 
 const ChatKey: InjectionKey<ChatState> = Symbol('chat')
@@ -600,7 +601,7 @@ export function provideChat() {
     }))
   }
 
-  async function confirmSkillAction(toolCallId: string, confirmed: boolean) {
+  async function confirmSkillAction(toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) {
     const sid = activeSessionId.value
     if (!sid) return
 
@@ -608,12 +609,26 @@ export function provideChat() {
     updateConfirmationStatus(toolCallId, newStatus)
 
     try {
-      await confirmAction(sid, toolCallId, confirmed)
+      await confirmAction(sid, toolCallId, confirmed, adjustedParams)
     } catch (e) {
       console.error('Failed to send confirmation:', e)
       updateConfirmationStatus(toolCallId, 'pending')
       error.value = e instanceof Error ? e.message : 'Confirmation request failed'
     }
+  }
+
+  function updateConfirmationArguments(toolCallId: string, adjustedParams: Record<string, unknown>) {
+    updateLastAssistantMessage((last) => ({
+      ...last,
+      confirmations: (last.confirmations ?? []).map((c) => {
+        if (c.toolCallId !== toolCallId) return c;
+        return { ...c, arguments: adjustedParams };
+      }),
+      toolInvocations: (last.toolInvocations ?? []).map((t) => {
+        if (t.id !== toolCallId) return t;
+        return { ...t, arguments: adjustedParams };
+      }),
+    }));
   }
 
   async function sendMessage(content: string, userId?: string) {
@@ -793,6 +808,7 @@ export function provideChat() {
     addMessage,
     fetchGreeting,
     confirmSkillAction,
+    updateConfirmationArguments,
   }
   provide(ChatKey, state)
   return state

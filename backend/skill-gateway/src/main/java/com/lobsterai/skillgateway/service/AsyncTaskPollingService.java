@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.mapper.AsyncTaskMapper;
+import com.lobsterai.skillgateway.util.JsonPathUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -152,7 +153,7 @@ public class AsyncTaskPollingService {
     }
 
     private String extractByPath(Object obj, String path) {
-        Object value = extractValueByPath(obj, path);
+        Object value = JsonPathUtils.extractValueByPath(obj, path);
         if (value == null) return null;
         if (value instanceof String) return (String) value;
         try {
@@ -163,18 +164,7 @@ public class AsyncTaskPollingService {
     }
 
     @SuppressWarnings("unchecked")
-    private Object extractValueByPath(Object obj, String path) {
-        if (obj == null || path == null || path.isBlank()) return null;
-        String[] segments = path.split("\\.");
-        Object current = obj;
-        for (String segment : segments) {
-            if (current == null) return null;
-            if (current instanceof Map) {
-                current = ((Map<String, Object>) current).get(segment);
-            } else {
-                return null;
-            }
-        }
-        return current;
+    public static Object extractValueByPath(Object obj, String path) {
+        return JsonPathUtils.extractValueByPath(obj, path);
     }
 }

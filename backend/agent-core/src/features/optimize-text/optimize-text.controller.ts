@@ -35,8 +35,8 @@ export class OptimizeTextController {
     const timeoutPromise = new Promise<{ optimizedText: string; explanation: string }>((resolve) =>
       setTimeout(() => resolve({
         optimizedText: body.currentText,
-        explanation: 'AI 优化超时（60s），请稍后重试。',
-      }), 60000)
+        explanation: 'AI 优化超时（120s），请稍后重试。',
+      }), 120000)
     );
 
     const result = await Promise.race([
@@ -65,7 +65,13 @@ const JSON_FIELD_IDS = new Set([
   'api_body',
 ]);
 
-function formatOptimizedText(fieldId: string, text: string): string {
+function formatOptimizedText(fieldId: string, text: unknown): string {
+  if (typeof text !== 'string') {
+    if (text && typeof text === 'object') {
+      try { return JSON.stringify(text, null, 2); } catch { return String(text); }
+    }
+    return text as string;
+  }
   if (!JSON_FIELD_IDS.has(fieldId)) return text;
   const trimmed = text.trim();
   if (!trimmed) return text;

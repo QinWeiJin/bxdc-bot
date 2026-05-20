@@ -14,6 +14,7 @@ export declare class AgentController {
         sessionId: string;
         toolCallId: string;
         confirmed: boolean;
+        adjustedParams?: Record<string, unknown>;
     }): {
         ok: boolean;
     };

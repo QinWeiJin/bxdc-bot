@@ -322,7 +322,7 @@ let AgentController = class AgentController {
         }
         clearTimeout(pending.timer);
         pendingConfirmations.delete(key);
-        pending.resolve(body.confirmed);
+        pending.resolve({ confirmed: body.confirmed, adjustedParams: body.adjustedParams });
         return { ok: true };
     }
     runTask(body) {
@@ -409,12 +409,12 @@ let AgentController = class AgentController {
                                     arguments: resolvedArgs,
                                 }),
                             });
-                            const confirmed = await new Promise((resolve) => {
+                            const confirmedResult = await new Promise((resolve) => {
                                 const key = confirmationKey(sessionId, v.toolCallId);
                                 const timer = setTimeout(() => {
                                     pendingConfirmations.delete(key);
                                     console.log(`[Confirmation] Timeout for ${key}, auto-cancelling`);
-                                    resolve(false);
+                                    resolve({ confirmed: false });
                                 }, CONFIRMATION_TIMEOUT_MS);
                                 pendingConfirmations.set(key, {
                                     resolve,
@@ -425,7 +425,7 @@ let AgentController = class AgentController {
                                     timer,
                                 });
                             });
-                            if (!confirmed) {
+                            if (!confirmedResult.confirmed) {
                                 const ac = new AbortController();
                                 const cancelResumeStream = await agent.stream(new langgraph_1.Command({ resume: { confirmed: false } }), { configurable: { thread_id: sessionId }, signal: ac.signal });
                                 let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
@@ -472,7 +472,7 @@ let AgentController = class AgentController {
                                 subject.next({ data: JSON.stringify({ role: 'assistant', content: fullAssistantResponse }) });
                                 break outer;
                             }
-                            const resumeStream = await agent.stream(new langgraph_1.Command({ resume: { confirmed: true } }), graphConfig);
+                            const resumeStream = await agent.stream(new langgraph_1.Command({ resume: { confirmed: true, adjustedParams: confirmedResult.adjustedParams } }), graphConfig);
                             iterator = resumeStream[Symbol.asyncIterator]();
                             continue outer;
                         }

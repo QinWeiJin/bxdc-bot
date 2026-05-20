@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
+import { useSkillHub } from '../composables/useSkillHub'
 import UserAvatar from './UserAvatar.vue'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
+import { apiUrl } from '../services/config'
 
-const { messages, isThinking, confirmSkillAction } = useChat()
+const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
+const { skills, fetchSkills } = useSkillHub()
 const activeLogMessageId = ref<string | null>(null)
+
+onMounted(() => { fetchSkills() })
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   if (status === 'completed') return '已完成'
@@ -179,7 +184,146 @@ const latestAssistantMessage = computed(() =>
 
 const latestAssistantLogCount = computed(() => latestAssistantMessage.value?.llmLogs?.length ?? 0)
 
+function normalizeEnumOptions(raw: unknown[]): { label: string; value: unknown }[] {
+  if (!Array.isArray(raw) || raw.length === 0) return []
+  if (typeof raw[0] === 'string') return raw.map(v => ({ label: String(v), value: v }))
+  if (typeof raw[0] === 'number') return raw.map(v => ({ label: String(v), value: v }))
+  if (typeof raw[0] === 'boolean') return raw.map(v => ({ label: String(v), value: v }))
+  return raw as { label: string; value: unknown }[]
+}
+
+function resolveParamProperties(config: any): Record<string, any> | null {
+  if (!config) return null
+  const pc = config.parameterContract
+  if (!pc) return null
+  if (pc.properties && typeof pc.properties === 'object' && !Array.isArray(pc.properties)) {
+    const keys = Object.keys(pc.properties)
+    if (keys.length > 0) return pc.properties
+  }
+  const entries = Object.entries(pc)
+  const hasSchemaProps = entries.some(([, v]) => v && typeof v === 'object' && !Array.isArray(v) && 'type' in (v as any))
+  if (hasSchemaProps) {
+    const out: Record<string, any> = {}
+    for (const [k, v] of entries) {
+      if (v && typeof v === 'object' && !Array.isArray(v)) out[k] = v
+    }
+    return Object.keys(out).length > 0 ? out : null
+  }
+  return null
+}
+
+const formStates = reactive<Record<string, {
+  values: Record<string, unknown>
+  properties: Record<string, any> | null
+  rawJson: string
+  optionsCache: Record<string, { label: string; value: unknown }[]>
+  loading: Record<string, boolean>
+}>>({})
+
+function getOrInitFormState(conf: ConfirmationRequest) {
+  const existing = formStates[conf.toolCallId]
+  if (existing && existing.properties !== null) return existing
+
+  let skill = skills.value.find(s =>
+    s.name === conf.skillName
+    || s.name === conf.skillName.replace(/_/g, '-')
+    || s.name === conf.skillName.replace(/-/g, '_')
+  )
+
+  if (!skill && existing) return existing
+
+  if (!skill) {
+    if (!existing) {
+      formStates[conf.toolCallId] = {
+        values: reactive({}),
+        properties: null,
+        rawJson: formatConfirmationArguments(conf.arguments),
+        optionsCache: reactive({}),
+        loading: reactive({}),
+      }
+    }
+    return formStates[conf.toolCallId]
+  }
+  let properties: Record<string, any> | null = null
+  if (skill) {
+    try {
+      let config = typeof skill.configuration === 'string' ? JSON.parse(skill.configuration) : skill.configuration
+      if (config && typeof config.parameterContract === 'string') {
+        try { config = { ...config, parameterContract: JSON.parse(config.parameterContract) } } catch { /* keep as-is */ }
+      }
+      properties = resolveParamProperties(config)
+      console.log('[param-form] resolved props:', !!properties, 'keys:', properties ? Object.keys(properties) : 'null')
+    } catch (e) { console.log('[param-form] error:', e); /* ignore */ }
+  }
+
+  const llmArgs = (conf.arguments as Record<string, unknown>) || {}
+  let values: Record<string, unknown> = {}
+  if (properties) {
+    for (const [key, prop] of Object.entries(properties)) {
+      if (key in llmArgs && llmArgs[key] !== undefined && llmArgs[key] !== null) {
+        values[key] = llmArgs[key]
+      } else if ((prop as any).default !== undefined) {
+        values[key] = (prop as any).default
+      } else {
+        values[key] = ''
+      }
+    }
+  }
+
+  formStates[conf.toolCallId] = {
+    values: reactive(values),
+    properties,
+    rawJson: formatConfirmationArguments(conf.arguments),
+    optionsCache: reactive({}),
+    loading: reactive({}),
+  }
+
+  if (properties) {
+    for (const [key, prop] of Object.entries(properties)) {
+      if ((prop as any).enumSource) fetchEnumSource(conf.toolCallId, key, prop)
+    }
+  }
+
+  return formStates[conf.toolCallId]
+}
+
+async function fetchEnumSource(toolCallId: string, key: string, prop: Record<string, unknown>, searchQuery = '') {
+  const state = formStates[toolCallId]
+  if (!state) return
+  state.loading[key] = true
+  try {
+    const res = await fetch(apiUrl('/api/skills/enum-source'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(prop.enumSource as Record<string, unknown>), searchQuery }),
+    })
+    state.optionsCache[key] = res.ok ? await res.json() : []
+  } catch {
+    state.optionsCache[key] = []
+  } finally {
+    state.loading[key] = false
+  }
+}
+
 function handleConfirmation(toolCallId: string, confirmed: boolean) {
+  if (confirmed) {
+    const formState = formStates[toolCallId]
+    if (formState) {
+      let adjustedParams: Record<string, unknown>
+      if (formState.properties) {
+        adjustedParams = { ...formState.values }
+      } else {
+        try {
+          adjustedParams = JSON.parse(formState.rawJson)
+        } catch {
+          adjustedParams = {}
+        }
+      }
+      updateConfirmationArguments(toolCallId, adjustedParams)
+      confirmSkillAction(toolCallId, true, adjustedParams)
+      return
+    }
+  }
   confirmSkillAction(toolCallId, confirmed)
 }
 
@@ -324,10 +468,31 @@ const chatItems = computed(() =>
               <p><strong>技能：</strong>{{ conf.skillName }}</p>
               <p><strong>操作：</strong>{{ conf.summary }}</p>
               <p v-if="conf.details"><strong>详情：</strong>{{ conf.details }}</p>
-              <div v-if="hasConfirmationArguments(conf.arguments)" class="confirmation-params">
-                <div class="confirmation-params-label">本次调用参数</div>
-                <pre class="confirmation-params-pre">{{ formatConfirmationArguments(conf.arguments) }}</pre>
-              </div>
+              <!-- pending + has arguments → always editable -->
+              <template v-if="conf.status === 'pending' && hasConfirmationArguments(conf.arguments)">
+                <div class="confirmation-params">
+                  <div class="confirmation-params-label">执行参数（可修改）</div>
+                  <!-- has parameterContract → typed fields -->
+                  <template v-if="getOrInitFormState(conf)?.properties">
+                    <div v-for="(prop, key) in getOrInitFormState(conf)!.properties!" :key="key" class="confirmation-inline-field">
+                      <label>{{ (prop as any).description || key }}</label>
+                      <t-select v-if="(prop as any).enum" v-model="getOrInitFormState(conf)!.values[key]" :options="normalizeEnumOptions((prop as any).enum)" filterable size="small" />
+                      <t-select v-else-if="(prop as any).enumSource" v-model="getOrInitFormState(conf)!.values[key]" :options="(getOrInitFormState(conf)!.optionsCache[key] || []) as any" :loading="getOrInitFormState(conf)!.loading[key]" filterable remote :remote-method="(kw: string) => fetchEnumSource(conf.toolCallId, key, prop as Record<string, unknown>, kw)" size="small" />
+                      <t-input-number v-else-if="(prop as any).type === 'number' || (prop as any).type === 'integer'" v-model="getOrInitFormState(conf)!.values[key]" size="small" />
+                      <t-input v-else v-model="getOrInitFormState(conf)!.values[key]" size="small" />
+                    </div>
+                  </template>
+                  <!-- no parameterContract → raw JSON textarea -->
+                  <t-textarea v-else v-model="getOrInitFormState(conf)!.rawJson" :autosize="{ minRows: 2, maxRows: 6 }" size="small" />
+                </div>
+              </template>
+              <!-- confirmed/cancelled/expired → plain display -->
+              <template v-else>
+                <div v-if="hasConfirmationArguments(conf.arguments)" class="confirmation-params">
+                  <div class="confirmation-params-label">本次调用参数</div>
+                  <pre class="confirmation-params-pre">{{ formatConfirmationArguments(conf.arguments) }}</pre>
+                </div>
+              </template>
             </div>
             <div v-if="conf.status === 'pending'" class="confirmation-actions">
               <t-button theme="default" variant="outline" @click="handleConfirmation(conf.toolCallId, false)">取消</t-button>
@@ -1119,6 +1284,18 @@ const chatItems = computed(() =>
   border: 1px solid var(--td-border-level-1-color);
   max-height: 220px;
   overflow: auto;
+}
+
+.confirmation-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.confirmation-inline-field label {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
 }
 
 .confirmation-actions {

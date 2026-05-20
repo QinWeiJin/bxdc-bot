@@ -106,7 +106,7 @@ function stripInterruptForClient(payload: unknown): unknown {
 const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface PendingConfirmation {
-  resolve: (confirmed: boolean) => void;
+  resolve: (result: { confirmed: boolean; adjustedParams?: Record<string, unknown> }) => void;
   toolCallId: string;
   toolName: string;
   skillName: string;
@@ -453,7 +453,7 @@ export class AgentController {
 
   @Post('confirm')
   @HttpCode(200)
-  confirmAction(@Body() body: { sessionId: string; toolCallId: string; confirmed: boolean }) {
+  confirmAction(@Body() body: { sessionId: string; toolCallId: string; confirmed: boolean; adjustedParams?: Record<string, unknown> }) {
     const key = confirmationKey(body.sessionId, body.toolCallId);
     const pending = pendingConfirmations.get(key);
     if (!pending) {
@@ -461,7 +461,7 @@ export class AgentController {
     }
     clearTimeout(pending.timer);
     pendingConfirmations.delete(key);
-    pending.resolve(body.confirmed);
+    pending.resolve({ confirmed: body.confirmed, adjustedParams: body.adjustedParams });
     return { ok: true };
   }
 
@@ -595,12 +595,12 @@ export class AgentController {
                 }),
               });
 
-              const confirmed = await new Promise<boolean>((resolve) => {
+              const confirmedResult = await new Promise<{ confirmed: boolean; adjustedParams?: Record<string, unknown> }>((resolve) => {
                 const key = confirmationKey(sessionId, v.toolCallId);
                 const timer = setTimeout(() => {
                   pendingConfirmations.delete(key);
                   console.log(`[Confirmation] Timeout for ${key}, auto-cancelling`);
-                  resolve(false);
+                  resolve({ confirmed: false });
                 }, CONFIRMATION_TIMEOUT_MS);
                 pendingConfirmations.set(key, {
                   resolve,
@@ -612,7 +612,7 @@ export class AgentController {
                 });
               });
 
-              if (!confirmed) {
+              if (!confirmedResult.confirmed) {
                 const ac = new AbortController();
                 const cancelResumeStream = await agent.stream(
                   new Command({ resume: { confirmed: false } }),
@@ -661,7 +661,7 @@ export class AgentController {
               }
 
               const resumeStream = await agent.stream(
-                new Command({ resume: { confirmed: true } }),
+                new Command({ resume: { confirmed: true, adjustedParams: confirmedResult.adjustedParams } }),
                 graphConfig,
               );
               iterator = resumeStream[Symbol.asyncIterator]();

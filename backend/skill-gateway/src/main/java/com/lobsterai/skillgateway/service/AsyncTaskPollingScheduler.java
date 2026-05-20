@@ -1,13 +1,18 @@
 package com.lobsterai.skillgateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.entity.AsyncPollingAuditLog;
 import com.lobsterai.skillgateway.entity.AsyncTask;
+import com.lobsterai.skillgateway.util.JsonPathUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -18,19 +23,23 @@ public class AsyncTaskPollingScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncTaskPollingScheduler.class);
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
+    private static final int RESPONSE_TRUNCATE_LENGTH = 4000;
 
     private final AsyncTaskPollingService pollingService;
     private final ApiProxyService apiProxyService;
+    private final AsyncPollingAuditService auditService;
     private final ObjectMapper objectMapper;
     private final ExecutorService executor = Executors.newFixedThreadPool(20);
 
     public AsyncTaskPollingScheduler(
             AsyncTaskPollingService pollingService,
             ApiProxyService apiProxyService,
+            AsyncPollingAuditService auditService,
             ObjectMapper objectMapper
     ) {
         this.pollingService = pollingService;
         this.apiProxyService = apiProxyService;
+        this.auditService = auditService;
         this.objectMapper = objectMapper;
     }
 
@@ -51,6 +60,10 @@ public class AsyncTaskPollingScheduler {
     }
 
     private void pollSingleTask(AsyncTask task) {
+        AsyncPollingAuditLog startLog = auditService.buildBaseLog(task, "GATEWAY_POLL_START");
+        startLog.setExtraJson(auditService.safeJson(Map.of("retryCount", task.getPollRetryCount() != null ? task.getPollRetryCount() : 0)));
+        auditService.log(startLog);
+
         try {
             if (task.getStartedAt() == null) {
                 pollingService.updateStartedAt(task.getId());
@@ -74,56 +87,144 @@ public class AsyncTaskPollingScheduler {
                 }
             }
 
-            Object pollResponse = apiProxyService.callApi(
-                    task.getPollEndpoint(),
-                    task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET",
-                    pollHeaders,
-                    null
-            );
+            Object pollResponse;
+            long networkStart = System.currentTimeMillis();
+            try {
+                pollResponse = apiProxyService.callApi(
+                        task.getPollEndpoint(),
+                        task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET",
+                        pollHeaders,
+                        null
+                );
+                long durationMs = System.currentTimeMillis() - networkStart;
 
-            log.debug("Polled async task {} (external={}) endpoint={} response={}",
-                    task.getId(), task.getExternalTaskId(),
-                    task.getPollEndpoint(),
-                    pollResponse instanceof String
-                            ? ((String) pollResponse).substring(0, Math.min(200, ((String) pollResponse).length()))
-                            : pollResponse);
+                String responseStr = pollResponse instanceof String
+                        ? (String) pollResponse
+                        : objectMapper.writeValueAsString(pollResponse);
+
+                AsyncPollingAuditLog netLog = auditService.buildBaseLog(task, "NETWORK_REQUEST");
+                netLog.setHttpUrl(task.getPollEndpoint());
+                netLog.setHttpMethod(task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET");
+                netLog.setDurationMs((int) durationMs);
+                netLog.setResponseBody(auditService.truncate(responseStr, RESPONSE_TRUNCATE_LENGTH));
+                if (responseStr.length() > RESPONSE_TRUNCATE_LENGTH) {
+                    netLog.setResponseTruncated(true);
+                }
+                auditService.log(netLog);
+
+                log.debug("Polled async task {} (external={}) endpoint={} response={}",
+                        task.getId(), task.getExternalTaskId(),
+                        task.getPollEndpoint(),
+                        responseStr.substring(0, Math.min(200, responseStr.length())));
+            } catch (Exception netEx) {
+                long durationMs = System.currentTimeMillis() - networkStart;
+
+                AsyncPollingAuditLog netErrLog = auditService.buildBaseLog(task, "NETWORK_ERROR");
+                netErrLog.setHttpUrl(task.getPollEndpoint());
+                netErrLog.setHttpMethod(task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET");
+                netErrLog.setDurationMs((int) durationMs);
+                netErrLog.setErrorMessage(netEx.getMessage());
+                StringWriter sw = new StringWriter();
+                netEx.printStackTrace(new PrintWriter(sw));
+                netErrLog.setErrorStack(sw.toString());
+                auditService.log(netErrLog);
+
+                throw netEx;
+            }
 
             String pollResponseStr = pollResponse instanceof String
                     ? (String) pollResponse
                     : objectMapper.writeValueAsString(pollResponse);
 
-            if (pollingService.evaluateCompletion(pollResponseStr, task.getCompletionJsonPath(), task.getCompletionValue())) {
+            boolean completed = false;
+            boolean isFailed = false;
+            boolean expired = false;
+            String completionActualValue = null;
+            String completionExpectedValue = task.getCompletionValue();
+
+            if (task.getCompletionJsonPath() != null && !task.getCompletionJsonPath().isBlank()) {
+                try {
+                    Object parsed = objectMapper.readValue(pollResponseStr, Object.class);
+                    Object actualObj = JsonPathUtils.extractValueByPath(parsed, task.getCompletionJsonPath());
+                    completionActualValue = actualObj != null ? actualObj.toString() : null;
+                } catch (Exception ignored) {
+                }
+            }
+
+            completed = pollingService.evaluateCompletion(pollResponseStr, task.getCompletionJsonPath(), task.getCompletionValue());
+
+            if (!completed && task.getFailedValues() != null && !task.getFailedValues().isBlank()) {
+                isFailed = pollingService.evaluateFailure(pollResponseStr, task.getCompletionJsonPath(), task.getFailedValues());
+            }
+
+            if (!completed && !isFailed && task.getStartedAt() != null) {
+                expired = pollingService.isExpired(task.getStartedAt(), task.getMaxWaitSeconds());
+            }
+
+            AsyncPollingAuditLog evalLog = auditService.buildBaseLog(task, "EVALUATION");
+            evalLog.setCompletionEvaluated(task.getCompletionJsonPath() != null && !task.getCompletionJsonPath().isBlank());
+            if (evalLog.getCompletionEvaluated()) {
+                evalLog.setCompletionExpectedValue(completionExpectedValue);
+                evalLog.setCompletionActualValue(completionActualValue);
+                evalLog.setCompletionMatched(completed);
+            }
+            evalLog.setFailedEvaluated(task.getFailedValues() != null && !task.getFailedValues().isBlank());
+            if (evalLog.getFailedEvaluated()) {
+                evalLog.setFailedMatched(isFailed);
+            }
+            evalLog.setExpiredEvaluated(task.getMaxWaitSeconds() != null);
+            if (evalLog.getExpiredEvaluated()) {
+                evalLog.setExpired(expired);
+            }
+            auditService.log(evalLog);
+
+            if (completed) {
                 String result = pollingService.extractResult(pollResponseStr, task.getResultJsonPath());
                 pollingService.updatePollResult(task.getId(), "COMPLETED", result, null);
                 log.info("Async task {} completed", task.getId());
+
+                AsyncPollingAuditLog completeLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                completeLog.setStatus("COMPLETED");
+                auditService.log(completeLog);
                 return;
             }
 
-            if (task.getFailedValues() != null && !task.getFailedValues().isBlank()) {
-                if (pollingService.evaluateFailure(pollResponseStr, task.getCompletionJsonPath(), task.getFailedValues())) {
-                    pollingService.updatePollResult(task.getId(), "FAILED", null,
-                            "Task failed: status matched failed values");
-                    log.info("Async task {} failed", task.getId());
-                    return;
-                }
+            if (isFailed) {
+                String errMsg = "Task failed: status matched failed values";
+                pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
+                log.info("Async task {} failed", task.getId());
+
+                AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                failLog.setStatus("FAILED");
+                failLog.setErrorMessage(errMsg);
+                auditService.log(failLog);
+                return;
             }
 
-            if (task.getStartedAt() != null) {
-                if (pollingService.isExpired(task.getStartedAt(), task.getMaxWaitSeconds())) {
-                    pollingService.updatePollResult(task.getId(), "TIMEOUT", null,
-                            "Task timed out after " + task.getMaxWaitSeconds() + " seconds");
-                    log.info("Async task {} timed out", task.getId());
-                    return;
-                }
+            if (expired) {
+                String errMsg = "Task timed out after " + task.getMaxWaitSeconds() + " seconds";
+                pollingService.updatePollResult(task.getId(), "TIMEOUT", null, errMsg);
+                log.info("Async task {} timed out", task.getId());
+
+                AsyncPollingAuditLog timeoutLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                timeoutLog.setStatus("TIMEOUT");
+                timeoutLog.setErrorMessage(errMsg);
+                auditService.log(timeoutLog);
+                return;
             }
 
             pollingService.updateLastPolled(task.getId());
         } catch (Exception e) {
             int retryCount = pollingService.incrementRetryCount(task.getId());
             if (retryCount >= MAX_CONSECUTIVE_FAILURES) {
+                String errMsg = "Poll failed after " + retryCount + " retries: " + e.getMessage();
                 log.warn("Async task {} failed {} consecutive times, marking FAILED", task.getId(), retryCount);
-                pollingService.updatePollResult(task.getId(), "FAILED", null,
-                        "Poll failed after " + retryCount + " retries: " + e.getMessage());
+                pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
+
+                AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                failLog.setStatus("FAILED");
+                failLog.setErrorMessage(errMsg);
+                auditService.log(failLog);
                 return;
             }
             log.error("Polling task {} failed (retry {}/{}): {}", task.getId(), retryCount, MAX_CONSECUTIVE_FAILURES, e.getMessage());

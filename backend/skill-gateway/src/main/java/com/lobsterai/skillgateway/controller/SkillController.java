@@ -18,9 +18,13 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.lobsterai.skillgateway.entity.AsyncTask;
+import com.lobsterai.skillgateway.entity.AsyncPollingAuditLog;
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.entity.SkillTextPrompt;
 import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
+import com.lobsterai.skillgateway.service.ApiProxyService;
+import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
+import com.lobsterai.skillgateway.util.JsonPathUtils;
 
 /**
  * Skill 控制器。
@@ -41,6 +45,8 @@ public class SkillController {
     private final GatewayOutboundAuditService gatewayOutboundAuditService;
     private final AsyncTaskPollingService asyncTaskPollingService;
     private final SkillTextPromptMapper skillTextPromptMapper;
+    private final ApiProxyService apiProxyService;
+    private final AsyncPollingAuditService pollingAuditService;
     private final ObjectMapper objectMapper;
 
     public SkillController(
@@ -51,6 +57,8 @@ public class SkillController {
             GatewayOutboundAuditService gatewayOutboundAuditService,
             AsyncTaskPollingService asyncTaskPollingService,
             SkillTextPromptMapper skillTextPromptMapper,
+            ApiProxyService apiProxyService,
+            AsyncPollingAuditService pollingAuditService,
             ObjectMapper objectMapper
     ) {
         this.skillService = skillService;
@@ -60,6 +68,8 @@ public class SkillController {
         this.gatewayOutboundAuditService = gatewayOutboundAuditService;
         this.asyncTaskPollingService = asyncTaskPollingService;
         this.skillTextPromptMapper = skillTextPromptMapper;
+        this.apiProxyService = apiProxyService;
+        this.pollingAuditService = pollingAuditService;
         this.objectMapper = objectMapper;
     }
 
@@ -188,6 +198,7 @@ public class SkillController {
     public ResponseEntity<?> callApiAsync(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestHeader(value = "X-Skill-Id", required = false) Long skillId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
             @RequestBody ApiRequest request
     ) {
         try {
@@ -235,6 +246,7 @@ public class SkillController {
             AsyncTask task = new AsyncTask();
             task.setSkillId(skillId);
             task.setUserId(userId);
+            task.setSessionId(sessionId);
             task.setExternalTaskId(externalTaskId);
             task.setPollEndpoint(pollEndpoint);
             task.setPollMethod(asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET");
@@ -343,6 +355,68 @@ public class SkillController {
                     return ResponseEntity.ok(existing);
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    // --- Enum Source (dynamic dropdown options) ---
+
+    @PostMapping("/enum-source")
+    public ResponseEntity<?> fetchEnumSource(@RequestBody Map<String, Object> body) {
+        try {
+            String url = (String) body.get("url");
+            if (url == null || url.isBlank()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "url is required"));
+            }
+            String method = body.get("method") instanceof String ? (String) body.get("method") : "GET";
+            @SuppressWarnings("unchecked")
+            Map<String, Object> headers = body.get("headers") instanceof Map ? (Map<String, Object>) body.get("headers") : null;
+            String jsonPath = (String) body.get("jsonPath");
+            String valueKey = body.get("valueKey") instanceof String ? (String) body.get("valueKey") : "value";
+            String labelKey = body.get("labelKey") instanceof String ? (String) body.get("labelKey") : "label";
+            String searchParam = (String) body.get("searchParam");
+            String searchQuery = (String) body.get("searchQuery");
+
+            String resolvedUrl = url;
+            if (searchQuery != null && !searchQuery.isBlank() && searchParam != null && !searchParam.isBlank()) {
+                String separator = resolvedUrl.contains("?") ? "&" : "?";
+                resolvedUrl += separator + searchParam + "=" + java.net.URLEncoder.encode(searchQuery, "UTF-8");
+            }
+
+            Object response = apiProxyService.callApi(resolvedUrl, method, headers, null);
+            String responseStr = response instanceof String ? (String) response : objectMapper.writeValueAsString(response);
+            Object parsed = objectMapper.readValue(responseStr, Object.class);
+
+            Object listNode = (jsonPath != null && !jsonPath.isBlank())
+                    ? JsonPathUtils.extractValueByPath(parsed, jsonPath)
+                    : parsed;
+
+            if (!(listNode instanceof List)) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "jsonPath did not resolve to an array",
+                        "jsonPath", jsonPath,
+                        "responsePreview", responseStr.substring(0, Math.min(500, responseStr.length()))
+                ));
+            }
+
+            @SuppressWarnings("unchecked")
+            List<Object> items = (List<Object>) listNode;
+            List<Map<String, String>> options = new java.util.ArrayList<>();
+            for (Object item : items) {
+                if (!(item instanceof Map)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> map = (Map<String, Object>) item;
+                Object labelObj = map.get(labelKey);
+                Object valueObj = map.get(valueKey);
+                if (valueObj != null) {
+                    options.add(Map.of(
+                            "label", labelObj != null ? labelObj.toString() : valueObj.toString(),
+                            "value", valueObj.toString()
+                    ));
+                }
+            }
+            return ResponseEntity.ok(options);
+        } catch (Exception e) {
+            return ResponseEntity.status(502).body(Map.of("error", "Enum source fetch failed: " + e.getMessage()));
+        }
     }
 
     /**

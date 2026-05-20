@@ -12,7 +12,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.BufferingClientHttpRequestFactory;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -60,7 +60,8 @@ public class ApiProxyService {
             String outboundUrl = OutboundUrlNormalizer.normalizeForOutboundHttp(url);
             HttpHeaders httpHeaders = new HttpHeaders();
             applyOutboundHeaders(httpHeaders, headers);
-            HttpEntity<Object> entity = new HttpEntity<>(body, httpHeaders);
+            Object normalizedBody = normalizeBodyForContentType(body, httpHeaders);
+            HttpEntity<Object> entity = new HttpEntity<>(normalizedBody, httpHeaders);
             ResponseEntity<String> response = gatewayRestTemplate.exchange(
                     outboundUrl,
                     HttpMethod.valueOf(method.toUpperCase()),
@@ -90,9 +91,10 @@ public class ApiProxyService {
             String outboundUrl = OutboundUrlNormalizer.normalizeForOutboundHttp(url);
             HttpHeaders httpHeaders = new HttpHeaders();
             applyOutboundHeaders(httpHeaders, headers);
-            HttpEntity<Object> entity = new HttpEntity<>(body, httpHeaders);
+            Object normalizedBody = normalizeBodyForContentType(body, httpHeaders);
+            HttpEntity<Object> entity = new HttpEntity<>(normalizedBody, httpHeaders);
 
-            SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+            HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory();
             factory.setConnectTimeout(timeoutSeconds * 1000);
             factory.setReadTimeout(timeoutSeconds * 1000);
             BufferingClientHttpRequestFactory bufferingFactory = new BufferingClientHttpRequestFactory(factory);
@@ -153,6 +155,48 @@ public class ApiProxyService {
         } else {
             target.add(name, value.toString());
         }
+    }
+
+    /**
+     * Prevents RestTemplate from wrapping a JSON string body as a JSON string value
+     * when Content-Type is application/json (double-quote escaping bug).
+     * Also recursively parses object/array values that arrive as JSON strings
+     * (e.g. {@code "data":"{\"app\":\"...\"}"} → {@code "data":{...}}).
+     */
+    private Object normalizeBodyForContentType(Object body, HttpHeaders httpHeaders) {
+        MediaType contentType = httpHeaders.getContentType();
+        boolean isJsonType = contentType != null && MediaType.APPLICATION_JSON.includes(contentType);
+        return deepNormalize(body, isJsonType);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object deepNormalize(Object node, boolean isJsonType) {
+        if (node instanceof String) {
+            String s = ((String) node).trim();
+            if (s.isEmpty()) return node;
+            if (isJsonType && (s.startsWith("{") || s.startsWith("["))) {
+                try {
+                    return objectMapper.readValue(s, Object.class);
+                } catch (Exception ignored) {
+                }
+            }
+            return node;
+        }
+        if (node instanceof Map) {
+            Map<String, Object> map = (Map<String, Object>) node;
+            for (Map.Entry<String, Object> e : map.entrySet()) {
+                e.setValue(deepNormalize(e.getValue(), isJsonType));
+            }
+            return map;
+        }
+        if (node instanceof List) {
+            List<Object> list = (List<Object>) node;
+            for (int i = 0; i < list.size(); i++) {
+                list.set(i, deepNormalize(list.get(i), isJsonType));
+            }
+            return list;
+        }
+        return node;
     }
 
     private Object parseResponseBody(ResponseEntity<String> response) {
