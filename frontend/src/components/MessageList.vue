@@ -252,8 +252,10 @@ function getOrInitFormState(conf: ConfirmationRequest) {
         try { config = { ...config, parameterContract: JSON.parse(config.parameterContract) } } catch { /* keep as-is */ }
       }
       properties = resolveParamProperties(config)
-      console.log('[param-form] resolved props:', !!properties, 'keys:', properties ? Object.keys(properties) : 'null')
-    } catch (e) { console.log('[param-form] error:', e); /* ignore */ }
+      console.log(`[skill] formState INIT: toolCallId=${conf.toolCallId} skillName=${conf.skillName}`, {
+        propKeys: properties ? Object.keys(properties) : null,
+      })
+    } catch (e) { console.error(`[skill] formState INIT error: toolCallId=${conf.toolCallId}`, e); }
   }
 
   const llmArgs = (conf.arguments as Record<string, unknown>) || {}
@@ -292,13 +294,21 @@ async function fetchEnumSource(toolCallId: string, key: string, prop: Record<str
   if (!state) return
   state.loading[key] = true
   try {
+    const body = JSON.stringify({ ...(prop.enumSource as Record<string, unknown>), searchQuery })
     const res = await fetch(apiUrl('/api/skills/enum-source'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...(prop.enumSource as Record<string, unknown>), searchQuery }),
+      body,
     })
-    state.optionsCache[key] = res.ok ? await res.json() : []
-  } catch {
+    if (res.ok) {
+      state.optionsCache[key] = await res.json()
+      console.log(`[skill] enumSource OK: toolCallId=${toolCallId} key=${key} count=${state.optionsCache[key]?.length ?? 0}`)
+    } else {
+      console.warn(`[skill] enumSource HTTP ${res.status}: toolCallId=${toolCallId} key=${key}`)
+      state.optionsCache[key] = []
+    }
+  } catch (e) {
+    console.error(`[skill] enumSource FAILED: toolCallId=${toolCallId} key=${key}`, e)
     state.optionsCache[key] = []
   } finally {
     state.loading[key] = false
@@ -348,13 +358,22 @@ function handleConfirmation(toolCallId: string, confirmed: boolean) {
     if (formState) {
       let adjustedParams: Record<string, unknown>
       if (formState.properties) {
+        const rawValues = { ...formState.values }
         adjustedParams = normalizeAdjustedParams(formState.values, formState.properties)
+        console.log(`[skill] confirm BUTTON params: toolCallId=${toolCallId}`, {
+          rawValues,
+          adjustedParams,
+        })
       } else {
         try {
           adjustedParams = JSON.parse(formState.rawJson)
         } catch {
           adjustedParams = {}
         }
+        console.log(`[skill] confirm BUTTON (raw JSON): toolCallId=${toolCallId}`, {
+          rawJson: formState.rawJson.slice(0, 300),
+          adjustedParams,
+        })
       }
       updateConfirmationArguments(toolCallId, adjustedParams)
       confirmSkillAction(toolCallId, true, adjustedParams)

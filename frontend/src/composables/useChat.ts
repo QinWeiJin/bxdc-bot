@@ -499,6 +499,12 @@ export function provideChat() {
           toolEvent.status,
         )
 
+        if (toolEvent.status === 'failed' && toolEvent.result) {
+          console.warn(`[skill] upsertTool FAILED (child): tool=${toolEvent.toolName} (${toolEvent.toolId})`, {
+            result: typeof toolEvent.result === 'string' ? toolEvent.result.slice(0, 500) : toolEvent.result,
+          })
+        }
+
         return {
           ...last,
           toolInvocations,
@@ -539,6 +545,12 @@ export function provideChat() {
         toolEvent.toolId,
         toolEvent.status,
       )
+
+      if (toolEvent.status === 'failed' && toolEvent.result) {
+        console.warn(`[skill] upsertTool FAILED: tool=${toolEvent.toolName} (${toolEvent.toolId})`, {
+          result: typeof toolEvent.result === 'string' ? toolEvent.result.slice(0, 500) : toolEvent.result,
+        })
+      }
 
       return {
         ...last,
@@ -608,10 +620,20 @@ export function provideChat() {
     const newStatus: ConfirmationStatus = confirmed ? 'confirmed' : 'cancelled'
     updateConfirmationStatus(toolCallId, newStatus)
 
+    if (confirmed) {
+      console.log(`[skill] confirmAction SEND: toolCallId=${toolCallId} confirmed=true`, {
+        adjustedParams,
+        sessionId: sid,
+      })
+    } else {
+      console.log(`[skill] confirmAction SEND: toolCallId=${toolCallId} confirmed=false`)
+    }
+
     try {
       await confirmAction(sid, toolCallId, confirmed, adjustedParams)
+      console.log(`[skill] confirmAction OK: toolCallId=${toolCallId} confirmed=${confirmed}`)
     } catch (e) {
-      console.error('Failed to send confirmation:', e)
+      console.error(`[skill] confirmAction FAILED: toolCallId=${toolCallId}`, e)
       updateConfirmationStatus(toolCallId, 'pending')
       error.value = e instanceof Error ? e.message : 'Confirmation request failed'
     }
@@ -689,12 +711,25 @@ export function provideChat() {
             }
 
             if (isToolStatusEvent(data)) {
+              if (data.status === 'failed') {
+                console.warn(`[skill] tool_status FAILED: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`, {
+                  result: data.result,
+                  arguments: data.arguments,
+                })
+              } else if (data.status === 'completed') {
+                console.log(`[skill] tool_status completed: tool=${data.toolName} (${data.toolId}) kind=${data.kind} resultLen=${typeof data.result === 'string' ? data.result.length : 'N/A'}`)
+              } else {
+                console.log(`[skill] tool_status running: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`)
+              }
               upsertToolInvocation(data)
               appendToolTimelineEntry(data.toolId)
               return
             }
 
             if (isConfirmationRequestEvent(data)) {
+              console.log(`[skill] confirmation_request: skill=${data.skillName} tool=${data.toolName} toolCallId=${data.toolCallId}`, {
+                arguments: data.arguments,
+              })
               addConfirmationToLastAssistant({
                 sessionId: data.sessionId,
                 toolCallId: data.toolCallId,
@@ -726,6 +761,7 @@ export function provideChat() {
             }
 
             if (typeof data?.error === 'string') {
+              console.error(`[skill] SSE error event: ${data.error}`)
               error.value = data.error
               settleLastToolInvocations('failed')
               isThinking.value = false
@@ -754,14 +790,17 @@ export function provideChat() {
       })
 
       eventSource.addEventListener('error', (e) => {
-        console.error('SSE Error:', e)
+        console.error('[skill] SSE connection error:', {
+          readyState: eventSource.readyState,
+          sessionId: activeSessionId.value,
+        })
         eventSource.close()
         settleLastToolInvocations('failed')
         isThinking.value = false
         activeSessionId.value = null
       })
     } catch (err) {
-      console.error('Failed to send message:', err)
+      console.error('[skill] Failed to send message:', err)
       error.value = err instanceof Error ? err.message : 'Failed to send message'
       isThinking.value = false
       activeSessionId.value = null
