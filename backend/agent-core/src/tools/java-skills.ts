@@ -807,8 +807,35 @@ function normalizeEnumForValidation(raw: unknown): unknown[] {
   });
 }
 
-function normalizeParameterContractForValidation(contract: Record<string, unknown>): Record<string, unknown> {
+function normalizeParameterContractRequired(contract: Record<string, unknown>): Record<string, unknown> {
   const out = { ...contract };
+  const props = out.properties as Record<string, Record<string, unknown>> | undefined;
+  if (!props) return out;
+
+  const existingRequired = Array.isArray(out.required) ? (out.required as string[]) : [];
+  const requiredSet = new Set(existingRequired);
+  const normalizedProps: Record<string, Record<string, unknown>> = {};
+
+  for (const [key, prop] of Object.entries(props)) {
+    const p = { ...prop };
+    if (p.required === true) {
+      requiredSet.add(key);
+      delete p.required;
+    }
+    normalizedProps[key] = p;
+  }
+
+  out.properties = normalizedProps;
+  if (requiredSet.size > 0) {
+    out.required = Array.from(requiredSet);
+  } else {
+    delete out.required;
+  }
+  return out;
+}
+
+function normalizeParameterContractForValidation(contract: Record<string, unknown>): Record<string, unknown> {
+  let out = normalizeParameterContractRequired(contract);
   const props = out.properties as Record<string, Record<string, unknown>> | undefined;
   if (!props) return out;
   const normalizedProps: Record<string, Record<string, unknown>> = {};
@@ -1044,9 +1071,12 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
 
   if (targetType === "api") {
     const rawPc = input.parameterContract;
-    const parameterContract = typeof rawPc === "string"
+    let parameterContract = typeof rawPc === "string"
       ? (() => { try { const p = JSON.parse(rawPc); return (p && typeof p === "object") ? p : rawPc; } catch { return rawPc; } })()
       : rawPc;
+    if (parameterContract && typeof parameterContract === "object" && !Array.isArray(parameterContract)) {
+      parameterContract = normalizeParameterContractRequired(parameterContract as Record<string, unknown>);
+    }
 
     const methodUpper = typeof input.method === "string" ? input.method.trim().toUpperCase() : "";
     /** POST/PUT/PATCH/DELETE: flat `parameterContract` fields default to JSON body (see `executeConfiguredApiSkill`).
@@ -2134,7 +2164,12 @@ function applyExtendedSkillConfirmationGate(
   if (!result.confirmed) {
     return { proceed: false, cancelled: true };
   }
-  const finalInput = result.adjustedParams ? { ...(execInput as Record<string, unknown>), ...result.adjustedParams } : execInput;
+  const finalInput = result.adjustedParams
+    ? { ...(execInput as Record<string, unknown>), ...result.adjustedParams }
+    : execInput;
+  if (result.adjustedParams && Object.keys(result.adjustedParams).length > 0) {
+    console.log(`[skill-confirm] tool=${toolName} adjustedParams keys=${JSON.stringify(Object.keys(result.adjustedParams))} sample=${JSON.stringify(result.adjustedParams).slice(0, 200)}`);
+  }
   return { proceed: true, payload: finalInput };
 }
 

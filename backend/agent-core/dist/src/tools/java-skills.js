@@ -564,8 +564,33 @@ function normalizeEnumForValidation(raw) {
         return item;
     });
 }
-function normalizeParameterContractForValidation(contract) {
+function normalizeParameterContractRequired(contract) {
     const out = { ...contract };
+    const props = out.properties;
+    if (!props)
+        return out;
+    const existingRequired = Array.isArray(out.required) ? out.required : [];
+    const requiredSet = new Set(existingRequired);
+    const normalizedProps = {};
+    for (const [key, prop] of Object.entries(props)) {
+        const p = { ...prop };
+        if (p.required === true) {
+            requiredSet.add(key);
+            delete p.required;
+        }
+        normalizedProps[key] = p;
+    }
+    out.properties = normalizedProps;
+    if (requiredSet.size > 0) {
+        out.required = Array.from(requiredSet);
+    }
+    else {
+        delete out.required;
+    }
+    return out;
+}
+function normalizeParameterContractForValidation(contract) {
+    let out = normalizeParameterContractRequired(contract);
     const props = out.properties;
     if (!props)
         return out;
@@ -770,7 +795,7 @@ function buildGeneratedSkill(input) {
     let executionMode = "CONFIG";
     if (targetType === "api") {
         const rawPc = input.parameterContract;
-        const parameterContract = typeof rawPc === "string"
+        let parameterContract = typeof rawPc === "string"
             ? (() => { try {
                 const p = JSON.parse(rawPc);
                 return (p && typeof p === "object") ? p : rawPc;
@@ -779,6 +804,9 @@ function buildGeneratedSkill(input) {
                 return rawPc;
             } })()
             : rawPc;
+        if (parameterContract && typeof parameterContract === "object" && !Array.isArray(parameterContract)) {
+            parameterContract = normalizeParameterContractRequired(parameterContract);
+        }
         const methodUpper = typeof input.method === "string" ? input.method.trim().toUpperCase() : "";
         const resolvedBinding = normalizeParameterBindingValue(input.parameterBinding)
             ?? (["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper) ? "jsonBody" : undefined);
@@ -1645,7 +1673,12 @@ function applyExtendedSkillConfirmationGate(execInput, needsConfirmation, runCon
     if (!result.confirmed) {
         return { proceed: false, cancelled: true };
     }
-    const finalInput = result.adjustedParams ? { ...execInput, ...result.adjustedParams } : execInput;
+    const finalInput = result.adjustedParams
+        ? { ...execInput, ...result.adjustedParams }
+        : execInput;
+    if (result.adjustedParams && Object.keys(result.adjustedParams).length > 0) {
+        console.log(`[skill-confirm] tool=${toolName} adjustedParams keys=${JSON.stringify(Object.keys(result.adjustedParams))} sample=${JSON.stringify(result.adjustedParams).slice(0, 200)}`);
+    }
     return { proceed: true, payload: finalInput };
 }
 async function saveGeneratedSkill(gatewayUrl, apiToken, payload, allowOverwrite, userId) {

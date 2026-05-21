@@ -305,13 +305,50 @@ async function fetchEnumSource(toolCallId: string, key: string, prop: Record<str
   }
 }
 
+function normalizeAdjustedParams(
+  values: Record<string, unknown>,
+  properties: Record<string, any>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, val] of Object.entries(values)) {
+    const prop = properties[key]
+    if (!prop) { out[key] = val; continue }
+    if (prop.type === 'integer' || prop.type === 'number') {
+      if (val === '' || val === undefined || val === null) {
+        if (prop.default !== undefined) {
+          out[key] = prop.default
+        }
+        continue
+      }
+      const n = Number(val)
+      if (Number.isFinite(n)) {
+        out[key] = prop.type === 'integer' ? Math.trunc(n) : n
+      } else if (prop.default !== undefined) {
+        out[key] = prop.default
+      }
+    } else if (prop.type === 'boolean') {
+      if (typeof val === 'boolean') {
+        out[key] = val
+      } else if (typeof val === 'string') {
+        const lower = val.trim().toLowerCase()
+        if (lower === 'true' || lower === '1') out[key] = true
+        else if (lower === 'false' || lower === '0' || lower === '') out[key] = false
+        else if (prop.default !== undefined) out[key] = prop.default
+      }
+    } else {
+      out[key] = val
+    }
+  }
+  return out
+}
+
 function handleConfirmation(toolCallId: string, confirmed: boolean) {
   if (confirmed) {
     const formState = formStates[toolCallId]
     if (formState) {
       let adjustedParams: Record<string, unknown>
       if (formState.properties) {
-        adjustedParams = { ...formState.values }
+        adjustedParams = normalizeAdjustedParams(formState.values, formState.properties)
       } else {
         try {
           adjustedParams = JSON.parse(formState.rawJson)
