@@ -3,6 +3,7 @@ package com.lobsterai.skillgateway.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.lobsterai.skillgateway.entity.LlmHttpAuditLog;
 import com.lobsterai.skillgateway.mapper.LlmHttpAuditLogMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,6 +65,6 @@ public class LlmHttpAuditService {
             return null;
         }
         String s = v.asText();
-        return s.isBlank() ? null : s;
+        return StringUtils.isBlank(s) ? null : s;
     }
 }

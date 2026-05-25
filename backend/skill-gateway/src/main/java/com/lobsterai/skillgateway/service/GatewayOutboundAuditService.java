@@ -6,6 +6,7 @@ import com.lobsterai.skillgateway.entity.GatewayOutboundAuditLog;
 import com.lobsterai.skillgateway.entity.SkillSshInvocationAudit;
 import com.lobsterai.skillgateway.mapper.GatewayOutboundAuditLogMapper;
 import com.lobsterai.skillgateway.mapper.SkillSshInvocationAuditMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,13 +50,13 @@ public class GatewayOutboundAuditService {
     }
 
     private static java.util.List<String> parseCsv(String csv) {
-        if (csv == null || csv.isBlank()) {
+        if (csv == null || StringUtils.isBlank(csv)) {
             return java.util.Collections.emptyList();
         }
         return java.util.Arrays.stream(csv.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .toList();
+                .collect(java.util.stream.Collectors.toList());
     }
 
     public void recordHttpOutboundSuccess(HttpRequest request, byte[] outboundBodyBytes, ClientHttpResponse response,
@@ -193,7 +194,7 @@ public class GatewayOutboundAuditService {
             row.setRecordedAt(Instant.now());
             row.setOutboundKind("SSH");
             row.setCorrelationId(correlationId);
-            String uid = userId != null && !userId.isBlank() ? userId.trim() : AuditPrincipalResolver.currentAuditUserId();
+            String uid = userId != null && !StringUtils.isBlank(userId) ? userId.trim() : AuditPrincipalResolver.currentAuditUserId();
             row.setUserId(uid);
             row.setDestination(host + ":" + port);
             row.setStatus(success ? "SUCCESS" : "FAILURE");
@@ -264,7 +265,7 @@ public class GatewayOutboundAuditService {
 
     private String correlationOrGenerated() {
         String c = AuditPrincipalResolver.currentCorrelationId();
-        if (c != null && !c.isBlank()) {
+        if (c != null && !StringUtils.isBlank(c)) {
             String t = c.trim();
             if (t.length() > 64) {
                 return t.substring(0, 64);

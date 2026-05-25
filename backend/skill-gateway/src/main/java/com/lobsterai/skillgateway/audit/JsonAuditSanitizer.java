@@ -5,15 +5,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.node.TextNode;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Redacts sensitive keys from JSON for audit storage (proxy request, SSH body).
  */
 public final class JsonAuditSanitizer {
 
-    private static final java.util.Set<String> SENSITIVE_KEYS = java.util.Set.of(
+    private static final Set<String> SENSITIVE_KEYS = new HashSet<>(Arrays.asList(
             "privatekey", "private_key", "password", "privkey", "authorization"
-    );
+    ));
 
     private JsonAuditSanitizer() {
     }

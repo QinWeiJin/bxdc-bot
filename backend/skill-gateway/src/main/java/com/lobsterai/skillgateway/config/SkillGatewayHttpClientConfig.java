@@ -11,6 +11,7 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Arrays;
 import java.util.List;
 
 @Configuration
@@ -30,7 +31,7 @@ public class SkillGatewayHttpClientConfig {
         ClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
         BufferingClientHttpRequestFactory buffering = new BufferingClientHttpRequestFactory(factory);
         RestTemplate restTemplate = new RestTemplate(buffering);
-        restTemplate.setInterceptors(List.of(contentTypeInterceptor, auditInterceptor));
+        restTemplate.setInterceptors(Arrays.asList(contentTypeInterceptor, auditInterceptor));
         return restTemplate;
     }
 }

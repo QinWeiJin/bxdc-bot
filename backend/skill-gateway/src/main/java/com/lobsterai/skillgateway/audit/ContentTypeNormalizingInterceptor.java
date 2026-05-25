@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 @Component
 public class ContentTypeNormalizingInterceptor implements ClientHttpRequestInterceptor {
@@ -83,7 +84,7 @@ public class ContentTypeNormalizingInterceptor implements ClientHttpRequestInter
         fixed.putAll(headers);
         List<String> fixedValues = contentTypeValues.stream()
                 .map(ContentTypeNormalizingInterceptor::fixContentTypeComma)
-                .toList();
+                .collect(Collectors.toList());
         fixed.put(HttpHeaders.CONTENT_TYPE, fixedValues);
         return fixed;
     }

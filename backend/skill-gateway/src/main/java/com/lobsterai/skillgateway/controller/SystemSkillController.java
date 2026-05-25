@@ -2,11 +2,13 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.SystemSkill;
 import com.lobsterai.skillgateway.service.SystemSkillService;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Collections;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -72,16 +74,16 @@ public class SystemSkillController {
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestBody ExecuteBody body
     ) {
-        if (body == null || body.getToolName() == null || body.getToolName().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "toolName is required"));
+        if (body == null || body.getToolName() == null || StringUtils.isBlank(body.getToolName())) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "toolName is required"));
         }
         try {
             Object result = systemSkillService.execute(body.getToolName(), body.getArguments(), userId);
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 }

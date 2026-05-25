@@ -17,7 +17,7 @@ public final class JsonPathUtils {
      */
     @SuppressWarnings("unchecked")
     public static Object extractValueByPath(Object obj, String path) {
-        if (obj == null || path == null || path.isBlank()) return null;
+        if (obj == null || path == null || StringUtils.isBlank(path)) return null;
         String[] segments = path.split("\\.");
         Object current = obj;
         for (String segment : segments) {

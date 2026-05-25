@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import javax.servlet.ServletRequestWrapper;
 import javax.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,6 +14,7 @@ import org.springframework.web.util.ContentCachingRequestWrapper;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Component
 public class IngressSnapshotReader {
@@ -32,13 +34,13 @@ public class IngressSnapshotReader {
     }
 
     private static List<String> parseList(String csv) {
-        if (csv == null || csv.isBlank()) {
+        if (csv == null || StringUtils.isBlank(csv)) {
             return Collections.emptyList();
         }
         return Arrays.stream(csv.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .toList();
+                .collect(Collectors.toList());
     }
 
     public IngressCapture readCurrentRequest() {

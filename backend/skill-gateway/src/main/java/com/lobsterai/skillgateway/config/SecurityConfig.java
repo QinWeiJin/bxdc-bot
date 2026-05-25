@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.config;
 
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,6 +18,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import javax.servlet.FilterChain;
 import javax.servlet.ServletException;
@@ -71,7 +73,7 @@ public class SecurityConfig {
         List<String> origins = Arrays.stream(allowedOrigins.split(","))
                 .map(String::trim)
                 .filter(origin -> !origin.isEmpty())
-                .toList();
+                .collect(Collectors.toList());
         configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
@@ -93,7 +95,7 @@ public class SecurityConfig {
 
         private String getValidToken() {
             String envToken = System.getenv("JAVA_GATEWAY_TOKEN");
-            if (envToken != null && !envToken.isBlank()) {
+            if (envToken != null && !StringUtils.isBlank(envToken)) {
                 return envToken;
             }
             return DEFAULT_TOKEN;

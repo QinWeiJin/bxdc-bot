@@ -2,9 +2,11 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.mapper.ServerLedgerMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -50,7 +52,7 @@ public class ServerLedgerService {
                 .orElseThrow(() -> new IllegalArgumentException("Server ledger not found or access denied"));
 
         if (ledgerDetails.getName() != null) {
-            if (ledgerDetails.getName().isBlank()) {
+            if (StringUtils.isBlank(ledgerDetails.getName())) {
                 throw new IllegalArgumentException("name is required");
             }
             if (!ledger.getName().equals(ledgerDetails.getName().trim()) &&
@@ -61,7 +63,7 @@ public class ServerLedgerService {
         }
 
         if (ledgerDetails.getHost() != null) {
-            if (ledgerDetails.getHost().isBlank()) {
+            if (StringUtils.isBlank(ledgerDetails.getHost())) {
                 throw new IllegalArgumentException("host is required");
             }
             String newHost = ledgerDetails.getHost().trim();
@@ -76,7 +78,7 @@ public class ServerLedgerService {
             ledger.setPort(ledgerDetails.getPort());
         }
         if (ledgerDetails.getUsername() != null) {
-            if (ledgerDetails.getUsername().isBlank()) {
+            if (StringUtils.isBlank(ledgerDetails.getUsername())) {
                 throw new IllegalArgumentException("username is required when provided");
             }
             ledger.setUsername(ledgerDetails.getUsername().trim());
@@ -89,11 +91,11 @@ public class ServerLedgerService {
             ledger.setPrivateKeyPath(p.isEmpty() ? null : p);
         }
 
-        if (ledger.getHost() == null || ledger.getHost().isBlank()
-            || ledger.getUsername() == null || ledger.getUsername().isBlank()) {
+        if (ledger.getHost() == null || StringUtils.isBlank(ledger.getHost())
+            || ledger.getUsername() == null || StringUtils.isBlank(ledger.getUsername())) {
             throw new IllegalArgumentException("host and username are required on the record");
         }
-        boolean hasKey = ledger.getPrivateKeyPath() != null && !ledger.getPrivateKeyPath().isBlank();
+        boolean hasKey = ledger.getPrivateKeyPath() != null && !StringUtils.isBlank(ledger.getPrivateKeyPath());
         boolean hasPw = ledger.getPassword() != null && !ledger.getPassword().isEmpty();
         if (!hasKey && !hasPw) {
             throw new IllegalArgumentException("Set password or private key path to authenticate");
@@ -120,8 +122,8 @@ public class ServerLedgerService {
      * Ranks user servers by {@code serverName} relevance, returns at most {@code limit} candidates.
      */
     public List<ServerNameCandidate> findTopServerNameMatches(String userId, String serverName, int limit) {
-        if (serverName == null || serverName.isBlank() || limit <= 0) {
-            return List.of();
+        if (serverName == null || StringUtils.isBlank(serverName) || limit <= 0) {
+            return Collections.emptyList();
         }
         String q = serverName.trim();
         String qLower = q.toLowerCase();
@@ -129,7 +131,7 @@ public class ServerLedgerService {
         List<Scored> scored = new ArrayList<>();
         for (ServerLedger l : all) {
             int s1 = scoreNameMatch(l.getName(), q, qLower);
-            int s2 = l.getHost() != null && !l.getHost().isBlank()
+            int s2 = l.getHost() != null && !StringUtils.isBlank(l.getHost())
                     ? scoreNameMatch(l.getHost(), q, qLower) : 0;
             int score = Math.max(s1, s2);
             if (score > 0) {
@@ -148,16 +150,16 @@ public class ServerLedgerService {
     }
 
     private static void requireWellFormed(ServerLedger ledger, boolean forCreate) {
-        if (ledger.getName() == null || ledger.getName().isBlank()) {
+        if (ledger.getName() == null || StringUtils.isBlank(ledger.getName())) {
             throw new IllegalArgumentException("name is required");
         }
-        if (ledger.getHost() == null || ledger.getHost().isBlank()) {
+        if (ledger.getHost() == null || StringUtils.isBlank(ledger.getHost())) {
             throw new IllegalArgumentException("host is required");
         }
-        if (ledger.getUsername() == null || ledger.getUsername().isBlank()) {
+        if (ledger.getUsername() == null || StringUtils.isBlank(ledger.getUsername())) {
             throw new IllegalArgumentException("username is required");
         }
-        boolean hasKey = ledger.getPrivateKeyPath() != null && !ledger.getPrivateKeyPath().isBlank();
+        boolean hasKey = ledger.getPrivateKeyPath() != null && !StringUtils.isBlank(ledger.getPrivateKeyPath());
         boolean hasPw = ledger.getPassword() != null && !ledger.getPassword().isEmpty();
         if (forCreate && !hasKey && !hasPw) {
             throw new IllegalArgumentException("password or privateKeyPath is required");

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.mapper.AsyncTaskMapper;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -100,8 +101,8 @@ public class AsyncTaskPollingService {
     }
 
     public String extractTaskId(String initialResponse, String idJsonPath) {
-        if (initialResponse == null || initialResponse.isBlank()) return null;
-        if (idJsonPath == null || idJsonPath.isBlank()) return null;
+        if (initialResponse == null || StringUtils.isBlank(initialResponse)) return null;
+        if (idJsonPath == null || StringUtils.isBlank(idJsonPath)) return null;
         try {
             Object parsed = objectMapper.readValue(initialResponse, Object.class);
             return extractByPath(parsed, idJsonPath);
@@ -135,7 +136,7 @@ public class AsyncTaskPollingService {
     }
 
     public String extractResult(String pollResponse, String resultJsonPath) {
-        if (pollResponse == null || resultJsonPath == null || resultJsonPath.isBlank()) return pollResponse;
+        if (pollResponse == null || resultJsonPath == null || StringUtils.isBlank(resultJsonPath)) return pollResponse;
         try {
             Object parsed = objectMapper.readValue(pollResponse, Object.class);
             Object result = extractValueByPath(parsed, resultJsonPath);

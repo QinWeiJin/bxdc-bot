@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.entity.AsyncPollingAuditLog;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -14,6 +15,8 @@ import java.io.StringWriter;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,7 +64,7 @@ public class AsyncTaskPollingScheduler {
 
     private void pollSingleTask(AsyncTask task) {
         AsyncPollingAuditLog startLog = auditService.buildBaseLog(task, "GATEWAY_POLL_START");
-        startLog.setExtraJson(auditService.safeJson(Map.of("retryCount", task.getPollRetryCount() != null ? task.getPollRetryCount() : 0)));
+        startLog.setExtraJson(auditService.safeJson(Collections.singletonMap("retryCount", task.getPollRetryCount() != null ? task.getPollRetryCount() : 0)));
         auditService.log(startLog);
 
         try {
@@ -80,7 +83,7 @@ public class AsyncTaskPollingScheduler {
             }
 
             Map<String, Object> pollHeaders = null;
-            if (task.getPollHeaders() != null && !task.getPollHeaders().isBlank()) {
+            if (task.getPollHeaders() != null && !StringUtils.isBlank(task.getPollHeaders())) {
                 try {
                     pollHeaders = objectMapper.readValue(task.getPollHeaders(), Map.class);
                 } catch (Exception ignored) {
@@ -142,7 +145,7 @@ public class AsyncTaskPollingScheduler {
             String completionActualValue = null;
             String completionExpectedValue = task.getCompletionValue();
 
-            if (task.getCompletionJsonPath() != null && !task.getCompletionJsonPath().isBlank()) {
+            if (task.getCompletionJsonPath() != null && !StringUtils.isBlank(task.getCompletionJsonPath())) {
                 try {
                     Object parsed = objectMapper.readValue(pollResponseStr, Object.class);
                     Object actualObj = JsonPathUtils.extractValueByPath(parsed, task.getCompletionJsonPath());
@@ -153,7 +156,7 @@ public class AsyncTaskPollingScheduler {
 
             completed = pollingService.evaluateCompletion(pollResponseStr, task.getCompletionJsonPath(), task.getCompletionValue());
 
-            if (!completed && task.getFailedValues() != null && !task.getFailedValues().isBlank()) {
+            if (!completed && task.getFailedValues() != null && !StringUtils.isBlank(task.getFailedValues())) {
                 isFailed = pollingService.evaluateFailure(pollResponseStr, task.getCompletionJsonPath(), task.getFailedValues());
             }
 
@@ -162,13 +165,13 @@ public class AsyncTaskPollingScheduler {
             }
 
             AsyncPollingAuditLog evalLog = auditService.buildBaseLog(task, "EVALUATION");
-            evalLog.setCompletionEvaluated(task.getCompletionJsonPath() != null && !task.getCompletionJsonPath().isBlank());
+            evalLog.setCompletionEvaluated(task.getCompletionJsonPath() != null && !StringUtils.isBlank(task.getCompletionJsonPath()));
             if (evalLog.getCompletionEvaluated()) {
                 evalLog.setCompletionExpectedValue(completionExpectedValue);
                 evalLog.setCompletionActualValue(completionActualValue);
                 evalLog.setCompletionMatched(completed);
             }
-            evalLog.setFailedEvaluated(task.getFailedValues() != null && !task.getFailedValues().isBlank());
+            evalLog.setFailedEvaluated(task.getFailedValues() != null && !StringUtils.isBlank(task.getFailedValues()));
             if (evalLog.getFailedEvaluated()) {
                 evalLog.setFailedMatched(isFailed);
             }

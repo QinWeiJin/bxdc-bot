@@ -4,10 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.controller.SkillController;
 import com.lobsterai.skillgateway.entity.SystemSkill;
 import com.lobsterai.skillgateway.mapper.SystemSkillMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 @Service
@@ -41,7 +44,7 @@ public class SystemSkillService {
     public Object execute(String toolName, Map<String, Object> arguments, String userId) throws Exception {
         SystemSkill skill = systemSkillMapper.findByToolNameAndEnabledIsTrue(toolName)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown or disabled system skill: " + toolName));
-        Map<String, Object> args = arguments != null ? arguments : Map.of();
+        Map<String, Object> args = arguments != null ? arguments : Collections.emptyMap();
         switch (skill.getKind()) {
             case KIND_API_PROXY: {
                 SkillController.ApiRequest req = objectMapper.convertValue(args, SkillController.ApiRequest.class);

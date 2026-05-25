@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.http;
 
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.util.UriUtils;
@@ -27,7 +28,7 @@ public final class OutboundUrlNormalizer {
      * @return normalized URL for {@link org.springframework.web.client.RestTemplate}, or original on failure
      */
     public static String normalizeForOutboundHttp(String url) {
-        if (url == null || url.isBlank()) {
+        if (url == null || StringUtils.isBlank(url)) {
             return url;
         }
         String trimmed = url.trim();

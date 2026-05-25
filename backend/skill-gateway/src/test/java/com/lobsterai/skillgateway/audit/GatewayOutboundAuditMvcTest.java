@@ -1,4 +1,5 @@
 package com.lobsterai.skillgateway.audit;
+import com.lobsterai.skillgateway.util.StringUtils;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.lobsterai.skillgateway.entity.GatewayOutboundAuditLog;
@@ -73,7 +74,7 @@ class GatewayOutboundAuditMvcTest {
         assertEquals(7L, row.getSkillId());
         assertTrue(row.getProxyRequestJson() != null && row.getProxyRequestJson().contains("127.0.0.1:1"));
         assertTrue(row.getDestination().contains("127.0.0.1:1"));
-        assertTrue(row.getOutboundHeadersJson() != null && !row.getOutboundHeadersJson().isBlank());
+        assertTrue(row.getOutboundHeadersJson() != null && !StringUtils.isBlank(row.getOutboundHeadersJson()));
         String origin = new String(row.getOriginBody(), StandardCharsets.UTF_8);
         assertTrue(origin.contains("127.0.0.1:1"), () -> "origin body: " + origin);
     }

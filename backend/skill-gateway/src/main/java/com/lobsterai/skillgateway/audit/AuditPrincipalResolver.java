@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.audit;
 
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.MDC;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -11,11 +12,11 @@ public final class AuditPrincipalResolver {
 
     public static String currentAuditUserId() {
         String u = MDC.get(SkillIngressCaptureFilter.MDC_USER_ID);
-        if (u != null && !u.isBlank()) {
+        if (u != null && !StringUtils.isBlank(u)) {
             return u.trim();
         }
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getName() != null && !auth.getName().isBlank()) {
+        if (auth != null && auth.getName() != null && !StringUtils.isBlank(auth.getName())) {
             return auth.getName();
         }
         return null;
@@ -23,7 +24,7 @@ public final class AuditPrincipalResolver {
 
     public static String currentCorrelationId() {
         String c = MDC.get(SkillIngressCaptureFilter.MDC_CORRELATION_ID);
-        if (c != null && !c.isBlank()) {
+        if (c != null && !StringUtils.isBlank(c)) {
             return c.trim();
         }
         return null;
@@ -34,7 +35,7 @@ public final class AuditPrincipalResolver {
      */
     public static Long currentSkillId() {
         String s = MDC.get(SkillIngressCaptureFilter.MDC_SKILL_ID);
-        if (s == null || s.isBlank()) {
+        if (s == null || StringUtils.isBlank(s)) {
             return null;
         }
         try {

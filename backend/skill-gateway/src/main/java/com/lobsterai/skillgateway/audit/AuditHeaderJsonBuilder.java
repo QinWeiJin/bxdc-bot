@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import javax.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpRequest;
@@ -9,9 +10,9 @@ import java.util.*;
 
 public final class AuditHeaderJsonBuilder {
 
-    private static final Set<String> DEFAULT_REDACT = Set.of(
+    private static final Set<String> DEFAULT_REDACT = new HashSet<>(Arrays.asList(
             "authorization", "cookie", "set-cookie", "x-agent-token"
-    );
+    ));
 
     private AuditHeaderJsonBuilder() {
     }
@@ -24,7 +25,7 @@ public final class AuditHeaderJsonBuilder {
         redact.addAll(DEFAULT_REDACT);
         if (extraRedact != null) {
             for (String h : extraRedact) {
-                if (h != null && !h.isBlank()) {
+                if (h != null && !StringUtils.isBlank(h)) {
                     redact.add(h.trim().toLowerCase(Locale.ROOT));
                 }
             }
@@ -64,7 +65,7 @@ public final class AuditHeaderJsonBuilder {
         redact.addAll(DEFAULT_REDACT);
         if (extraRedact != null) {
             for (String h : extraRedact) {
-                if (h != null && !h.isBlank()) {
+                if (h != null && !StringUtils.isBlank(h)) {
                     redact.add(h.trim().toLowerCase(Locale.ROOT));
                 }
             }
@@ -96,7 +97,7 @@ public final class AuditHeaderJsonBuilder {
         redact.addAll(DEFAULT_REDACT);
         if (extraRedact != null) {
             for (String h : extraRedact) {
-                if (h != null && !h.isBlank()) {
+                if (h != null && !StringUtils.isBlank(h)) {
                     redact.add(h.trim().toLowerCase(Locale.ROOT));
                 }
             }

@@ -2,6 +2,7 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
 import com.lobsterai.skillgateway.controller.SkillController;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -12,6 +13,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -69,9 +71,9 @@ public class BuiltinToolExecutionService {
     public Map<String, Object> compute(SkillController.ComputeRequest request) {
         try {
             Object result = executeCompute(request.getOperation(), request.getOperands());
-            return Map.of("result", result);
+            return Collections.singletonMap("result", result);
         } catch (IllegalArgumentException e) {
-            return Map.of("error", e.getMessage());
+            return Collections.singletonMap("error", e.getMessage());
         }
     }
 
@@ -90,12 +92,12 @@ public class BuiltinToolExecutionService {
             );
             return ResponseEntity.badRequest().body("Command blocked by security policy");
         }
-        if (userId != null && !userId.isBlank()) {
+        if (userId != null && !StringUtils.isBlank(userId)) {
             return serverLedgerService.getServerLedgerByName(userId, request.getHost().trim())
                     .map(ledger -> {
                         int auditPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
                         String auditHost = request.getHost().trim();
-                        if (ledger.getHost() != null && !ledger.getHost().isBlank()) {
+                        if (ledger.getHost() != null && !StringUtils.isBlank(ledger.getHost())) {
                             auditHost = ledger.getHost().trim();
                         }
                         try {
@@ -206,7 +208,7 @@ public class BuiltinToolExecutionService {
     }
 
     private Object executeCompute(String operation, List<Object> operands) {
-        if (operation == null || operation.isBlank()) {
+        if (operation == null || StringUtils.isBlank(operation)) {
             throw new IllegalArgumentException("operation is required");
         }
         if (operands == null) {

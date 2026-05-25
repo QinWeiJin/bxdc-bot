@@ -10,9 +10,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.lobsterai.skillgateway.util.StringUtils;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -70,7 +73,7 @@ public class UserService {
 
     public boolean hasEffectiveLlmApiKey(User user) {
         String k = mergeLlmConfigForAgent(user).get("llmApiKey");
-        return k != null && !k.isBlank();
+        return k != null && !StringUtils.isBlank(k);
     }
 
     public LlmSettingsResponse getLlmSettingsForApi(String userId) {
@@ -124,7 +127,7 @@ public class UserService {
         return apiProxyService.callApi(
                 agentCoreUrl + "/features/avatar/generate",
                 "POST",
-                Map.of("Content-Type", "application/json"),
+                Collections.singletonMap("Content-Type", "application/json"),
                 payload
         );
     }
@@ -141,7 +144,7 @@ public class UserService {
         Object result = apiProxyService.callApi(
                 url,
                 "POST",
-                Map.of("Content-Type", "application/json"),
+                Collections.singletonMap("Content-Type", "application/json"),
                 body
         );
         log.info("[optimize-text] agent-core responded in {}ms", System.currentTimeMillis() - t0);
@@ -203,7 +206,7 @@ public class UserService {
             apiProxyService.callApi(
                     agentCoreUrl + "/memory/add",
                     "POST",
-                    Map.of("Content-Type", "application/json"),
+                    Collections.singletonMap("Content-Type", "application/json"),
                     body
             );
         } catch (Exception e) {

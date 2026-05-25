@@ -3,6 +3,7 @@ package com.lobsterai.skillgateway.service;
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.entity.SkillVisibility;
 import com.lobsterai.skillgateway.mapper.SkillMapper;
+import com.lobsterai.skillgateway.util.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -29,7 +30,7 @@ public class SkillService {
     }
 
     public List<Skill> listSkillsForUser(String userId) {
-        if (userId == null || userId.isBlank()) {
+        if (userId == null || StringUtils.isBlank(userId)) {
             return skillMapper.findAllPublicSummary();
         }
         return skillMapper.findVisibleSummaryForUser(userId);
@@ -48,7 +49,7 @@ public class SkillService {
     }
 
     public Skill createSkill(Skill skill, String userId) {
-        if (userId == null || userId.isBlank()) {
+        if (userId == null || StringUtils.isBlank(userId)) {
             throw new IllegalArgumentException("X-User-Id is required");
         }
         if (skillMapper.findByName(skill.getName()).isPresent()) {
@@ -109,7 +110,7 @@ public class SkillService {
 
     /** Optional emoji; when set, same length bound as user avatar. */
     private static void validateSkillAvatar(String avatar) {
-        if (avatar == null || avatar.isBlank()) {
+        if (avatar == null || StringUtils.isBlank(avatar)) {
             return;
         }
         String t = avatar.trim();
@@ -122,14 +123,14 @@ public class SkillService {
         if (skill.getVisibility() == SkillVisibility.PUBLIC) {
             return true;
         }
-        if (userId == null || userId.isBlank()) {
+        if (userId == null || StringUtils.isBlank(userId)) {
             return false;
         }
         return userId.equals(skill.getCreatedBy());
     }
 
     private static boolean canWriteSkill(Skill skill, String userId) {
-        if (userId == null || userId.isBlank()) {
+        if (userId == null || StringUtils.isBlank(userId)) {
             return false;
         }
         if (skill.getVisibility() == SkillVisibility.PRIVATE) {
@@ -143,7 +144,7 @@ public class SkillService {
     }
 
     private static String normalizeExecutionMode(String executionMode) {
-        if (executionMode == null || executionMode.isBlank()) {
+        if (executionMode == null || StringUtils.isBlank(executionMode)) {
             return "CONFIG";
         }
 
@@ -155,7 +156,7 @@ public class SkillService {
     }
 
     private String normalizeAndValidateConfiguration(String executionMode, String configuration) {
-        if (configuration == null || configuration.isBlank()) {
+        if (configuration == null || StringUtils.isBlank(configuration)) {
             throw new IllegalArgumentException("configuration is required");
         }
 
@@ -197,7 +198,7 @@ public class SkillService {
             case "api":
             case "ssh":
                 normalized.put("kind", kind);
-                if (preset != null && !preset.isBlank()) {
+                if (preset != null && !StringUtils.isBlank(preset)) {
                     normalized.put("preset", preset);
                 }
                 normalized.remove("profile");
@@ -279,7 +280,7 @@ public class SkillService {
                 throw new IllegalArgumentException("allowedTools must be an array when provided");
             }
             for (JsonNode tool : allowedTools) {
-                if (!tool.isTextual() || tool.asText().isBlank()) {
+                if (!tool.isTextual() || StringUtils.isBlank(tool.asText())) {
                     throw new IllegalArgumentException("allowedTools entries must be non-empty strings");
                 }
             }
@@ -297,7 +298,7 @@ public class SkillService {
 
     private static String requiredText(JsonNode node, String fieldName) {
         JsonNode value = node.get(fieldName);
-        if (value == null || !value.isTextual() || value.asText().isBlank()) {
+        if (value == null || !value.isTextual() || StringUtils.isBlank(value.asText())) {
             throw new IllegalArgumentException(fieldName + " is required");
         }
         return value.asText();

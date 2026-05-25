@@ -17,7 +17,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Array;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -99,7 +101,7 @@ public class ApiProxyService {
             factory.setReadTimeout(timeoutSeconds * 1000);
             BufferingClientHttpRequestFactory bufferingFactory = new BufferingClientHttpRequestFactory(factory);
             RestTemplate timedTemplate = new RestTemplate(bufferingFactory);
-            timedTemplate.setInterceptors(List.of(contentTypeInterceptor, auditInterceptor));
+            timedTemplate.setInterceptors(Arrays.asList(contentTypeInterceptor, auditInterceptor));
 
             ResponseEntity<String> response = timedTemplate.exchange(
                     outboundUrl,

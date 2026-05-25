@@ -2,10 +2,13 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -28,7 +31,7 @@ public class ServerLedgerController {
                 break;
             }
         }
-        if (userId == null || userId.isBlank()) {
+        if (userId == null || StringUtils.isBlank(userId)) {
             throw new IllegalArgumentException("X-User-Id header is required");
         }
         return userId;
@@ -48,14 +51,14 @@ public class ServerLedgerController {
                 map.put("port", l.getPort() != null ? l.getPort() : 22);
                 map.put("username", l.getUsername() != null ? l.getUsername() : "");
                 map.put("hasPassword", l.getPassword() != null && !l.getPassword().isEmpty());
-                map.put("hasPrivateKeyPath", l.getPrivateKeyPath() != null && !l.getPrivateKeyPath().isBlank());
+                map.put("hasPrivateKeyPath", l.getPrivateKeyPath() != null && !StringUtils.isBlank(l.getPrivateKeyPath()));
                 map.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : "");
                 map.put("updatedAt", l.getUpdatedAt() != null ? l.getUpdatedAt().toString() : "");
                 return map;
             }).collect(Collectors.toList());
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 
@@ -65,7 +68,7 @@ public class ServerLedgerController {
             String userId = getUserId(headers);
             return ResponseEntity.ok(serverLedgerService.createServerLedger(userId, ledger));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 
@@ -75,7 +78,7 @@ public class ServerLedgerController {
             String userId = getUserId(headers);
             return ResponseEntity.ok(serverLedgerService.updateServerLedger(userId, id, ledger));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 
@@ -86,7 +89,7 @@ public class ServerLedgerController {
             serverLedgerService.deleteServerLedger(userId, id);
             return ResponseEntity.ok().build();
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 }

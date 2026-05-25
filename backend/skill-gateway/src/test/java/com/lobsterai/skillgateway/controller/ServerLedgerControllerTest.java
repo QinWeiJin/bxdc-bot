@@ -10,6 +10,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.Collections;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -36,7 +37,7 @@ class ServerLedgerControllerTest {
         ledger.setId(1L);
         ledger.setName("web-01");
 
-        when(serverLedgerService.getServerLedgers("123456")).thenReturn(List.of(ledger));
+        when(serverLedgerService.getServerLedgers("123456")).thenReturn(Collections.singletonList(ledger));
 
         mockMvc.perform(get("/api/server-ledgers")
                         .header("X-User-Id", "123456"))

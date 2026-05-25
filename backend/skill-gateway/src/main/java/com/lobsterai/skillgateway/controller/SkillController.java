@@ -14,6 +14,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -25,6 +27,7 @@ import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
 import com.lobsterai.skillgateway.service.ApiProxyService;
 import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
+import com.lobsterai.skillgateway.util.StringUtils;
 
 /**
  * Skill 控制器。
@@ -100,7 +103,7 @@ public class SkillController {
         try {
             return ResponseEntity.ok(skillService.createSkill(skill, userId));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 
@@ -116,7 +119,7 @@ public class SkillController {
             if (e.getMessage() != null && e.getMessage().startsWith("Skill not found")) {
                 return ResponseEntity.notFound().build();
             }
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         }
     }
 
@@ -139,12 +142,12 @@ public class SkillController {
             @RequestParam(value = "serverName", required = false) String serverName,
             @RequestParam(value = "name", required = false) String name
     ) {
-        if (userId == null || userId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "X-User-Id header is required for server lookup"));
+        if (userId == null || StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required for server lookup"));
         }
-        String q = (serverName != null && !serverName.isBlank()) ? serverName : name;
-        if (q == null || q.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "serverName (or legacy name) query parameter is required"));
+        String q = (serverName != null && !StringUtils.isBlank(serverName)) ? serverName : name;
+        if (q == null || StringUtils.isBlank(q)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "serverName (or legacy name) query parameter is required"));
         }
         List<ServerLedgerService.ServerNameCandidate> candidates = serverLedgerService.findTopServerNameMatches(userId, q, 5);
         List<Map<String, Object>> list = new java.util.ArrayList<>();
@@ -155,11 +158,11 @@ public class SkillController {
             list.add(row);
         }
         int n = list.size();
-        return ResponseEntity.ok(Map.of(
-                "candidates", list,
-                "count", n,
-                "needsUserConfirmation", n > 1
-        ));
+        return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("candidates", list);
+            put("count", n);
+            put("needsUserConfirmation", n > 1);
+        }});
     }
 
     // --- Skill Execution ---
@@ -204,7 +207,7 @@ public class SkillController {
         try {
             Map<String, Object> asyncPoll = request.getAsyncPoll();
             if (asyncPoll == null || !asyncPoll.containsKey("pollEndpoint")) {
-                return ResponseEntity.badRequest().body(Map.of("error", "asyncPoll.pollEndpoint is required for async API calls"));
+                return ResponseEntity.badRequest().body(Collections.singletonMap("error", "asyncPoll.pollEndpoint is required for async API calls"));
             }
 
             int timeoutSeconds = request.getTimeoutSeconds() != null ? request.getTimeoutSeconds() : 30;
@@ -216,21 +219,21 @@ public class SkillController {
 
             String idJsonPath = (String) asyncPoll.get("idJsonPath");
             String externalTaskId = asyncTaskPollingService.extractTaskId(initialResponseStr, idJsonPath);
-            if (externalTaskId == null || externalTaskId.isBlank()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "error", "Failed to extract task id from initial response",
-                        "idJsonPath", idJsonPath,
-                        "initialResponse", initialResponseStr
-                ));
+            if (externalTaskId == null || StringUtils.isBlank(externalTaskId)) {
+                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
+            put("error", "Failed to extract task id from initial response");
+            put("idJsonPath", idJsonPath);
+            put("initialResponse", initialResponseStr);
+        }});
             }
 
             String pollEndpoint = ((String) asyncPoll.get("pollEndpoint")).replace("{id}", externalTaskId);
 
             if (!((String) asyncPoll.get("pollEndpoint")).contains("{id}")) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "error", "asyncPoll.pollEndpoint must contain {id} placeholder",
-                        "hint", "The {id} placeholder is replaced with the extracted task ID. Example: /status?task_id={id}"
-                ));
+                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
+            put("error", "asyncPoll.pollEndpoint must contain {id} placeholder");
+            put("hint", "The {id} placeholder is replaced with the extracted task ID. Example: /status?task_id={id}");
+        }});
             }
             int pollIntervalSeconds = asyncPoll.get("pollIntervalSeconds") instanceof Number
                     ? ((Number) asyncPoll.get("pollIntervalSeconds")).intValue()
@@ -266,13 +269,13 @@ public class SkillController {
 
             asyncTaskPollingService.createTask(task);
 
-            return ResponseEntity.ok(Map.of(
-                    "asyncTaskId", task.getId(),
-                    "status", "PENDING",
-                    "externalTaskId", externalTaskId
-            ));
+            return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("asyncTaskId", task.getId());
+            put("status", "PENDING");
+            put("externalTaskId", externalTaskId);
+        }});
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", "Async API call failed: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Async API call failed: " + e.getMessage()));
         }
     }
 
@@ -291,40 +294,40 @@ public class SkillController {
 
             String status = task.getStatus();
             if ("COMPLETED".equals(status)) {
-                return ResponseEntity.ok(Map.of(
-                        "status", "COMPLETED",
-                        "result", (Object) task.getPollResult()
-                ));
+                return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("status", "COMPLETED");
+            put("result", (Object) task.getPollResult());
+        }});
             }
             if ("FAILED".equals(status)) {
-                return ResponseEntity.ok(Map.of(
-                        "status", "FAILED",
-                        "errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task failed"
-                ));
+                return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("status", "FAILED");
+            put("errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task failed");
+        }});
             }
             if ("TIMEOUT".equals(status)) {
-                return ResponseEntity.ok(Map.of(
-                        "status", "TIMEOUT",
-                        "errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task timed out"
-                ));
+                return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("status", "TIMEOUT");
+            put("errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task timed out");
+        }});
             }
 
             try {
                 Thread.sleep(2000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return ResponseEntity.ok(Map.of(
-                        "status", task.getStatus(),
-                        "result", null
-                ));
+                return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("status", task.getStatus());
+            put("result", null);
+        }});
             }
         }
 
         AsyncTask task = asyncTaskPollingService.findById(id);
-        return ResponseEntity.ok(Map.of(
-                "status", task != null ? task.getStatus() : "UNKNOWN",
-                "result", null
-        ));
+        return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("status", task != null ? task.getStatus() : "UNKNOWN");
+            put("result", null);
+        }});
     }
 
     // --- Text Prompts (AI optimization) ---
@@ -363,8 +366,8 @@ public class SkillController {
     public ResponseEntity<?> fetchEnumSource(@RequestBody Map<String, Object> body) {
         try {
             String url = (String) body.get("url");
-            if (url == null || url.isBlank()) {
-                return ResponseEntity.badRequest().body(Map.of("error", "url is required"));
+            if (url == null || StringUtils.isBlank(url)) {
+                return ResponseEntity.badRequest().body(Collections.singletonMap("error", "url is required"));
             }
             String method = body.get("method") instanceof String ? (String) body.get("method") : "GET";
             @SuppressWarnings("unchecked")
@@ -376,7 +379,7 @@ public class SkillController {
             String searchQuery = (String) body.get("searchQuery");
 
             String resolvedUrl = url;
-            if (searchQuery != null && !searchQuery.isBlank() && searchParam != null && !searchParam.isBlank()) {
+            if (searchQuery != null && !StringUtils.isBlank(searchQuery) && searchParam != null && !StringUtils.isBlank(searchParam)) {
                 String separator = resolvedUrl.contains("?") ? "&" : "?";
                 resolvedUrl += separator + searchParam + "=" + java.net.URLEncoder.encode(searchQuery, "UTF-8");
             }
@@ -385,16 +388,16 @@ public class SkillController {
             String responseStr = response instanceof String ? (String) response : objectMapper.writeValueAsString(response);
             Object parsed = objectMapper.readValue(responseStr, Object.class);
 
-            Object listNode = (jsonPath != null && !jsonPath.isBlank())
+            Object listNode = (jsonPath != null && !StringUtils.isBlank(jsonPath))
                     ? JsonPathUtils.extractValueByPath(parsed, jsonPath)
                     : parsed;
 
             if (!(listNode instanceof List)) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "error", "jsonPath did not resolve to an array",
-                        "jsonPath", jsonPath,
-                        "responsePreview", responseStr.substring(0, Math.min(500, responseStr.length()))
-                ));
+                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
+            put("error", "jsonPath did not resolve to an array");
+            put("jsonPath", jsonPath);
+            put("responsePreview", responseStr.substring(0, Math.min(500, responseStr.length())));
+        }});
             }
 
             @SuppressWarnings("unchecked")
@@ -407,15 +410,15 @@ public class SkillController {
                 Object labelObj = map.get(labelKey);
                 Object valueObj = map.get(valueKey);
                 if (valueObj != null) {
-                    options.add(Map.of(
-                            "label", labelObj != null ? labelObj.toString() : valueObj.toString(),
-                            "value", valueObj.toString()
-                    ));
+                    options.add(new HashMap<String, String>() {{
+                        put("label", labelObj != null ? labelObj.toString() : valueObj.toString());
+                        put("value", valueObj.toString());
+                    }});
                 }
             }
             return ResponseEntity.ok(options);
         } catch (Exception e) {
-            return ResponseEntity.status(502).body(Map.of("error", "Enum source fetch failed: " + e.getMessage()));
+            return ResponseEntity.status(502).body(Collections.singletonMap("error", "Enum source fetch failed: " + e.getMessage()));
         }
     }
 
@@ -430,11 +433,11 @@ public class SkillController {
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestBody LinuxScriptRequest request
     ) {
-        if (userId == null || userId.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "X-User-Id header is required for linux-script"));
+        if (userId == null || StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required for linux-script"));
         }
         if (request.getId() == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "id is required"));
         }
         Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
         if (ledgerOpt.isEmpty()) {
@@ -449,7 +452,7 @@ public class SkillController {
                     null,
                     request.getId()
             );
-            return ResponseEntity.status(404).body(Map.of("error", "Unknown server id: " + request.getId()));
+            return ResponseEntity.status(404).body(Collections.singletonMap("error", "Unknown server id: " + request.getId()));
         }
         ServerLedger ledger = ledgerOpt.get();
         int defaultPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
@@ -467,7 +470,7 @@ public class SkillController {
                     output,
                     ledger.getId()
             );
-            return ResponseEntity.ok(Map.of("result", output));
+            return ResponseEntity.ok(Collections.singletonMap("result", output));
         } catch (IllegalArgumentException e) {
             gatewayOutboundAuditService.recordSsh(
                     userId,
@@ -480,7 +483,7 @@ public class SkillController {
                     null,
                     ledger.getId()
             );
-            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
         } catch (IOException e) {
             gatewayOutboundAuditService.recordSsh(
                     userId,
@@ -493,7 +496,7 @@ public class SkillController {
                     null,
                     ledger.getId()
             );
-            return ResponseEntity.internalServerError().body(Map.of("error", "Linux script execution failed: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Linux script execution failed: " + e.getMessage()));
         }
     }
 

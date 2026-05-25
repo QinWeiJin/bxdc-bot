@@ -4,10 +4,12 @@ import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.service.UserService;
+import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -26,7 +28,7 @@ public class UserController {
     }
 
     private static boolean isSelf(String pathUserId, String xUserId) {
-        if (xUserId == null || xUserId.isBlank()) {
+        if (xUserId == null || StringUtils.isBlank(xUserId)) {
             return false;
         }
         return pathUserId.equals(xUserId.trim());
@@ -58,11 +60,11 @@ public class UserController {
             @RequestHeader(value = HEADER_USER_ID, required = false) String xUserId,
             @RequestBody Map<String, String> payload) {
         if (!isSelf(id, xUserId)) {
-            return ResponseEntity.status(403).body(Map.of("error", "X-User-Id must match path user id"));
+            return ResponseEntity.status(403).body(Collections.singletonMap("error", "X-User-Id must match path user id"));
         }
         String avatar = payload != null ? payload.get("avatar") : null;
         if (avatar == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Avatar is required"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "Avatar is required"));
         }
         try {
             User user = userService.updateAvatar(id, avatar);
@@ -72,7 +74,7 @@ public class UserController {
             if ("User not found".equals(msg)) {
                 return ResponseEntity.notFound().build();
             }
-            return ResponseEntity.badRequest().body(Map.of("error", msg));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", msg));
         }
     }
 
@@ -86,13 +88,13 @@ public class UserController {
             @RequestHeader(value = HEADER_USER_ID, required = false) String xUserId,
             @RequestBody(required = false) Map<String, Object> body) {
         if (!isSelf(id, xUserId)) {
-            return ResponseEntity.status(403).body(Map.of("error", "X-User-Id must match path user id"));
+            return ResponseEntity.status(403).body(Collections.singletonMap("error", "X-User-Id must match path user id"));
         }
         if (body == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Body is required"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "Body is required"));
         }
         if (body.containsKey("id")) {
-            return ResponseEntity.badRequest().body(Map.of("error", "id cannot be changed"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "id cannot be changed"));
         }
         String nickname = body.containsKey("nickname") ? stringField(body, "nickname") : null;
         String avatar = body.containsKey("avatar") ? stringField(body, "avatar") : null;
@@ -104,7 +106,7 @@ public class UserController {
             if ("User not found".equals(msg)) {
                 return ResponseEntity.notFound().build();
             }
-            return ResponseEntity.badRequest().body(Map.of("error", msg));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", msg));
         }
     }
 
@@ -134,18 +136,18 @@ public class UserController {
     @PostMapping("/{id}/avatar/generate")
     public ResponseEntity<?> generateAvatar(@PathVariable String id, @RequestBody Map<String, String> body) {
         String nickname = body.get("nickname");
-        if (nickname == null || nickname.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "nickname is required"));
+        if (nickname == null || StringUtils.isBlank(nickname)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "nickname is required"));
         }
         User user = userService.getUser(id);
         if (user == null) {
             return ResponseEntity.notFound().build();
         }
         if (!userService.hasEffectiveLlmApiKey(user)) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", "LLM API key not configured",
-                    "avatar", "👤"
-            ));
+            Map<String, String> errBody = new HashMap<>();
+            errBody.put("error", "LLM API key not configured");
+            errBody.put("avatar", "👤");
+            return ResponseEntity.badRequest().body(errBody);
         }
         Map<String, String> merged = userService.mergeLlmConfigForAgent(user);
         Map<String, Object> payload = new HashMap<>();
@@ -157,7 +159,7 @@ public class UserController {
             Object res = userService.proxyAvatarGenerate(payload);
             return ResponseEntity.ok(res);
         } catch (Exception e) {
-            return ResponseEntity.status(502).body(Map.of("error", "Avatar service error: " + e.getMessage()));
+            return ResponseEntity.status(502).body(Collections.singletonMap("error", "Avatar service error: " + e.getMessage()));
         }
     }
 
@@ -177,10 +179,10 @@ public class UserController {
             Object res = userService.proxyTextOptimize(id, body);
             return ResponseEntity.ok(res);
         } catch (Exception e) {
-            return ResponseEntity.status(502).body(Map.of(
-                    "error", "AI 优化服务异常",
-                    "hint", e.getMessage()
-            ));
+            Map<String, String> optErr = new HashMap<>();
+            optErr.put("error", "AI 优化服务异常");
+            optErr.put("hint", e.getMessage());
+            return ResponseEntity.status(502).body(optErr);
         }
     }
 }

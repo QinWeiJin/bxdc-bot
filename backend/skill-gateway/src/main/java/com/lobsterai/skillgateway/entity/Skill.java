@@ -7,6 +7,8 @@ import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.LocalDateTime;
 
+import com.lobsterai.skillgateway.util.StringUtils;
+
 @TableName("skills")
 public class Skill {
     @TableId(type = IdType.AUTO)
@@ -97,7 +99,7 @@ public class Skill {
     }
 
     public String getExecutionMode() {
-        return (executionMode == null || executionMode.isBlank()) ? "CONFIG" : executionMode;
+        return (executionMode == null || StringUtils.isBlank(executionMode)) ? "CONFIG" : executionMode;
     }
 
     public void setExecutionMode(String executionMode) {

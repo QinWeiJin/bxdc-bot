@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.audit;
 
+import com.lobsterai.skillgateway.util.StringUtils;
 import javax.servlet.FilterChain;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -42,17 +43,17 @@ public class SkillIngressCaptureFilter extends OncePerRequestFilter {
         }
         ContentCachingRequestWrapper wrapped = new ContentCachingRequestWrapper(request);
         String cid = request.getHeader(HEADER_CORRELATION_ID);
-        if (cid == null || cid.isBlank()) {
+        if (cid == null || StringUtils.isBlank(cid)) {
             cid = UUID.randomUUID().toString();
         }
         response.setHeader(HEADER_CORRELATION_ID, cid);
         String userHeader = request.getHeader("X-User-Id");
         String skillHeader = request.getHeader(HEADER_SKILL_ID);
         MDC.put(MDC_CORRELATION_ID, cid);
-        if (userHeader != null && !userHeader.isBlank()) {
+        if (userHeader != null && !StringUtils.isBlank(userHeader)) {
             MDC.put(MDC_USER_ID, userHeader.trim());
         }
-        if (skillHeader != null && !skillHeader.isBlank()) {
+        if (skillHeader != null && !StringUtils.isBlank(skillHeader)) {
             MDC.put(MDC_SKILL_ID, skillHeader.trim());
         }
         try {
