@@ -12,6 +12,7 @@
  * 返回字段：
  * - status: 服务状态（'ok' 表示正常）
  * - service: 服务名称（'agent-core'）
+ * - version: 服务版本号（来自项目根目录 VERSION 文件）
  * - timestamp: 当前时间戳（ISO 8601 格式）
  * - uptimeSeconds: 进程运行时长（秒）
  * 
@@ -21,6 +22,8 @@
  */
 
 import { Controller, Get } from '@nestjs/common';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /**
  * 健康检查控制器类
@@ -30,6 +33,24 @@ import { Controller, Get } from '@nestjs/common';
  */
 @Controller()
 export class HealthController {
+  private readonly version: string;
+
+  constructor() {
+    this.version = this.loadVersion();
+  }
+
+  /**
+   * 从项目根目录 VERSION 文件中读取版本号，若失败返回 'unknown'。
+   */
+  private loadVersion(): string {
+    try {
+      const raw = readFileSync(join(process.cwd(), 'VERSION'), 'utf-8');
+      return raw.trim();
+    } catch {
+      return 'unknown';
+    }
+  }
+
   /**
    * 健康检查端点
    * 
@@ -45,6 +66,7 @@ export class HealthController {
     return {
       status: 'ok',
       service: 'agent-core',
+      version: this.version,
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.round(process.uptime()),
     };
