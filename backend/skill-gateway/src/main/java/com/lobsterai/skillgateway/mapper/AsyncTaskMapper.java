@@ -19,4 +19,11 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
                 .orderByAsc(AsyncTask::getCreatedAt)
                 .last("LIMIT " + limit));
     }
+
+    default List<AsyncTask> findBySessionId(String sessionId) {
+        return selectList(new LambdaQueryWrapper<AsyncTask>()
+                .eq(AsyncTask::getSessionId, sessionId)
+                .in(AsyncTask::getStatus, "PENDING", "POLLING")
+                .orderByAsc(AsyncTask::getCreatedAt));
+    }
 }

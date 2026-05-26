@@ -11,6 +11,18 @@ import {
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
 
+export interface PollResponseEntry {
+  time: string
+  body: string
+}
+
+export interface PollingStatus {
+  status: string
+  retryCount: number
+  elapsedSeconds: number
+  pollResponses: PollResponseEntry[]
+}
+
 export interface ToolInvocation {
   id: string
   name: string
@@ -26,6 +38,8 @@ export interface ToolInvocation {
   executionMode?: string
   executionLabel?: string
   children?: ToolInvocation[]
+  /** Realtime polling progress (from SSE polling_status events) */
+  pollingStatus?: PollingStatus
 }
 
 export type { LlmLogEntry } from '../utils/llmLog'
@@ -375,6 +389,21 @@ export function provideChat() {
       && ['running', 'completed', 'failed'].includes(data.status)
   }
 
+  function isPollingStatusEvent(data: any): data is {
+    type: 'polling_status'
+    tasks: Array<{
+      asyncTaskId: number
+      externalTaskId: string | null
+      status: string
+      retryCount: number
+      elapsedSeconds: number
+      pollResponses: Array<{ time: string; body: string }>
+    }>
+  } {
+    return data?.type === 'polling_status'
+      && Array.isArray(data.tasks)
+  }
+
   function mergeToolResultField(previous: string | undefined, next: string | undefined): string | undefined {
     return next !== undefined ? next : previous
   }
@@ -576,6 +605,58 @@ export function provideChat() {
         c.status === 'pending' ? { ...c, status: 'expired' as ConfirmationStatus } : c,
       ),
     }))
+  }
+
+  function handlePollingStatus(data: { tasks: Array<{ asyncTaskId: number; externalTaskId: string | null; status: string; retryCount: number; elapsedSeconds: number; pollResponses: Array<{ time: string; body: string }> }> }) {
+    for (const task of data.tasks) {
+      const toolId = `async_${task.asyncTaskId}`
+      const displayName = task.externalTaskId
+        ? `异步任务 ${task.externalTaskId}`
+        : `异步任务 #${task.asyncTaskId}`
+
+      const newResponses: PollResponseEntry[] = (task.pollResponses || []).map(r => ({
+        time: r.time,
+        body: r.body.length > 200 ? r.body.slice(0, 200) + '…' : r.body,
+      }))
+
+      updateLastAssistantMessage((last) => {
+        const toolInvocations = [...(last.toolInvocations ?? [])]
+        const existingIndex = toolInvocations.findIndex((t) => t.id === toolId)
+        const existing = existingIndex >= 0 ? toolInvocations[existingIndex] : null
+        const existingResponses = existing?.pollingStatus?.pollResponses ?? []
+
+        const pollingStatus: PollingStatus = {
+          status: task.status,
+          retryCount: task.retryCount,
+          elapsedSeconds: task.elapsedSeconds,
+          pollResponses: [...existingResponses, ...newResponses.filter(
+            nr => !existingResponses.some(er => er.time === nr.time)
+          )],
+        }
+
+        const next: ToolInvocation = {
+          id: toolId,
+          name: toolId,
+          displayName,
+          kind: 'skill',
+          status: existing?.status ?? 'running',
+          pollingStatus,
+          result: existing?.result,
+          arguments: existing?.arguments,
+          children: existing?.children ?? [],
+        }
+
+        if (existingIndex >= 0) {
+          toolInvocations.splice(existingIndex, 1, next)
+        } else {
+          toolInvocations.push(next)
+        }
+
+        return { ...last, toolInvocations }
+      })
+
+      console.log(`[skill] polling_status: task=${task.asyncTaskId} status=${task.status} retries=${task.retryCount} elapsed=${task.elapsedSeconds}s responses=${newResponses.length}`)
+    }
   }
 
   function isConfirmationRequestEvent(data: any): data is {
@@ -787,6 +868,17 @@ export function provideChat() {
         settleLastToolInvocations('completed')
         isThinking.value = false
         activeSessionId.value = null
+      })
+
+      eventSource.addEventListener('polling_status', (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (isPollingStatusEvent(data)) {
+            handlePollingStatus(data)
+          }
+        } catch (e) {
+          console.error('[skill] Error parsing polling_status event:', e)
+        }
       })
 
       eventSource.addEventListener('error', (e) => {

@@ -10,7 +10,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class AsyncPollingAuditService {
@@ -67,5 +71,25 @@ public class AsyncPollingAuditService {
     public String truncate(String value, int maxLen) {
         if (value == null) return null;
         return value.length() <= maxLen ? value : value.substring(0, maxLen);
+    }
+
+    public String getLatestNetworkResponse(Long asyncTaskId, int maxChars) {
+        AsyncPollingAuditLog latest = mapper.findLatestNetworkResponseByTaskId(asyncTaskId);
+        if (latest == null || latest.getResponseBody() == null) return null;
+        return truncate(latest.getResponseBody(), maxChars);
+    }
+
+    public List<Map<String, Object>> getNetworkResponses(Long asyncTaskId, int maxChars) {
+        List<AsyncPollingAuditLog> logs = mapper.findNetworkResponsesByTaskId(asyncTaskId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("HH:mm:ss");
+        for (AsyncPollingAuditLog log : logs) {
+            if (log.getResponseBody() == null) continue;
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("time", log.getRecordedAt() != null ? log.getRecordedAt().format(fmt) : "");
+            entry.put("body", truncate(log.getResponseBody(), maxChars));
+            result.add(entry);
+        }
+        return result;
     }
 }

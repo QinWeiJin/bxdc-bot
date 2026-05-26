@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
-import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest } from '../composables/useChat'
+import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest, type PollingStatus } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useSkillHub } from '../composables/useSkillHub'
 import UserAvatar from './UserAvatar.vue'
@@ -12,6 +12,7 @@ const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } 
 const { currentUser } = useUser()
 const { skills, fetchSkills } = useSkillHub()
 const activeLogMessageId = ref<string | null>(null)
+const expandedPollingKeys = ref(new Set<string>())
 
 onMounted(() => { fetchSkills() })
 
@@ -19,6 +20,14 @@ function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   if (status === 'completed') return '已完成'
   if (status === 'failed') return '调用失败'
   return '调用中'
+}
+
+function formatPollingStatus(ps: PollingStatus): string {
+  if (ps.status === 'COMPLETED') return '轮询结束'
+  if (ps.status === 'FAILED' || ps.status === 'TIMEOUT') return '轮询错误'
+  const count = ps.pollResponses.length
+  if (count === 0) return '等待首次轮询'
+  return `轮询第${count}次`
 }
 
 function formatToolSummary(summary?: string) {
@@ -44,6 +53,22 @@ function formatTime(timestamp: number) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(timestamp)
+}
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+function togglePollingResponse(key: string) {
+  const next = new Set(expandedPollingKeys.value)
+  if (next.has(key)) {
+    next.delete(key)
+  } else {
+    next.add(key)
+  }
+  expandedPollingKeys.value = next
 }
 
 function formatLogTime(timestamp: string) {
@@ -589,6 +614,26 @@ const chatItems = computed(() =>
                 <span class="tool-status-text">{{ formatToolStatus(tool.status) }}</span>
                 <span v-if="tool.status === 'completed'" class="tool-status-check">✓</span>
               </div>
+              <div v-if="tool.pollingStatus" class="tool-polling-status">
+                <div class="tool-polling-header" @click="togglePollingResponse(tool.id)">
+                  <span class="tool-polling-arrow">{{ expandedPollingKeys.has(tool.id) ? '▼' : '▶' }}</span>
+                  <t-tag size="small" theme="warning" variant="light">
+                    {{ formatPollingStatus(tool.pollingStatus) }}
+                  </t-tag>
+                  <span v-if="tool.pollingStatus.elapsedSeconds > 0" class="tool-polling-elapsed">⏱ {{ formatElapsed(tool.pollingStatus.elapsedSeconds) }}</span>
+                  <span v-if="tool.pollingStatus.pollResponses.length" class="tool-polling-count">{{ tool.pollingStatus.pollResponses.length }} 次响应</span>
+                </div>
+                <div v-if="expandedPollingKeys.has(tool.id) && tool.pollingStatus.pollResponses.length" class="tool-polling-responses">
+                  <div
+                    v-for="(resp, idx) in tool.pollingStatus.pollResponses"
+                    :key="idx"
+                    class="tool-polling-resp-item"
+                  >
+                    <span class="tool-polling-resp-time">{{ resp.time }}</span>
+                    <pre class="tool-polling-resp-body">{{ resp.body }}</pre>
+                  </div>
+                </div>
+              </div>
               <div v-if="tool.arguments !== undefined" class="tool-status-args">
                 参数：{{ formatToolArguments(tool.arguments) }}
               </div>
@@ -942,6 +987,74 @@ const chatItems = computed(() =>
 .tool-status-check {
   color: var(--td-success-color);
   font-weight: 700;
+}
+
+.tool-polling-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.tool-polling-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-polling-arrow {
+  font-size: 10px;
+  color: var(--td-text-color-placeholder);
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.tool-polling-elapsed {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
+
+.tool-polling-count {
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
+}
+
+.tool-polling-responses {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.tool-polling-resp-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tool-polling-resp-time {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  flex-shrink: 0;
+  padding-top: 6px;
+  min-width: 56px;
+}
+
+.tool-polling-resp-body {
+  margin: 0;
+  flex: 1;
+  padding: 6px 8px;
+  background: var(--td-bg-color-container);
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
 }
 
 .llm-log-actions {

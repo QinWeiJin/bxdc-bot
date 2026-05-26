@@ -100,6 +100,10 @@ public class AsyncTaskPollingService {
         return asyncTaskMapper.findPendingOrPolling(limit);
     }
 
+    public List<AsyncTask> findActiveBySessionId(String sessionId) {
+        return asyncTaskMapper.findBySessionId(sessionId);
+    }
+
     public String extractTaskId(String initialResponse, String idJsonPath) {
         if (initialResponse == null || StringUtils.isBlank(initialResponse)) return null;
         if (idJsonPath == null || StringUtils.isBlank(idJsonPath)) return null;
