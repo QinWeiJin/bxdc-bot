@@ -86,7 +86,8 @@ public class AsyncTaskPollingScheduler {
             if (task.getPollHeaders() != null && !StringUtils.isBlank(task.getPollHeaders())) {
                 try {
                     pollHeaders = objectMapper.readValue(task.getPollHeaders(), Map.class);
-                } catch (Exception ignored) {
+                } catch (Exception ex) {
+                    log.warn("Failed to parse pollHeaders JSON for async task {}: {}", task.getId(), ex.getMessage());
                 }
             }
 
@@ -112,6 +113,13 @@ public class AsyncTaskPollingScheduler {
                 netLog.setResponseBody(auditService.truncate(responseStr, RESPONSE_TRUNCATE_LENGTH));
                 if (responseStr.length() > RESPONSE_TRUNCATE_LENGTH) {
                     netLog.setResponseTruncated(true);
+                }
+                if (pollHeaders != null && !pollHeaders.isEmpty()) {
+                    try {
+                        netLog.setRequestHeadersJson(objectMapper.writeValueAsString(pollHeaders));
+                    } catch (Exception ex) {
+                        log.warn("Failed to serialize pollHeaders audit for async task {}: {}", task.getId(), ex.getMessage());
+                    }
                 }
                 auditService.log(netLog);
 
