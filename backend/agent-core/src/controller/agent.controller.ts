@@ -531,6 +531,10 @@ export class AgentController {
           : '';
         
         const staticSystemPrompt = buildStaticSystemPrompt();
+        const profileDetails = await this.memoryService.fetchUserProfile(userId);
+        const systemContent = profileDetails
+          ? `${staticSystemPrompt}[个人特征信息]${profileDetails}`
+          : staticSystemPrompt;
         const userTurnContent = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction.
@@ -549,7 +553,7 @@ export class AgentController {
           .filter((m): m is NonNullable<typeof m> => m != null);
 
         const messages = [
-          { role: 'system' as const, content: staticSystemPrompt },
+          { role: 'system' as const, content: systemContent },
           ...validHistory,
           { role: 'user' as const, content: userTurnContent },
         ];

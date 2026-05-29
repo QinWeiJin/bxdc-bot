@@ -21,7 +21,7 @@
  * @since 1.0.0
  */
 
-import { Controller, Post, Body } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query } from '@nestjs/common';
 import { MemoryService } from '../mem/memory.service';
 
 /**
@@ -54,5 +54,11 @@ export class MemoryController {
   addMemory(@Body() body: { userId: string; text: string; role?: 'user' | 'assistant' | 'system' }) {
     console.log('[MemoryController] Adding memory:', body);
     return this.memoryService.addMemory(body.userId, body.text, body.role);
+  }
+
+  @Get('profile')
+  async getProfile(@Query('userId') userId: string) {
+    const details = await this.memoryService.fetchUserProfile(userId);
+    return { userId, details, success: !!details };
   }
 }
