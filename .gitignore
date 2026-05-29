@@ -31,3 +31,9 @@ backend/agent-core/memories.db
 # Backups
 frontend-react-backup/
 0427/
+
+# Trae IDE config
+.trae/
+
+# Programming environments
+backend/skill-gateway/apache-maven-3.9.6/

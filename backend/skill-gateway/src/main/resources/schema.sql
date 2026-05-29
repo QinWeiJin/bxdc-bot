@@ -150,6 +150,54 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
+-- conversation_logs（对话日志表 - 记录完整的对话信息，便于问题排查和日志分析）
+SET @tbl_conv = (
+  SELECT COUNT(*) FROM information_schema.tables
+  WHERE table_schema = @db AND table_name = 'conversation_logs'
+);
+SET @sql = IF(@tbl_conv = 0,
+  'CREATE TABLE conversation_logs (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    user_id VARCHAR(64) NOT NULL COMMENT ''用户ID'',
+    session_id VARCHAR(64) NOT NULL COMMENT ''会话ID'',
+    trace_id VARCHAR(64) NULL COMMENT ''追踪ID'',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT ''对话创建时间'',
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT ''对话更新时间'',
+    response_duration_seconds DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT ''响应时长（秒）'',
+    llm_rounds INT NOT NULL DEFAULT 0 COMMENT ''LLM响应执行轮数'',
+    tool_call_rounds INT NOT NULL DEFAULT 0 COMMENT ''工具调用轮数'',
+    is_exceed_max_round TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''是否超出最大轮'',
+    is_success TINYINT(1) NOT NULL DEFAULT 1 COMMENT ''是否成功执行'',
+    status VARCHAR(32) NOT NULL DEFAULT ''PENDING'' COMMENT ''状态'',
+    finish_reason VARCHAR(128) NULL COMMENT ''结束原因'',
+    llm_model VARCHAR(128) NULL COMMENT ''使用的LLM模型'',
+    skill_name VARCHAR(128) NULL COMMENT ''调用的技能名称'',
+    tool_name VARCHAR(128) NULL COMMENT ''调用的工具名称'',
+    log_level VARCHAR(32) NULL COMMENT ''日志级别'',
+    log_message TEXT NULL COMMENT ''日志消息内容'',
+    error_message TEXT NULL COMMENT ''错误信息'',
+    error_stack_trace LONGTEXT NULL COMMENT ''错误堆栈信息'',
+    request_data LONGTEXT NULL COMMENT ''请求数据(JSON格式)'',
+    response_data LONGTEXT NULL COMMENT ''响应数据(JSON格式)'',
+    conversation_content LONGTEXT NULL COMMENT ''对话内容(JSON格式)'',
+    total_tokens INT NULL COMMENT ''消耗的token总数'',
+    prompt_tokens INT NULL COMMENT ''提示词token数'',
+    completion_tokens INT NULL COMMENT ''补全token数'',
+    agent_version VARCHAR(32) NULL COMMENT ''代理版本'',
+    environment VARCHAR(32) NULL COMMENT ''环境'',
+    PRIMARY KEY (id),
+    KEY idx_conv_user_id (user_id),
+    KEY idx_conv_session_id (session_id),
+    KEY idx_conv_trace_id (trace_id),
+    KEY idx_conv_created_at (created_at),
+    KEY idx_conv_status (status),
+    KEY idx_conv_is_success (is_success)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT=''对话日志表''',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 -- 已废弃表：若库中仍存在则删除（agent_core_invocation_audit_logs、user_skill_invocation_logs）
 DROP TABLE IF EXISTS user_skill_invocation_logs;
 DROP TABLE IF EXISTS agent_core_invocation_audit_logs;

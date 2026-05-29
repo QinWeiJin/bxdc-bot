@@ -1,13 +1,15 @@
 import { ref, provide, inject, type InjectionKey } from 'vue'
-import { createTask, getEventSourceUrl, confirmAction } from '../services/api'
+import { confirmAction, getAgentStreamUrl } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
+import type { LlmSettingsResponse } from './useUser'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
 import {
   extractArgumentsFromToolCallPayload,
   extractArgumentsFromToolResultMessage,
   mergeToolArgumentsField,
 } from '../utils/toolInvocationUtils'
+import { useThinkingMode } from './useThinkingMode'
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
 
@@ -71,6 +73,7 @@ export interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+  sessionId?: string
   toolInvocations?: ToolInvocation[]
   llmLogs?: LlmLogEntry[]
   /** 调用日志弹窗：按 SSE 到达顺序交错 Tool 与 LLM（仅本轮 assistant） */
@@ -130,7 +133,15 @@ export function provideChat() {
   const isThinking = ref(false)
   const error = ref<string | null>(null)
   const activeSessionId = ref<string | null>(null)
-  const { currentUser } = useUser()
+  const conversationSessionId = ref<string | null>(null)
+  const { currentUser, fetchLlmSettings } = useUser()
+  const llmSettings = ref<LlmSettingsResponse | null>(null)
+  const { createSession, processStreamEvent, completeSession } = useThinkingMode()
+
+  function generateConversationSessionId(): string {
+    // 为每条消息生成唯一的 sessionId，确保每条消息有独立的思考状态
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  }
 
   function updateLastAssistantMessage(updater: (message: Message) => Message) {
     if (messages.value.length === 0) return
@@ -170,7 +181,8 @@ export function provideChat() {
   }
 
   function applyAssistantContent(rawContent: string) {
-    const content = rawContent
+    // 过滤 think 标签，确保思考内容不会显示给用户
+    const content = removeThinkTags(rawContent)
     
     // 如果为空字符串，我们仍然可能需要处理（例如初始状态），但如果是纯空白字符通常可以忽略
     // 但是对于流式传输，有时会收到空包
@@ -185,13 +197,24 @@ export function provideChat() {
       return
     }
 
-    // 检查是否是全量更新（新内容包含旧内容作为前缀）
-    if (content.startsWith(last.content)) {
-      setLastMessage(content)
+    // 检查是否是重复内容（后端可能会重复发送相同内容）
+    if (last.content.endsWith(content)) {
       return
     }
 
-    // 否则当作增量追加
+    // 如果新内容是旧内容的延续（以旧内容开头），只追加新部分
+    if (content.startsWith(last.content)) {
+      const newPart = content.slice(last.content.length)
+      if (newPart.length > 0) {
+        updateLastAssistantMessage((current) => ({
+          ...current,
+          content: current.content + newPart,
+        }))
+      }
+      return
+    }
+
+    // 否则直接追加（处理乱序或特殊情况）
     updateLastAssistantMessage((current) => ({
       ...current,
       content: current.content + content,
@@ -249,14 +272,22 @@ export function provideChat() {
     return kind.includes('toolmessage') || kind === 'tool'
   }
 
+  function removeThinkTags(content: string): string {
+    // 移除 <think>...</think> 标签及其内容
+    return content.replace(/<think[\s\S]*?<\/think>/gi, '')
+  }
+
   function extractContent(content: unknown): string | null {
-    if (typeof content === 'string') return content
+    if (typeof content === 'string') {
+      // 过滤 think 标签
+      return removeThinkTags(content)
+    }
     if (Array.isArray(content)) {
       const text = content
         .map((part) => {
-          if (typeof part === 'string') return part
+          if (typeof part === 'string') return removeThinkTags(part)
           if (part && typeof part === 'object' && typeof (part as any).text === 'string') {
-            return (part as any).text
+            return removeThinkTags((part as any).text)
           }
           return ''
         })
@@ -301,7 +332,7 @@ export function provideChat() {
     
     // 3. 最后的兜底：如果有一个 content 字段，且没有 tool_calls，假设它是内容
     if (typeof data.content === 'string' && !data.tool_calls && !data.kwargs?.tool_calls) {
-      return data.content
+      return removeThinkTags(data.content)
     }
 
     return null
@@ -754,143 +785,182 @@ export function provideChat() {
         content: m.content,
       }))
 
-      const { id } = await createTask(content, userId, history)
-      activeSessionId.value = id
-      const url = getEventSourceUrl(id)
+      const sessionId = generateConversationSessionId()
+      activeSessionId.value = sessionId
+
+      // 初始化思考模式会话
+      createSession(sessionId)
 
       addMessage({
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
+        sessionId,
         toolInvocations: [],
         llmLogs: [],
         logTimeline: [],
       })
 
-      const eventSource = new EventSource(url)
+      const url = getAgentStreamUrl()
 
-      eventSource.onmessage = (event) => {
-        try {
-          if (event.data) {
-            let data: any
-            try {
-              data = JSON.parse(event.data)
-            } catch {
-              // 纯文本数据
-              console.log('Received raw text:', event.data)
-              applyAssistantContent(event.data)
-              return
-            }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
+        body: JSON.stringify({
+          instruction: content,
+          context: {
+            userId,
+            sessionId,
+          },
+          history,
+        }),
+      })
 
-            console.log('Received JSON data:', data)
-            if (isLlmLogEvent(data)) {
-              if (activeSessionId.value && data.entry.sessionId === activeSessionId.value) {
-                upsertLlmLogEntry(data.entry)
-              }
-              return
-            }
-
-            if (isToolStatusEvent(data)) {
-              if (data.status === 'failed') {
-                console.warn(`[skill] tool_status FAILED: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`, {
-                  result: data.result,
-                  arguments: data.arguments,
-                })
-              } else if (data.status === 'completed') {
-                console.log(`[skill] tool_status completed: tool=${data.toolName} (${data.toolId}) kind=${data.kind} resultLen=${typeof data.result === 'string' ? data.result.length : 'N/A'}`)
-              } else {
-                console.log(`[skill] tool_status running: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`)
-              }
-              upsertToolInvocation(data)
-              appendToolTimelineEntry(data.toolId)
-              return
-            }
-
-            if (isConfirmationRequestEvent(data)) {
-              console.log(`[skill] confirmation_request: skill=${data.skillName} tool=${data.toolName} toolCallId=${data.toolCallId}`, {
-                arguments: data.arguments,
-              })
-              addConfirmationToLastAssistant({
-                sessionId: data.sessionId,
-                toolCallId: data.toolCallId,
-                toolName: data.toolName,
-                skillName: data.skillName,
-                summary: data.summary,
-                details: data.details,
-                arguments: data.arguments,
-                status: 'pending',
-              })
-              return
-            }
-
-            const rawToolInvocations = extractToolInvocationsFromChunk(data)
-            if (rawToolInvocations.length > 0) {
-              rawToolInvocations.forEach((toolInvocation) => {
-                upsertToolInvocation({
-                  toolId: toolInvocation.id,
-                  toolName: toolInvocation.name,
-                  displayName: toolInvocation.displayName,
-                  kind: toolInvocation.kind,
-                  status: toolInvocation.status,
-                  arguments: toolInvocation.arguments,
-                  executionMode: toolInvocation.executionMode,
-                  executionLabel: toolInvocation.executionLabel,
-                })
-                appendToolTimelineEntry(toolInvocation.id)
-              })
-            }
-
-            if (typeof data?.error === 'string') {
-              console.error(`[skill] SSE error event: ${data.error}`)
-              error.value = data.error
-              settleLastToolInvocations('failed')
-              isThinking.value = false
-              return
-            }
-
-            const extracted = extractMessageContent(data)
-            if (extracted !== null) {
-              console.log('Extracted content:', extracted)
-              applyAssistantContent(extracted)
-            } else {
-              console.log('No content extracted from data')
-            }
-          }
-        } catch (e) {
-          console.error('Error handling event:', e)
-        }
+      if (!response.ok) {
+        console.error('[skill] Failed to connect to agent:', response.statusText)
+        isThinking.value = false
+        error.value = 'Failed to connect to agent'
+        return
       }
 
-      eventSource.addEventListener('complete', () => {
-        console.log('Stream complete')
-        eventSource.close()
-        settleLastToolInvocations('completed')
+      const reader = response.body?.getReader()
+      if (!reader) {
+        console.error('[skill] No response body')
         isThinking.value = false
-        activeSessionId.value = null
-      })
+        return
+      }
 
-      eventSource.addEventListener('polling_status', (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (isPollingStatusEvent(data)) {
-            handlePollingStatus(data)
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) {
+          console.log('Stream complete')
+          settleLastToolInvocations('completed')
+          isThinking.value = false
+          // 完成思考模式会话
+          if (activeSessionId.value) {
+            completeSession(activeSessionId.value)
           }
-        } catch (e) {
-          console.error('[skill] Error parsing polling_status event:', e)
+          activeSessionId.value = null
+          break
         }
-      })
 
-      eventSource.addEventListener('error', (e) => {
-        console.error('[skill] SSE connection error:', {
-          readyState: eventSource.readyState,
-          sessionId: activeSessionId.value,
-        })
-        eventSource.close()
-        settleLastToolInvocations('failed')
-        isThinking.value = false
-        activeSessionId.value = null
-      })
+        buffer += decoder.decode(value, { stream: true })
+        
+        // 按行处理 SSE 格式的数据
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          
+          try {
+            // 解析 SSE 格式：data: {"key": "value"}
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.slice(6)
+              if (!jsonStr.trim()) continue
+              
+              let data: any
+              try {
+                data = JSON.parse(jsonStr)
+              } catch {
+                console.log('Received raw text:', jsonStr)
+                applyAssistantContent(jsonStr)
+                continue
+              }
+
+              console.log('Received JSON data:', data)
+              
+              // 处理思考模式节点
+              if (activeSessionId.value) {
+                processStreamEvent(activeSessionId.value, data)
+              }
+              
+              if (isLlmLogEvent(data)) {
+                if (activeSessionId.value && data.entry.sessionId === activeSessionId.value) {
+                  upsertLlmLogEntry(data.entry)
+                }
+                continue
+              }
+
+              if (isToolStatusEvent(data)) {
+                if (data.status === 'failed') {
+                  console.warn(`[skill] tool_status FAILED: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`, {
+                    result: data.result,
+                    arguments: data.arguments,
+                  })
+                } else if (data.status === 'completed') {
+                  console.log(`[skill] tool_status completed: tool=${data.toolName} (${data.toolId}) kind=${data.kind} resultLen=${typeof data.result === 'string' ? data.result.length : 'N/A'}`)
+                } else {
+                  console.log(`[skill] tool_status running: tool=${data.toolName} (${data.toolId}) kind=${data.kind}`)
+                }
+                upsertToolInvocation(data)
+                appendToolTimelineEntry(data.toolId)
+                continue
+              }
+
+              if (isConfirmationRequestEvent(data)) {
+                console.log(`[skill] confirmation_request: skill=${data.skillName} tool=${data.toolName} toolCallId=${data.toolCallId}`, {
+                  arguments: data.arguments,
+                })
+                addConfirmationToLastAssistant({
+                  sessionId: data.sessionId,
+                  toolCallId: data.toolCallId,
+                  toolName: data.toolName,
+                  skillName: data.skillName,
+                  summary: data.summary,
+                  details: data.details,
+                  arguments: data.arguments,
+                  status: 'pending',
+                })
+                continue
+              }
+
+              const rawToolInvocations = extractToolInvocationsFromChunk(data)
+              if (rawToolInvocations.length > 0) {
+                rawToolInvocations.forEach((toolInvocation) => {
+                  upsertToolInvocation({
+                    toolId: toolInvocation.id,
+                    toolName: toolInvocation.name,
+                    displayName: toolInvocation.displayName,
+                    kind: toolInvocation.kind,
+                    status: toolInvocation.status,
+                    arguments: toolInvocation.arguments,
+                    executionMode: toolInvocation.executionMode,
+                    executionLabel: toolInvocation.executionLabel,
+                  })
+                  appendToolTimelineEntry(toolInvocation.id)
+                })
+              }
+
+              if (typeof data?.error === 'string') {
+                console.error(`[skill] SSE error event: ${data.error}`)
+                error.value = data.error
+                settleLastToolInvocations('failed')
+                isThinking.value = false
+                return
+              }
+
+              const extracted = extractMessageContent(data)
+              if (extracted !== null) {
+                console.log('Extracted content:', extracted)
+                applyAssistantContent(extracted)
+              } else {
+                console.log('No content extracted from data')
+              }
+            }
+          } catch (e) {
+            console.error('Error handling event:', e)
+          }
+        }
+      }
     } catch (err) {
       console.error('[skill] Failed to send message:', err)
       error.value = err instanceof Error ? err.message : 'Failed to send message'

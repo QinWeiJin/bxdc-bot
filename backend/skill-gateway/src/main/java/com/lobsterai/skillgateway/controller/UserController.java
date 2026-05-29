@@ -119,6 +119,20 @@ public class UserController {
         return ResponseEntity.ok(r);
     }
 
+    /**
+     * Internal API for agent-core to fetch complete LLM config including API key.
+     * This endpoint should only be accessible from localhost or trusted internal networks.
+     */
+    @GetMapping("/{id}/llm-config-internal")
+    public ResponseEntity<?> getLlmConfigInternal(@PathVariable String id) {
+        User user = userService.getUser(id);
+        if (user == null) {
+            return ResponseEntity.notFound().build();
+        }
+        Map<String, String> merged = userService.mergeLlmConfigForAgent(user);
+        return ResponseEntity.ok(merged);
+    }
+
     @PutMapping("/{id}/llm-settings")
     public ResponseEntity<?> putLlmSettings(@PathVariable String id, @RequestBody LlmSettingsUpdateRequest body) {
         try {

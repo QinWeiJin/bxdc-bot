@@ -138,6 +138,7 @@ export class AgentFactory {
         : {}),
       temperature: 0, // 使用确定性输出，便于调试和复现
       callbacks: config?.callbacks,
+      streaming: true, // 启用流式输出，实现打字机效果
     });
 
     // 判断是否暴露 SSH 执行器

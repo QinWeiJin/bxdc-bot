@@ -23,4 +23,5 @@ export declare class AgentController {
         context: any;
         history?: any[];
     }): Observable<MessageEvent>;
+    private executeAgentTask;
 }

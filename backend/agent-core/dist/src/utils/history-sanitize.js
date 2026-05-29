@@ -143,7 +143,15 @@ function sanitizeMessageContentForAgent(rawContent) {
 function sanitizeHistoryForAgent(history) {
     if (!Array.isArray(history))
         return [];
-    return history.map((m) => {
+    return history
+        .filter((m) => {
+        const role = m?.role;
+        if (typeof role === 'string' && role.toLowerCase() === 'system') {
+            return false;
+        }
+        return true;
+    })
+        .map((m) => {
         const next = { ...m };
         if ("content" in next) {
             next.content = sanitizeMessageContentForAgent(next.content);

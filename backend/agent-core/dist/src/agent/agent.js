@@ -27,6 +27,7 @@ class AgentFactory {
                 : {}),
             temperature: 0,
             callbacks: config?.callbacks,
+            streaming: true,
         });
         const exposeSshExecutor = !userId?.trim()
             || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "1"
