@@ -67,11 +67,12 @@ export declare const sshExecutorToolInputSchema: z.ZodObject<{
     password?: string;
     confirmed?: boolean;
 }>;
-declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType", [z.ZodObject<{
-    targetType: z.ZodLiteral<"api">;
+declare const skillGeneratorToolInputSchema: z.ZodObject<{
+    targetType: z.ZodEnum<["api", "ssh", "openclaw", "template"]>;
     rawDescription: z.ZodOptional<z.ZodString>;
     name: z.ZodOptional<z.ZodString>;
     description: z.ZodOptional<z.ZodString>;
+    allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
     method: z.ZodOptional<z.ZodString>;
     endpoint: z.ZodOptional<z.ZodString>;
     headers: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>, Record<string, string>, unknown>;
@@ -129,15 +130,20 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     testInput: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>, Record<string, unknown>, unknown>;
     enabled: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
     requiresConfirmation: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
-    allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
+    command: z.ZodOptional<z.ZodString>;
+    systemPrompt: z.ZodOptional<z.ZodString>;
+    allowedTools: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
+    prompt: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     method?: string;
     headers?: Record<string, string>;
     body?: any;
-    targetType?: "api";
+    command?: string;
+    targetType?: "api" | "ssh" | "openclaw" | "template";
     rawDescription?: string;
     name?: string;
     description?: string;
+    allowOverwrite?: boolean;
     endpoint?: string;
     query?: Record<string, string | number | boolean>;
     interfaceDescription?: string;
@@ -159,15 +165,19 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     testInput?: Record<string, unknown>;
     enabled?: boolean;
     requiresConfirmation?: boolean;
-    allowOverwrite?: boolean;
+    systemPrompt?: string;
+    allowedTools?: string[];
+    prompt?: string;
 }, {
     method?: string;
     headers?: unknown;
     body?: any;
-    targetType?: "api";
+    command?: string;
+    targetType?: "api" | "ssh" | "openclaw" | "template";
     rawDescription?: string;
     name?: string;
     description?: string;
+    allowOverwrite?: unknown;
     endpoint?: string;
     query?: unknown;
     interfaceDescription?: string;
@@ -178,74 +188,10 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     testInput?: unknown;
     enabled?: unknown;
     requiresConfirmation?: unknown;
-    allowOverwrite?: unknown;
-}>, z.ZodObject<{
-    targetType: z.ZodLiteral<"ssh">;
-    rawDescription: z.ZodOptional<z.ZodString>;
-    name: z.ZodOptional<z.ZodString>;
-    description: z.ZodOptional<z.ZodString>;
-    command: z.ZodOptional<z.ZodString>;
-    allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
-}, "strip", z.ZodTypeAny, {
-    command?: string;
-    targetType?: "ssh";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: boolean;
-}, {
-    command?: string;
-    targetType?: "ssh";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: unknown;
-}>, z.ZodObject<{
-    targetType: z.ZodLiteral<"openclaw">;
-    rawDescription: z.ZodOptional<z.ZodString>;
-    name: z.ZodOptional<z.ZodString>;
-    description: z.ZodOptional<z.ZodString>;
-    systemPrompt: z.ZodOptional<z.ZodString>;
-    allowedTools: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
-    allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
-}, "strip", z.ZodTypeAny, {
-    targetType?: "openclaw";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: boolean;
     systemPrompt?: string;
     allowedTools?: string[];
-}, {
-    targetType?: "openclaw";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: unknown;
-    systemPrompt?: string;
-    allowedTools?: string[];
-}>, z.ZodObject<{
-    targetType: z.ZodLiteral<"template">;
-    rawDescription: z.ZodOptional<z.ZodString>;
-    name: z.ZodOptional<z.ZodString>;
-    description: z.ZodOptional<z.ZodString>;
-    prompt: z.ZodOptional<z.ZodString>;
-    allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
-}, "strip", z.ZodTypeAny, {
-    targetType?: "template";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: boolean;
     prompt?: string;
-}, {
-    targetType?: "template";
-    rawDescription?: string;
-    name?: string;
-    description?: string;
-    allowOverwrite?: unknown;
-    prompt?: string;
-}>]>;
+}>;
 export declare function describeGatewayExtendedTool(toolName: string): {
     displayName: string;
     kind: 'skill' | 'tool';

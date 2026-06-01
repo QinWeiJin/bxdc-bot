@@ -179,63 +179,40 @@ const skillGeneratorAsyncPollSchema = zod_1.z.preprocess((val) => {
     resultJsonPath: zod_1.z.string().optional(),
     pollHeaders: zod_1.z.record(zod_1.z.string()).optional(),
 }).optional());
-const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
-    zod_1.z.object({
-        targetType: zod_1.z.literal("api"),
-        rawDescription: zod_1.z.string().optional(),
-        name: zod_1.z.string().optional(),
-        description: zod_1.z.string().optional(),
-        method: zod_1.z.string().optional(),
-        endpoint: zod_1.z.string().optional(),
-        headers: skillGeneratorHeadersSchema,
-        query: skillGeneratorQuerySchema,
-        body: zod_1.z.any().optional(),
-        interfaceDescription: zod_1.z.string().optional(),
-        parameterContract: skillGeneratorParameterContractSchema
-            .describe("JSON Schema object describing API parameters. Each property supports: "
-            + "type/description/required/default (standard JSON Schema), "
-            + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
-            + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
-            + "for dynamic dropdown options fetched from an API."),
-        parameterBinding: zod_1.z.enum(["query", "jsonBody", "formBody"]).optional()
-            .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
-        timeoutSeconds: skillGeneratorTimeoutSecondsSchema
-            .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
-        asyncPoll: skillGeneratorAsyncPollSchema
-            .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
-            + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
-            + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
-        testInput: skillGeneratorTestInputSchema,
-        enabled: skillGeneratorBooleanOptionalSchema,
-        requiresConfirmation: skillGeneratorBooleanOptionalSchema,
-        allowOverwrite: skillGeneratorAllowOverwriteSchema,
-    }),
-    zod_1.z.object({
-        targetType: zod_1.z.literal("ssh"),
-        rawDescription: zod_1.z.string().optional(),
-        name: zod_1.z.string().optional(),
-        description: zod_1.z.string().optional(),
-        command: zod_1.z.string().optional(),
-        allowOverwrite: skillGeneratorAllowOverwriteSchema,
-    }),
-    zod_1.z.object({
-        targetType: zod_1.z.literal("openclaw"),
-        rawDescription: zod_1.z.string().optional(),
-        name: zod_1.z.string().optional(),
-        description: zod_1.z.string().optional(),
-        systemPrompt: zod_1.z.string().optional(),
-        allowedTools: zod_1.z.array(zod_1.z.string()).optional(),
-        allowOverwrite: skillGeneratorAllowOverwriteSchema,
-    }),
-    zod_1.z.object({
-        targetType: zod_1.z.literal("template"),
-        rawDescription: zod_1.z.string().optional(),
-        name: zod_1.z.string().optional(),
-        description: zod_1.z.string().optional(),
-        prompt: zod_1.z.string().optional(),
-        allowOverwrite: skillGeneratorAllowOverwriteSchema,
-    }),
-]);
+const skillGeneratorToolInputSchema = zod_1.z.object({
+    targetType: zod_1.z.enum(["api", "ssh", "openclaw", "template"]).describe("Type of skill to create."),
+    rawDescription: zod_1.z.string().optional(),
+    name: zod_1.z.string().optional(),
+    description: zod_1.z.string().optional(),
+    allowOverwrite: skillGeneratorAllowOverwriteSchema,
+    method: zod_1.z.string().optional(),
+    endpoint: zod_1.z.string().optional(),
+    headers: skillGeneratorHeadersSchema,
+    query: skillGeneratorQuerySchema,
+    body: zod_1.z.any().optional(),
+    interfaceDescription: zod_1.z.string().optional(),
+    parameterContract: skillGeneratorParameterContractSchema
+        .describe("JSON Schema object describing API parameters. Each property supports: "
+        + "type/description/required/default (standard JSON Schema), "
+        + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
+        + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
+        + "for dynamic dropdown options fetched from an API."),
+    parameterBinding: zod_1.z.enum(["query", "jsonBody", "formBody"]).optional()
+        .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
+    timeoutSeconds: skillGeneratorTimeoutSecondsSchema
+        .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
+    asyncPoll: skillGeneratorAsyncPollSchema
+        .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
+        + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
+        + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
+    testInput: skillGeneratorTestInputSchema,
+    enabled: skillGeneratorBooleanOptionalSchema,
+    requiresConfirmation: skillGeneratorBooleanOptionalSchema,
+    command: zod_1.z.string().optional(),
+    systemPrompt: zod_1.z.string().optional(),
+    allowedTools: zod_1.z.array(zod_1.z.string()).optional(),
+    prompt: zod_1.z.string().optional(),
+});
 const tool_trace_context_1 = require("./tool-trace-context");
 function formatToolError(error) {
     if (axios_1.default.isAxiosError(error)) {
