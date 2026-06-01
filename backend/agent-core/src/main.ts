@@ -24,6 +24,11 @@ import { config } from 'dotenv';
 import { NestFactory } from '@nestjs/core';
 import { resolve } from 'path';
 import { AppModule } from './app.module';
+import { installDisableTiktokenNetwork } from './utils/disable-tiktoken-network';
+
+// 内网环境：拦截 @langchain/core 默认的 tiktoken 网络访问，避免 30s DNS 超时。
+// 不会下载任何第三方包，只是替换内部函数使其立即失败。
+installDisableTiktokenNetwork();
 
 // 尽早加载 .env 文件，确保环境变量在模块导入前可用
 // 这对于 prompts 模块在启动时正确选择语言至关重要
