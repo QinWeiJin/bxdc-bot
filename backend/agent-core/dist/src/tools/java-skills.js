@@ -280,11 +280,12 @@ const extendedTemplateSkillToolSchema = zod_1.z.object({
 const extendedOpenClawSkillToolSchema = zod_1.z.object({
     input: zod_1.z.string().optional().describe("User goal or parameters for the OPENCLAW planner."),
 });
-const extendedApiSkillLooseSchema = zod_1.z
-    .record(zod_1.z.string(), zod_1.z.any())
-    .describe("API parameters as top-level fields; must match the skill parameter contract (JSON Schema). "
+function ensureObjectType(inner, description) {
+    return zod_1.z.object({ payload: inner.optional().describe(description) }).passthrough();
+}
+const extendedApiSkillLooseSchema = ensureObjectType(zod_1.z.object({}).passthrough(), "API parameters as a single object. Must match the skill parameter contract (JSON Schema). "
     + "Defaults from the contract apply when keys are omitted.");
-const extendedPassthroughSkillToolSchema = zod_1.z.object({}).passthrough();
+const extendedPassthroughSkillToolSchema = ensureObjectType(zod_1.z.object({}).passthrough(), "Free-form skill input (object, string, or array).");
 const extendedSkillConfirmationField = zod_1.z.object({
     confirmed: zod_1.z
         .boolean()
@@ -1747,7 +1748,14 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                 schema: zodSchema,
                 func: async (args, _runManager, runConfig) => {
                     try {
-                        let execInput = args;
+                        let normalizedArgs = args || {};
+                        if (normalizedArgs
+                            && typeof normalizedArgs === "object"
+                            && Object.keys(normalizedArgs).length === 1
+                            && "payload" in normalizedArgs) {
+                            normalizedArgs = normalizedArgs.payload || {};
+                        }
+                        let execInput = normalizedArgs;
                         let currentSkill = workingSkill;
                         let currentConfig = config;
                         try {

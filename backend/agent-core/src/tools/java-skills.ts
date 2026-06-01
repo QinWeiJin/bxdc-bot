@@ -461,14 +461,26 @@ const extendedOpenClawSkillToolSchema = z.object({
   input: z.string().optional().describe("User goal or parameters for the OPENCLAW planner."),
 });
 
-const extendedApiSkillLooseSchema = z
-  .record(z.string(), z.any())
-  .describe(
-    "API parameters as top-level fields; must match the skill parameter contract (JSON Schema). "
-      + "Defaults from the contract apply when keys are omitted.",
-  );
+/**
+ * 包装 zod schema 以保证 JSON Schema 顶层一定有 `type: "object"`，兼容 DeepSeek 严格校验。
+ * 对于 z.object({}).passthrough() 这种"空对象"类型，LangChain 转换出的 JSON Schema
+ * 不会自动加 type: "object"，DeepSeek 会返回 400 错误。
+ * 这里在外层加一个虚拟字段 `payload` 来强制生成 type: "object"。
+ */
+function ensureObjectType<T extends z.ZodTypeAny>(inner: T, description: string): z.ZodType<{ payload?: unknown }> {
+  return z.object({ payload: inner.optional().describe(description) }).passthrough() as any;
+}
 
-const extendedPassthroughSkillToolSchema = z.object({}).passthrough();
+const extendedApiSkillLooseSchema = ensureObjectType(
+  z.object({}).passthrough(),
+  "API parameters as a single object. Must match the skill parameter contract (JSON Schema). "
+    + "Defaults from the contract apply when keys are omitted."
+);
+
+const extendedPassthroughSkillToolSchema = ensureObjectType(
+  z.object({}).passthrough(),
+  "Free-form skill input (object, string, or array)."
+);
 
 const extendedSkillConfirmationField = z.object({
   confirmed: z
@@ -2269,7 +2281,18 @@ export async function loadGatewayExtendedTools(
         schema: zodSchema,
         func: async (args: Record<string, unknown>, _runManager?: unknown, runConfig?: RunnableConfig) => {
           try {
-            let execInput: unknown = args;
+            // 兼容 DeepSeek 严格 schema 校验：模型可能把参数包在 `payload` 字段下。
+            // 如果 args 看起来是包装形式（只有一个 payload 字段），解包后使用。
+            let normalizedArgs: Record<string, unknown> = args || {};
+            if (
+              normalizedArgs
+              && typeof normalizedArgs === "object"
+              && Object.keys(normalizedArgs).length === 1
+              && "payload" in normalizedArgs
+            ) {
+              normalizedArgs = (normalizedArgs.payload as Record<string, unknown>) || {};
+            }
+            let execInput: unknown = normalizedArgs;
             let currentSkill = workingSkill;
             let currentConfig = config;
 
