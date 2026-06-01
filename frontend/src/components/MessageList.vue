@@ -524,20 +524,19 @@ const chatItems = computed(() =>
 
       <template #content="{ item }">
         <div class="message-content-block">
-          <!-- 思考模式组件 -->
+          <!-- 思考模式组件：始终只用 ThinkingMode，不再显示老的小思考框 -->
           <ThinkingMode
             v-if="item.sessionId && getSession(item.sessionId)"
             :nodes="getSession(item.sessionId)?.nodes || []"
             :is-active="getSession(item.sessionId)?.isActive || false"
           />
-          
-          <transition name="thinking-fade">
-            <div v-if="item.showThinking && (!item.sessionId || !getSession(item.sessionId))" class="thinking-indicator">
-              <span class="thinking-emoji">🤔</span>
-              <span class="thinking-text">思考中</span>
-              <span class="thinking-wave" />
-            </div>
-          </transition>
+
+          <!-- 兜底：未进入 ThinkingMode session 时，构造一个初始 session 触发显示 -->
+          <ThinkingMode
+            v-else-if="item.showThinking"
+            :nodes="[]"
+            :is-active="true"
+          />
 
           <div class="content-wrapper">
             <TChatContent
@@ -1200,61 +1199,6 @@ const chatItems = computed(() =>
   word-break: break-word;
 }
 
-.thinking-indicator {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 10px;
-  margin: 0;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(0, 82, 217, 0.08), rgba(0, 82, 217, 0.16));
-  color: var(--td-text-color-secondary);
-  animation: thinkingPulse 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  will-change: box-shadow;
-  transform: translateZ(0);
-  backface-visibility: hidden;
-}
-
-.thinking-emoji {
-  display: inline-block;
-  font-size: 20px;
-  animation: thinkingBob 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  transform-origin: center bottom;
-  will-change: transform;
-  backface-visibility: hidden;
-  perspective: 1000px;
-}
-
-.thinking-text {
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-}
-
-.thinking-wave {
-  position: relative;
-  width: 52px;
-  height: 6px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(0, 82, 217, 0.1);
-  will-change: transform;
-  backface-visibility: hidden;
-}
-
-.thinking-wave::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 35%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, rgba(0, 82, 217, 0.6), transparent);
-  animation: thinkingWave 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-}
-
 .empty-state {
   display: flex;
   align-items: center;
@@ -1389,17 +1333,6 @@ const chatItems = computed(() =>
     transform: translateX(280%);
     opacity: 0;
   }
-}
-
-.thinking-fade-enter-active,
-.thinking-fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.thinking-fade-enter-from,
-.thinking-fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
 }
 
 /* 打字机效果 - 闪烁光标 */
