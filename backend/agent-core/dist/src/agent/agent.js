@@ -19,6 +19,7 @@ class AgentFactory {
             userId,
             sessionId: config?.sessionId,
         });
+        const agentStreaming = String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
         const model = new openai_1.ChatOpenAI({
             modelName: config?.modelName || "gpt-4",
             apiKey: openAiApiKey,
@@ -27,7 +28,7 @@ class AgentFactory {
                 : {}),
             temperature: 0,
             callbacks: config?.callbacks,
-            streaming: true,
+            streaming: agentStreaming,
         });
         const exposeSshExecutor = !userId?.trim()
             || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "1"
