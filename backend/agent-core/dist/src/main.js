@@ -4,6 +4,8 @@ const dotenv_1 = require("dotenv");
 const core_1 = require("@nestjs/core");
 const path_1 = require("path");
 const app_module_1 = require("./app.module");
+const tiktoken_offline_patch_1 = require("./utils/tiktoken-offline-patch");
+(0, tiktoken_offline_patch_1.installTiktokenOfflinePatch)();
 const envPath = (0, path_1.resolve)(process.cwd(), '.env');
 console.log('[Bootstrap] Loading .env from:', envPath);
 const result = (0, dotenv_1.config)({ path: envPath });
