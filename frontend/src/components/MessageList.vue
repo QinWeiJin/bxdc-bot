@@ -13,7 +13,7 @@ import { apiUrl } from '../services/config'
 const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
 const { skills, fetchSkills } = useSkillHub()
-const { getSession, createSession, processStreamEvent, completeSession } = useThinkingMode()
+const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 

@@ -15,10 +15,6 @@ const isExpanded = ref(false)
 // 追踪单个节点的折叠状态
 const expandedNodes = ref<Set<string>>(new Set())
 
-const activeNodeIndex = computed(() => {
-  return props.nodes.findIndex(n => n.status === 'active')
-})
-
 const activeNode = computed(() => {
   return props.nodes.find(n => n.status === 'active')
 })
