@@ -17,6 +17,21 @@ const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 
+// 从通知中心跳转标记：进入页面时显示一个"已从通知进入"的 banner，几秒后自动消失
+const showFromNotificationBanner = ref(false)
+const fromNotificationTaskId = ref<string | null>(null)
+try {
+  const pending = sessionStorage.getItem('pendingTaskId')
+  if (pending) {
+    fromNotificationTaskId.value = pending
+    showFromNotificationBanner.value = true
+    sessionStorage.removeItem('pendingTaskId')
+    setTimeout(() => { showFromNotificationBanner.value = false }, 6000)
+  }
+} catch {
+  // ignore
+}
+
 onMounted(() => { fetchSkills() })
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
@@ -499,8 +514,18 @@ const chatItems = computed(() =>
       <span class="empty-hint">开始与 BXDC.bot 对话</span>
     </div>
 
-    <TChat
-      v-else
+    <template v-else>
+      <transition name="banner-fade">
+        <div v-if="showFromNotificationBanner" class="from-notification-banner">
+          <span class="banner-icon">🔔</span>
+          <span class="banner-text">
+            已从任务通知进入
+            <span v-if="fromNotificationTaskId" class="banner-task-id">#{{ fromNotificationTaskId }}</span>
+          </span>
+        </div>
+      </transition>
+
+      <TChat
       class="chat-panel"
       :data="chatItems"
       layout="both"
@@ -710,6 +735,7 @@ const chatItems = computed(() =>
         />
       </template>
     </TChat>
+    </template>
 
     <t-dialog
       :visible="activeLogMessageId !== null"
@@ -1212,6 +1238,41 @@ const chatItems = computed(() =>
 .empty-hint {
   font-size: 14px;
   color: var(--td-text-color-placeholder);
+}
+
+.from-notification-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: 0 12px 8px 12px;
+  background: linear-gradient(90deg, var(--td-brand-color-light), transparent);
+  border-left: 3px solid var(--td-brand-color);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+}
+
+.banner-icon {
+  font-size: 16px;
+}
+
+.banner-task-id {
+  margin-left: 4px;
+  color: var(--td-text-color-placeholder);
+  font-family: var(--td-font-family-mono);
+  font-size: 12px;
+}
+
+.banner-fade-enter-active,
+.banner-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.banner-fade-enter-from,
+.banner-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 /* 槽位：横向比头像略宽以留白；纵向与昵称顶对齐（TChat 已在 .t-chat__avatar 上设 padding-top 与 content--base 一致，勿再垂直居中把头像顶下去） */

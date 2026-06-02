@@ -148,8 +148,10 @@ CREATE TABLE IF NOT EXISTS async_tasks (
     completed_at DATETIME,
     created_at DATETIME,
     updated_at DATETIME,
+    notified_at DATETIME DEFAULT NULL COMMENT '用户已读时间；NULL 表示尚未读',
     INDEX idx_async_status (status),
-    INDEX idx_async_skill_id (skill_id)
+    INDEX idx_async_skill_id (skill_id),
+    INDEX idx_async_user_unread (user_id, status, notified_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS skill_text_prompts (

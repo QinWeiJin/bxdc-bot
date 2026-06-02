@@ -82,6 +82,9 @@ public class AsyncTask {
     @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
 
+    @TableField("notified_at")
+    private LocalDateTime notifiedAt;
+
     public AsyncTask() {}
 
     public Long getId() { return id; }
@@ -155,4 +158,7 @@ public class AsyncTask {
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    public LocalDateTime getNotifiedAt() { return notifiedAt; }
+    public void setNotifiedAt(LocalDateTime notifiedAt) { this.notifiedAt = notifiedAt; }
 }
