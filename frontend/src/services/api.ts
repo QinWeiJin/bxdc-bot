@@ -1,12 +1,12 @@
 import { apiUrl, agentUrl } from './config'
 
-export async function createTask(content: string, userId?: string, history?: any[]): Promise<{ id: string }> {
+export async function createTask(content: string, userId?: string, history?: any[], sessionId?: string): Promise<{ id: string }> {
   const response = await fetch(apiUrl('/api/tasks'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ content, userId, history }),
+    body: JSON.stringify({ content, userId, history, sessionId }),
   })
 
   if (!response.ok) {
@@ -18,6 +18,10 @@ export async function createTask(content: string, userId?: string, history?: any
 
 export function getEventSourceUrl(taskId: string): string {
   return apiUrl(`/api/tasks/${taskId}/events`)
+}
+
+export function getAgentStreamUrl(): string {
+  return agentUrl('/agent/run')
 }
 
 export async function confirmAction(

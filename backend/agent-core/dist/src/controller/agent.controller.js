@@ -26,6 +26,7 @@ const agent_run_raw_log_1 = require("../utils/agent-run-raw-log");
 const history_sanitize_1 = require("../utils/history-sanitize");
 const langgraph_1 = require("@langchain/langgraph");
 const prompts_1 = require("../prompts");
+const conversation_logger_1 = require("../utils/conversation-logger");
 function unwrapLangGraphStreamPayload(raw) {
     if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
         return raw[1];
@@ -93,7 +94,7 @@ function inferMessageKind(message) {
 }
 function isAssistantMessage(message) {
     const kind = inferMessageKind(message);
-    return kind.includes('assistant') || kind.includes('aimessage');
+    return kind.includes('assistant') || kind.includes('aimessage') || kind === 'ai';
 }
 function isToolMessage(message) {
     const kind = inferMessageKind(message);
@@ -257,21 +258,21 @@ let AgentController = class AgentController {
         this.skillManager = skillManager;
         this.logger = logger;
     }
-    emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments, lastEmittedToolResult) {
+    emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId) {
         const chunkMessages = getChunkMessages(chunk);
         for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
             const message = chunkMessages[messageIndex];
             const startedCalls = extractStartedToolCalls(message, messageIndex);
             for (const startedCall of startedCalls) {
-                this.emitToolEvent(subject, startedCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                this.emitToolEvent(subject, startedCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
             }
             const completedCall = extractCompletedToolCall(message, messageIndex);
             if (completedCall) {
-                this.emitToolEvent(subject, completedCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                this.emitToolEvent(subject, completedCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
             }
         }
     }
-    emitToolEvent(subject, toolCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult) {
+    emitToolEvent(subject, toolCall, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId) {
         const previousStatus = seenToolStatuses.get(toolCall.toolId);
         const prevEmittedResult = lastEmittedToolResult.get(toolCall.toolId);
         if (previousStatus === toolCall.status) {
@@ -308,9 +309,38 @@ let AgentController = class AgentController {
         };
         if (toolCall.status === 'running') {
             (0, tool_trace_context_1.setActiveParentToolId)(toolCall.toolName, toolCall.toolId);
+            toolCallStartTimes.set(toolCall.toolId, Date.now());
+            console.log(`[ToolCallLog] Tool started: ${toolCall.toolName}, toolId: ${toolCall.toolId}, sessionId: ${sessionId}`);
         }
         else {
             (0, tool_trace_context_1.clearActiveParentToolId)(toolCall.toolName, toolCall.toolId);
+            const startTime = toolCallStartTimes.get(toolCall.toolId);
+            if (startTime) {
+                const durationMs = Date.now() - startTime;
+                const skillName = toolCall.toolName?.replace(/^extended_/, '') || toolCall.toolName;
+                console.log(`[ToolCallLog] Tool completed: ${toolCall.toolName}, toolId: ${toolCall.toolId}, status: ${toolCall.status}, duration: ${durationMs}ms`);
+                conversationLogger.logToolCall({
+                    traceId,
+                    sessionId,
+                    userId,
+                    toolName: toolCall.toolName,
+                    skillName,
+                    toolCallId: toolCall.toolId,
+                    requestParams: typeof resolvedArguments === 'object' ? JSON.stringify(resolvedArguments) : undefined,
+                    responseResult: typeof toolCall.result === 'string' ? toolCall.result : JSON.stringify(toolCall.result),
+                    status: toolCall.status,
+                    startTime: new Date(startTime).toISOString(),
+                    endTime: new Date().toISOString(),
+                    durationMs,
+                }).then(() => {
+                    console.log(`[ToolCallLog] Successfully logged tool call to database: ${toolCall.toolName}`);
+                }).catch((error) => {
+                    console.error(`[ToolCallLog] Failed to log tool call: ${error}`);
+                });
+            }
+            else {
+                console.log(`[ToolCallLog] No start time found for tool: ${toolCall.toolName}, toolId: ${toolCall.toolId}`);
+            }
         }
         subject.next({ data: JSON.stringify(event) });
     }
@@ -329,22 +359,75 @@ let AgentController = class AgentController {
         const { instruction, context, history } = body;
         const safeHistory = Array.isArray(history) ? history : [];
         const sanitizedHistory = (0, history_sanitize_1.sanitizeHistoryForAgent)(safeHistory);
+        console.log('[DEBUG] Sanitized history roles:', sanitizedHistory.map(m => m?.role));
         const userId = context?.userId;
         const sessionId = context?.sessionId || 'default-session';
         (0, agent_run_raw_log_1.logAgentRunRawIfEnabled)(body, { sessionId, userId });
         const subject = new rxjs_1.Subject();
         const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
         const apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';
-        const llm = (0, llm_merge_1.pickMergedLlm)(context);
+        let llmContext = context || {};
+        if (userId) {
+            fetch(`${gatewayUrl}/api/user/${userId}/llm-config-internal`)
+                .then((llmConfigResponse) => {
+                if (llmConfigResponse.ok) {
+                    return llmConfigResponse.json();
+                }
+                else {
+                    console.warn('[agent] Failed to fetch LLM config:', llmConfigResponse.status);
+                    return null;
+                }
+            })
+                .then((llmConfig) => {
+                if (llmConfig) {
+                    console.log('[agent] Fetched LLM config from skill-gateway:', {
+                        llmApiBase: llmConfig.llmApiBase,
+                        llmModelName: llmConfig.llmModelName,
+                        hasApiKey: !!llmConfig.llmApiKey,
+                    });
+                    llmContext = {
+                        ...llmContext,
+                        llmApiBase: llmConfig.llmApiBase,
+                        llmModelName: llmConfig.llmModelName,
+                        llmApiKey: llmConfig.llmApiKey,
+                    };
+                }
+                this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+            })
+                .catch((e) => {
+                console.error('[agent] Error fetching LLM config:', e);
+                this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+            });
+        }
+        else {
+            this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+        }
+        return subject.asObservable();
+    }
+    async executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken) {
+        const llm = (0, llm_merge_1.pickMergedLlm)(llmContext);
         const openAiApiKey = llm.apiKey;
         const modelName = llm.modelName;
         const baseUrl = llm.baseUrl;
         const skillContext = this.skillManager.buildSkillPromptContext();
+        const conversationLogger = new conversation_logger_1.ConversationLogger();
+        const startTime = Date.now();
+        let llmRounds = 0;
+        let toolCallRounds = 0;
+        let isExceedMaxRound = 0;
+        let isSuccess = 1;
+        let errorMessage;
+        let status = 'RUNNING';
+        let finishReason;
+        const traceId = `${sessionId}-${Date.now()}`;
+        const toolNames = [];
+        const skillNames = [];
         (0, tool_trace_context_1.runWithToolTraceContext)((event) => subject.next({ data: JSON.stringify(event) }), async () => {
             let fullAssistantResponse = '';
             const seenToolStatuses = new Map();
             const lastToolArguments = new Map();
             const lastEmittedToolResult = new Map();
+            const toolCallStartTimes = new Map();
             try {
                 const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
                     subject.next({ data: JSON.stringify(event) });
@@ -359,8 +442,7 @@ let AgentController = class AgentController {
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
                 const staticSystemPrompt = (0, prompts_1.buildStaticSystemPrompt)();
-                const userTurnContent = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
-                const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
+                const allowedHistoryRoles = new Set(['user', 'assistant']);
                 const validHistory = sanitizedHistory
                     .map((m) => {
                     const role = m?.role;
@@ -372,11 +454,13 @@ let AgentController = class AgentController {
                     return { ...m, role: lr };
                 })
                     .filter((m) => m != null);
+                const userTurnContentWithSystem = `System:\n${staticSystemPrompt}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
                 const messages = [
-                    { role: 'system', content: staticSystemPrompt },
                     ...validHistory,
-                    { role: 'user', content: userTurnContent },
+                    { role: 'user', content: userTurnContentWithSystem },
                 ];
+                console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
+                console.log('[DEBUG] Final messages count:', messages.length);
                 const graphConfig = { configurable: { thread_id: sessionId } };
                 let stream = await agent.stream({ messages }, graphConfig);
                 let iterator = stream[Symbol.asyncIterator]();
@@ -448,7 +532,7 @@ let AgentController = class AgentController {
                                     const forward = stripInterruptForClient(payload);
                                     if (forward != null) {
                                         subject.next({ data: JSON.stringify(forward) });
-                                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
                                         if (typeof forward === 'object') {
                                             const lastAssistantMessage = getChunkMessages(forward)
                                                 .filter((message) => isAssistantMessage(message))
@@ -480,15 +564,46 @@ let AgentController = class AgentController {
                     const forward = stripInterruptForClient(payload);
                     if (forward != null) {
                         subject.next({ data: JSON.stringify(forward) });
-                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
                         if (typeof forward === 'object') {
-                            const lastAssistantMessage = getChunkMessages(forward)
-                                .filter((message) => isAssistantMessage(message))
-                                .at(-1);
-                            const nextContent = getMessageContent(lastAssistantMessage);
-                            if (nextContent) {
-                                fullAssistantResponse = nextContent;
-                                subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                            const messages = getChunkMessages(forward);
+                            for (const msg of messages) {
+                                if (isAssistantMessage(msg)) {
+                                    const toolCalls = getToolCallEntries(msg);
+                                    for (const toolCall of toolCalls) {
+                                        const toolName = normalizeToolName(toolCall);
+                                        if (toolName && !toolNames.includes(toolName)) {
+                                            toolNames.push(toolName);
+                                            toolCallRounds++;
+                                        }
+                                        const skillName = toolName?.replace(/^extended_/, '') || toolName;
+                                        if (skillName && !skillNames.includes(skillName)) {
+                                            skillNames.push(skillName);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (typeof forward === 'object') {
+                            const forwardObj = forward;
+                            let nextContent = null;
+                            if (typeof forwardObj.content === 'string') {
+                                nextContent = forwardObj.content;
+                            }
+                            if (!nextContent) {
+                                const lastAssistantMessage = getChunkMessages(forward)
+                                    .filter((message) => isAssistantMessage(message))
+                                    .at(-1);
+                                nextContent = getMessageContent(lastAssistantMessage);
+                            }
+                            if (nextContent && nextContent.length > 0) {
+                                const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
+                                    ? nextContent.slice(fullAssistantResponse.length)
+                                    : nextContent;
+                                if (newContent.length > 0) {
+                                    fullAssistantResponse = nextContent;
+                                    subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
+                                }
                             }
                         }
                     }
@@ -504,16 +619,53 @@ let AgentController = class AgentController {
                         assistantText: safeAssistantResponse
                     });
                 }
+                status = 'COMPLETED';
+                finishReason = '正常结束';
             }
             catch (error) {
                 subject.next({ data: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }) });
                 subject.complete();
+                isSuccess = 0;
+                status = 'FAILED';
+                errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                finishReason = '执行失败';
             }
-        }).catch((error) => {
-            subject.next({ data: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }) });
-            subject.complete();
+            finally {
+                const endTime = Date.now();
+                const responseDurationSeconds = (endTime - startTime) / 1000;
+                try {
+                    await conversationLogger.logConversation({
+                        userId: userId || '',
+                        sessionId,
+                        traceId,
+                        responseDurationSeconds: Math.round(responseDurationSeconds * 100) / 100,
+                        llmRounds,
+                        toolCallRounds,
+                        isExceedMaxRound,
+                        isSuccess,
+                        status,
+                        finishReason,
+                        llmModel: modelName,
+                        skillName: skillNames.join(','),
+                        toolName: toolNames.join(','),
+                        requestData: JSON.stringify({ instruction, context: llmContext, history: sanitizedHistory }),
+                        responseData: JSON.stringify({ response: fullAssistantResponse }),
+                        conversationContent: JSON.stringify({
+                            messages: [
+                                ...sanitizedHistory,
+                                { role: 'user', content: instruction },
+                                { role: 'assistant', content: fullAssistantResponse }
+                            ]
+                        }),
+                        agentVersion: process.env.npm_package_version || '1.0.0',
+                        environment: process.env.NODE_ENV || 'development',
+                    });
+                }
+                catch (logError) {
+                    console.error(`[ConversationLogger] Failed to log conversation: ${logError}`);
+                }
+            }
         });
-        return subject.asObservable();
     }
 };
 exports.AgentController = AgentController;

@@ -58,6 +58,7 @@ public class UserService {
         Map<String, String> m = new LinkedHashMap<>();
         String envBase = envOrNull("OPENAI_API_BASE");
         String envModel = envOrNull("OPENAI_MODEL_NAME");
+        // 注意：fallback 仅在 env 完全没设时才使用，避免硬编码 gpt-4 覆盖 agent-core .env
         if (envModel == null) envModel = "gpt-4";
         String envKey = envOrNull("OPENAI_API_KEY");
 

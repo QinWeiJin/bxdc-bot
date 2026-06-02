@@ -240,65 +240,46 @@ const skillGeneratorAsyncPollSchema = z.preprocess((val) => {
   pollHeaders: z.record(z.string()).optional(),
 }).optional());
 
-/** Skill generator discriminated union - forces model to provide correct fields per targetType */
-const skillGeneratorToolInputSchema = z.discriminatedUnion("targetType", [
-  z.object({
-    targetType: z.literal("api"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    method: z.string().optional(),
-    endpoint: z.string().optional(),
-    headers: skillGeneratorHeadersSchema,
-    query: skillGeneratorQuerySchema,
-    body: z.any().optional(),
-    interfaceDescription: z.string().optional(),
-    parameterContract: skillGeneratorParameterContractSchema
-      .describe("JSON Schema object describing API parameters. Each property supports: "
-        + "type/description/required/default (standard JSON Schema), "
-        + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
-        + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
-        + "for dynamic dropdown options fetched from an API."),
-    parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
-      .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
-    timeoutSeconds: skillGeneratorTimeoutSecondsSchema
-      .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
-    asyncPoll: skillGeneratorAsyncPollSchema
-      .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
-          + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
-          + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
-    /** Overrides default validation payload after save (e.g. { query: { env: "prod" } }). */
-    testInput: skillGeneratorTestInputSchema,
-    enabled: skillGeneratorBooleanOptionalSchema,
-    requiresConfirmation: skillGeneratorBooleanOptionalSchema,
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("ssh"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    command: z.string().optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("openclaw"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    systemPrompt: z.string().optional(),
-    allowedTools: z.array(z.string()).optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("template"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    prompt: z.string().optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-]);
+/** Skill generator schema - flat object with optional fields for all target types */
+const skillGeneratorToolInputSchema = z.object({
+  targetType: z.enum(["api", "ssh", "openclaw", "template"]).describe("Type of skill to create."),
+  // Common fields
+  rawDescription: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  allowOverwrite: skillGeneratorAllowOverwriteSchema,
+  // API fields
+  method: z.string().optional(),
+  endpoint: z.string().optional(),
+  headers: skillGeneratorHeadersSchema,
+  query: skillGeneratorQuerySchema,
+  body: z.any().optional(),
+  interfaceDescription: z.string().optional(),
+  parameterContract: skillGeneratorParameterContractSchema
+    .describe("JSON Schema object describing API parameters. Each property supports: "
+      + "type/description/required/default (standard JSON Schema), "
+      + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
+      + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
+      + "for dynamic dropdown options fetched from an API."),
+  parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
+    .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
+  timeoutSeconds: skillGeneratorTimeoutSecondsSchema
+    .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
+  asyncPoll: skillGeneratorAsyncPollSchema
+    .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
+        + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
+        + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
+  testInput: skillGeneratorTestInputSchema,
+  enabled: skillGeneratorBooleanOptionalSchema,
+  requiresConfirmation: skillGeneratorBooleanOptionalSchema,
+  // SSH fields
+  command: z.string().optional(),
+  // OPENCLAW fields
+  systemPrompt: z.string().optional(),
+  allowedTools: z.array(z.string()).optional(),
+  // Template fields
+  prompt: z.string().optional(),
+});
 
 import {
   emitToolTraceEvent,
@@ -480,14 +461,26 @@ const extendedOpenClawSkillToolSchema = z.object({
   input: z.string().optional().describe("User goal or parameters for the OPENCLAW planner."),
 });
 
-const extendedApiSkillLooseSchema = z
-  .record(z.string(), z.any())
-  .describe(
-    "API parameters as top-level fields; must match the skill parameter contract (JSON Schema). "
-      + "Defaults from the contract apply when keys are omitted.",
-  );
+/**
+ * 包装 zod schema 以保证 JSON Schema 顶层一定有 `type: "object"`，兼容 DeepSeek 严格校验。
+ * 对于 z.object({}).passthrough() 这种"空对象"类型，LangChain 转换出的 JSON Schema
+ * 不会自动加 type: "object"，DeepSeek 会返回 400 错误。
+ * 这里在外层加一个虚拟字段 `payload` 来强制生成 type: "object"。
+ */
+function ensureObjectType<T extends z.ZodTypeAny>(inner: T, description: string): z.ZodType<{ payload?: unknown }> {
+  return z.object({ payload: inner.optional().describe(description) }).passthrough() as any;
+}
 
-const extendedPassthroughSkillToolSchema = z.object({}).passthrough();
+const extendedApiSkillLooseSchema = ensureObjectType(
+  z.object({}).passthrough(),
+  "API parameters as a single object. Must match the skill parameter contract (JSON Schema). "
+    + "Defaults from the contract apply when keys are omitted."
+);
+
+const extendedPassthroughSkillToolSchema = ensureObjectType(
+  z.object({}).passthrough(),
+  "Free-form skill input (object, string, or array)."
+);
 
 const extendedSkillConfirmationField = z.object({
   confirmed: z
@@ -2288,7 +2281,18 @@ export async function loadGatewayExtendedTools(
         schema: zodSchema,
         func: async (args: Record<string, unknown>, _runManager?: unknown, runConfig?: RunnableConfig) => {
           try {
-            let execInput: unknown = args;
+            // 兼容 DeepSeek 严格 schema 校验：模型可能把参数包在 `payload` 字段下。
+            // 如果 args 看起来是包装形式（只有一个 payload 字段），解包后使用。
+            let normalizedArgs: Record<string, unknown> = args || {};
+            if (
+              normalizedArgs
+              && typeof normalizedArgs === "object"
+              && Object.keys(normalizedArgs).length === 1
+              && "payload" in normalizedArgs
+            ) {
+              normalizedArgs = (normalizedArgs.payload as Record<string, unknown>) || {};
+            }
+            let execInput: unknown = normalizedArgs;
             let currentSkill = workingSkill;
             let currentConfig = config;
 

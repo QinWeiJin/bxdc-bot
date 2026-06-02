@@ -161,15 +161,24 @@ export type HistoryEntry = { role?: string; content?: unknown; [key: string]: un
 
 /**
  * Apply {@link sanitizeMessageContentForAgent} to each message; shallow-clone entries.
+ * Also filters out 'system' role messages as LLM API may not accept them in history.
  */
 export function sanitizeHistoryForAgent(history: HistoryEntry[]): Array<Record<string, unknown>> {
   if (!Array.isArray(history)) return [];
 
-  return history.map((m) => {
-    const next = { ...m };
-    if ("content" in next) {
-      next.content = sanitizeMessageContentForAgent(next.content);
-    }
-    return next;
-  });
+  return history
+    .filter((m) => {
+      const role = m?.role;
+      if (typeof role === 'string' && role.toLowerCase() === 'system') {
+        return false;
+      }
+      return true;
+    })
+    .map((m) => {
+      const next = { ...m };
+      if ("content" in next) {
+        next.content = sanitizeMessageContentForAgent(next.content);
+      }
+      return next;
+    });
 }

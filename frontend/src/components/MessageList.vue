@@ -4,13 +4,16 @@ import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent }
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest, type PollingStatus } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useSkillHub } from '../composables/useSkillHub'
+import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
+import ThinkingMode from './ThinkingMode.vue'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
 
 const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
 const { skills, fetchSkills } = useSkillHub()
+const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 
@@ -468,7 +471,9 @@ const chatItems = computed(() =>
     confirmations: message.confirmations ?? [],
     toolInvocations: message.toolInvocations ?? [],
     llmLogs: message.llmLogs ?? [],
+    sessionId: message.sessionId,
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
+    isLast: index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
     avatarEmoji: message.role === 'assistant' ? '🤖' : (currentUser.value?.avatar || '👤'),
@@ -503,7 +508,7 @@ const chatItems = computed(() =>
       default-scroll-to="bottom"
       :show-scroll-button="true"
       :clear-history="false"
-      :is-stream-load="false"
+      :is-stream-load="true"
       :text-loading="false"
       :animation="'moving'"
     >
@@ -519,22 +524,34 @@ const chatItems = computed(() =>
 
       <template #content="{ item }">
         <div class="message-content-block">
-          <transition name="thinking-fade">
-            <div v-if="item.showThinking" class="thinking-indicator">
-              <span class="thinking-emoji">🤔</span>
-              <span class="thinking-text">思考中</span>
-              <span class="thinking-wave" />
-            </div>
-          </transition>
-
-          <TChatContent
-            :role="item.role"
-            :content="
-              item.role === 'assistant'
-                ? { type: 'markdown', data: item.rawContent || '' }
-                : item.rawContent || ''
-            "
+          <!-- 思考模式组件：始终只用 ThinkingMode，不再显示老的小思考框 -->
+          <ThinkingMode
+            v-if="item.sessionId && getSession(item.sessionId)"
+            :nodes="getSession(item.sessionId)?.nodes || []"
+            :is-active="getSession(item.sessionId)?.isActive || false"
           />
+
+          <!-- 兜底：未进入 ThinkingMode session 时，构造一个初始 session 触发显示 -->
+          <ThinkingMode
+            v-else-if="item.showThinking"
+            :nodes="[]"
+            :is-active="true"
+          />
+
+          <div class="content-wrapper">
+            <TChatContent
+              :role="item.role"
+              :content="
+                item.role === 'assistant'
+                  ? { type: 'markdown', data: item.rawContent || '' }
+                  : item.rawContent || ''
+              "
+            />
+            <span
+              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent"
+              class="typewriter-cursor"
+            />
+          </div>
 
           <div
             v-for="conf in item.confirmations"
@@ -1182,54 +1199,6 @@ const chatItems = computed(() =>
   word-break: break-word;
 }
 
-.thinking-indicator {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 10px;
-  margin: 0;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(0, 82, 217, 0.08), rgba(0, 82, 217, 0.16));
-  color: var(--td-text-color-secondary);
-  animation: thinkingPulse 1.8s ease-in-out infinite;
-}
-
-.thinking-emoji {
-  display: inline-block;
-  font-size: 18px;
-  animation: thinkingBob 1.4s ease-in-out infinite;
-  transform-origin: center bottom;
-}
-
-.thinking-text {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.thinking-wave {
-  position: relative;
-  width: 48px;
-  height: 8px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(0, 82, 217, 0.12);
-}
-
-.thinking-wave::after {
-  content: '';
-  position: absolute;
-  /* `inset` is Chrome 87+; anchor bar to the left for Chromium 86 */
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 40%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, var(--td-brand-color), transparent);
-  animation: thinkingWave 1.2s linear infinite;
-}
-
 .empty-state {
   display: flex;
   align-items: center;
@@ -1324,41 +1293,91 @@ const chatItems = computed(() =>
 @keyframes thinkingBob {
   0%,
   100% {
-    transform: translateY(0) rotate(0deg);
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateY(-3px) rotate(-6deg) scale(1.02);
   }
   50% {
-    transform: translateY(-2px) rotate(-8deg);
+    transform: translateY(-5px) rotate(-10deg) scale(1.04);
+  }
+  75% {
+    transform: translateY(-3px) rotate(-4deg) scale(1.02);
   }
 }
 
 @keyframes thinkingPulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(0, 82, 217, 0.08);
+    box-shadow: 0 0 0 0 rgba(0, 82, 217, 0.06);
+    transform: scale(1);
   }
   50% {
-    box-shadow: 0 8px 20px 0 rgba(0, 82, 217, 0.14);
+    box-shadow: 0 6px 24px 2px rgba(0, 82, 217, 0.12);
+    transform: scale(1.01);
   }
 }
 
 @keyframes thinkingWave {
   0% {
-    transform: translateX(-120%);
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
   }
   100% {
-    transform: translateX(260%);
+    transform: translateX(280%);
+    opacity: 0;
   }
 }
 
-.thinking-fade-enter-active,
-.thinking-fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+/* 打字机效果 - 闪烁光标 */
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--td-brand-color);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: typewriterCursor 0.8s ease-in-out infinite;
 }
 
-.thinking-fade-enter-from,
-.thinking-fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
+@keyframes typewriterCursor {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 流式内容容器 */
+.streaming-content {
+  position: relative;
+}
+
+/* 打字机效果 - 淡入动画 */
+.typewriter-content {
+  animation: typewriterFadeIn 0.15s ease-out forwards;
+}
+
+@keyframes typewriterFadeIn {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 流式加载中的内容包装器 */
+.content-wrapper {
+  position: relative;
+  display: inline;
 }
 
 .confirmation-card {
