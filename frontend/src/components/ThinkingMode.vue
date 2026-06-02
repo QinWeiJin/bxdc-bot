@@ -32,7 +32,7 @@ const currentStepText = computed(() => {
   const node = activeNode.value
   switch (node.type) {
     case 'thinking':
-      return '思考中...'
+      return '准备调用...'
     case 'tool_call':
       return `调用工具: ${node.title.replace('调用工具: ', '')}`
     case 'tool_result':
@@ -73,12 +73,12 @@ const getNodeIcon = (type: ThinkingNode['type']) => {
 
 const getNodeLabel = (type: ThinkingNode['type']) => {
   switch (type) {
-    case 'thinking': return '思考中'
+    case 'thinking': return '调用准备'
     case 'tool_call': return '调用工具'
     case 'tool_result': return '工具返回'
     case 'llm_call': return '模型推理'
     case 'processing': return '处理中'
-    default: return '思考'
+    default: return '调用'
   }
 }
 
@@ -120,7 +120,7 @@ const getDisplayContent = (node: ThinkingNode): string | undefined => {
     <!-- 紧凑模式：实时显示当前状态 -->
     <div class="thinking-header" @click="isExpanded = !isExpanded">
       <span class="thinking-icon">{{ isActive ? '🧠' : '✅' }}</span>
-      <span class="thinking-title">思考模式</span>
+      <span class="thinking-title">调用过程</span>
       <span v-if="isActive" class="thinking-pulse-dot" />
       <div class="header-right">
         <span class="current-step" :class="{ 'is-active': isActive }">

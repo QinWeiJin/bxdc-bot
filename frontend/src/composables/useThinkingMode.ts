@@ -186,8 +186,8 @@ export function useThinkingMode() {
     if (getSession(sessionId)?.nodes.length === 0) {
       return addNode(sessionId, {
         type: 'thinking',
-        title: '开始思考',
-        content: '分析问题...',
+        title: '开始调用',
+        content: '准备调用流程...',
         status: 'active',
       })
     }
