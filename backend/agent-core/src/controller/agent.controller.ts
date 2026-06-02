@@ -644,7 +644,11 @@ export class AgentController {
             : '';
 
           const staticSystemPrompt = buildStaticSystemPrompt();
-
+          const profileDetails = await this.memoryService.fetchUserProfile(userId);
+          const systemContent = profileDetails
+            ? `${staticSystemPrompt}[个人特征信息]${profileDetails}`
+            : staticSystemPrompt;
+  
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
             .map((m) => {
@@ -656,7 +660,7 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          const userTurnContentWithSystem = `System:\n${staticSystemPrompt}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
 
           const messages = [
             ...validHistory,
