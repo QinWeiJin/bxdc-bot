@@ -16,4 +16,5 @@ export declare class MemoryService implements OnModuleInit {
         assistantText: string;
     }): Promise<void>;
     addMemory(userId: string, text: string, role?: 'user' | 'assistant' | 'system'): Promise<void>;
+    fetchUserProfile(userId: string): Promise<string>;
 }

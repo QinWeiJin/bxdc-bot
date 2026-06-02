@@ -142,6 +142,34 @@ let MemoryService = class MemoryService {
             assistantText: '好的，我已经记住了。'
         });
     }
+    async fetchUserProfile(userId) {
+        const enabled = process.env.MEM0_ENABLED?.trim().toLowerCase();
+        if (enabled === 'false' || enabled === '0' || enabled === 'off' || enabled === 'no') {
+            return '';
+        }
+        if (!userId) {
+            return '';
+        }
+        const url = process.env.MEM0_URL;
+        if (!url) {
+            return '';
+        }
+        try {
+            const response = await axios_1.default.post(url, {
+                sentence: '梦境记忆',
+                userid: userId,
+                topk: 1
+            }, { timeout: 5000 });
+            if (response.data?.code === 200 && response.data?.details) {
+                return response.data.details;
+            }
+            return '';
+        }
+        catch (e) {
+            console.error('[MemoryService] fetchUserProfile error:', e.message);
+            return '';
+        }
+    }
 };
 exports.MemoryService = MemoryService;
 exports.MemoryService = MemoryService = __decorate([

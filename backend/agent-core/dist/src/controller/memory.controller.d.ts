@@ -7,4 +7,9 @@ export declare class MemoryController {
         text: string;
         role?: 'user' | 'assistant' | 'system';
     }): Promise<void>;
+    getProfile(userId: string): Promise<{
+        userId: string;
+        details: string;
+        success: boolean;
+    }>;
 }

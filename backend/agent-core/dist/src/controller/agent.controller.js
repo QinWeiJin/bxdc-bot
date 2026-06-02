@@ -442,6 +442,10 @@ let AgentController = class AgentController {
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
                 const staticSystemPrompt = (0, prompts_1.buildStaticSystemPrompt)();
+                const profileDetails = await this.memoryService.fetchUserProfile(userId);
+                const systemContent = profileDetails
+                    ? `${staticSystemPrompt}[个人特征信息]${profileDetails}`
+                    : staticSystemPrompt;
                 const allowedHistoryRoles = new Set(['user', 'assistant']);
                 const validHistory = sanitizedHistory
                     .map((m) => {
@@ -454,7 +458,7 @@ let AgentController = class AgentController {
                     return { ...m, role: lr };
                 })
                     .filter((m) => m != null);
-                const userTurnContentWithSystem = `System:\n${staticSystemPrompt}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+                const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
                 const messages = [
                     ...validHistory,
                     { role: 'user', content: userTurnContentWithSystem },

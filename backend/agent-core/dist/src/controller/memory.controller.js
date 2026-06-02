@@ -24,6 +24,10 @@ let MemoryController = class MemoryController {
         console.log('[MemoryController] Adding memory:', body);
         return this.memoryService.addMemory(body.userId, body.text, body.role);
     }
+    async getProfile(userId) {
+        const details = await this.memoryService.fetchUserProfile(userId);
+        return { userId, details, success: !!details };
+    }
 };
 exports.MemoryController = MemoryController;
 __decorate([
@@ -33,6 +37,13 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", void 0)
 ], MemoryController.prototype, "addMemory", null);
+__decorate([
+    (0, common_1.Get)('profile'),
+    __param(0, (0, common_1.Query)('userId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], MemoryController.prototype, "getProfile", null);
 exports.MemoryController = MemoryController = __decorate([
     (0, common_1.Controller)('memory'),
     __metadata("design:paramtypes", [memory_service_1.MemoryService])
