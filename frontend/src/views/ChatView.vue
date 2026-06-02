@@ -1,14 +1,26 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { provideChat } from '../composables/useChat'
 import Layout from '../components/Layout.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 
 const { error, fetchGreeting } = provideChat()
+const route = useRoute()
 
 onMounted(() => {
   fetchGreeting()
+  // 如果是从任务通知跳过来的（?taskId=xxx），把任务 ID 暂存到 sessionStorage，
+  // MessageList 会读取并展示"已从通知进入"的提示横幅。
+  const taskId = route.query.taskId
+  if (typeof taskId === 'string' && taskId) {
+    try {
+      sessionStorage.setItem('pendingTaskId', taskId)
+    } catch {
+      // 忽略：sessionStorage 可能不可用
+    }
+  }
 })
 </script>
 
