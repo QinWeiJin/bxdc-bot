@@ -517,7 +517,7 @@ const chatItems = computed(() =>
     <template v-else>
       <transition name="banner-fade">
         <div v-if="showFromNotificationBanner" class="from-notification-banner">
-          <span class="banner-icon">🔔</span>
+          <span class="banner-icon">消息</span>
           <span class="banner-text">
             已从任务通知进入
             <span v-if="fromNotificationTaskId" class="banner-task-id">#{{ fromNotificationTaskId }}</span>
@@ -1254,7 +1254,14 @@ const chatItems = computed(() =>
 }
 
 .banner-icon {
-  font-size: 16px;
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-light);
+  border-radius: 4px;
+  letter-spacing: 0.04em;
 }
 
 .banner-task-id {

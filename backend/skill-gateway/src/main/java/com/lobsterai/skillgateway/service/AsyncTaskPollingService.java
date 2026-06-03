@@ -229,6 +229,15 @@ public class AsyncTaskPollingService {
         return asyncTaskMapper.autoMarkStaleAsRead();
     }
 
+    public int deleteByIdAndUser(Long taskId, String userId) {
+        return asyncTaskMapper.deleteByIdAndUser(taskId, userId);
+    }
+
+    public int deleteByIdsAndUser(String userId, java.util.List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return asyncTaskMapper.deleteByIdsAndUser(userId, ids);
+    }
+
     private String buildPreview(AsyncTask t) {
         if (!"COMPLETED".equals(t.getStatus())) return null;
         String src = t.getPollResult();

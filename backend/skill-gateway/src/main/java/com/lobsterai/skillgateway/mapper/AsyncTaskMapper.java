@@ -65,6 +65,29 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
                  @org.apache.ibatis.annotations.Param("userId") String userId);
 
     /**
+     * 删除单条任务。仅允许删除属于自己的任务。
+     * 1 表示删除成功，0 表示任务不存在或不属于该用户。
+     */
+    @Update("DELETE FROM async_tasks WHERE id = #{taskId} AND user_id = #{userId}")
+    int deleteByIdAndUser(@org.apache.ibatis.annotations.Param("taskId") Long taskId,
+                          @org.apache.ibatis.annotations.Param("userId") String userId);
+
+    /**
+     * 批量删除任务。仅删除属于该用户的任务。
+     * 返回实际删除的行数（可能小于请求数量）。
+     */
+    @Update({
+        "<script>",
+        "DELETE FROM async_tasks WHERE user_id = #{userId} AND id IN ",
+        "<foreach item='id' collection='ids' open='(' separator=',' close=')'>",
+        "#{id}",
+        "</foreach>",
+        "</script>"
+    })
+    int deleteByIdsAndUser(@org.apache.ibatis.annotations.Param("userId") String userId,
+                           @org.apache.ibatis.annotations.Param("ids") java.util.List<Long> ids);
+
+    /**
      * 自动清理：把"超过 7 天的已完成/失败/超时且未读"任务批量标为已读。
      * 避免历史数据堆积推给用户。
      */

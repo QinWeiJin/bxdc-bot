@@ -75,6 +75,57 @@ public class AsyncTaskNotificationController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * 单条删除任务。仅允许删除属于自己的任务。
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteOne(
+            @PathVariable("id") Long taskId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        if (StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(error("missing X-User-Id header"));
+        }
+        int affected = asyncTaskPollingService.deleteByIdAndUser(taskId, userId);
+        Map<String, Object> body = new HashMap<>();
+        body.put("ok", affected > 0);
+        body.put("affected", affected);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 批量删除任务。请求体：{ "ids": [1, 2, 3] }
+     */
+    @PostMapping("/batch-delete")
+    public ResponseEntity<?> batchDelete(
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        if (StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(error("missing X-User-Id header"));
+        }
+        Object idsObj = body.get("ids");
+        if (!(idsObj instanceof java.util.List)) {
+            return ResponseEntity.badRequest().body(error("ids must be a JSON array"));
+        }
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        for (Object o : (java.util.List<?>) idsObj) {
+            if (o instanceof Number) {
+                ids.add(((Number) o).longValue());
+            } else if (o instanceof String) {
+                try {
+                    ids.add(Long.parseLong((String) o));
+                } catch (NumberFormatException ignore) {
+                    // 跳过非数字项
+                }
+            }
+        }
+        int affected = asyncTaskPollingService.deleteByIdsAndUser(userId, ids);
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("ok", true);
+        resp.put("affected", affected);
+        resp.put("requested", ids.size());
+        return ResponseEntity.ok(resp);
+    }
+
     private static Map<String, Object> error(String msg) {
         return Collections.singletonMap("error", msg);
     }

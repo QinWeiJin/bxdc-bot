@@ -127,6 +127,65 @@ function createInstance() {
     }
   }
 
+  /**
+   * 删除单条任务。后端仅允许删除属于自己的任务。
+   * 成功后从本地列表中移除。
+   */
+  async function deleteTask(taskId: number): Promise<boolean> {
+    if (!currentUser.value?.id) return false
+    try {
+      const res = await fetch(apiUrl(`/api/async-tasks/${taskId}`), {
+        method: 'DELETE',
+        headers: authHeaders(),
+        credentials: 'include',
+      })
+      if (!res.ok) return false
+      const data = await res.json()
+      const ok = !!data.ok
+      if (ok) {
+        const removed = tasks.value.find(t => t.id === taskId)
+        tasks.value = tasks.value.filter(t => t.id !== taskId)
+        if (removed?.unread) {
+          const newUnread = tasks.value.filter(t => t.unread).length
+          if (newUnread < unreadCount.value) unreadCount.value = newUnread
+        }
+      }
+      return ok
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 批量删除任务。
+   * 返回后端实际删除的条数。
+   */
+  async function batchDelete(taskIds: number[]): Promise<number> {
+    if (!currentUser.value?.id || taskIds.length === 0) return 0
+    try {
+      const res = await fetch(apiUrl('/api/async-tasks/batch-delete'), {
+        method: 'POST',
+        headers: authHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ ids: taskIds }),
+      })
+      if (!res.ok) return 0
+      const data = await res.json()
+      const affected = Number(data.affected) || 0
+      // 本地移除被删除的（按后端返回的 affected 数）
+      const removed = tasks.value.filter(t => taskIds.includes(t.id))
+      const hadUnread = removed.some(t => t.unread)
+      tasks.value = tasks.value.filter(t => !taskIds.includes(t.id))
+      if (hadUnread) {
+        const newUnread = tasks.value.filter(t => t.unread).length
+        if (newUnread < unreadCount.value) unreadCount.value = newUnread
+      }
+      return affected
+    } catch {
+      return 0
+    }
+  }
+
   function openDrawer(): void {
     drawerVisible.value = true
     loadTasks(false, 50)
@@ -158,6 +217,8 @@ function createInstance() {
     fetchUnreadCount,
     loadTasks,
     acknowledge,
+    deleteTask,
+    batchDelete,
     openDrawer,
     closeDrawer,
     startPolling,
