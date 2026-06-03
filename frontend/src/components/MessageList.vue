@@ -7,8 +7,10 @@ import { useSkillHub } from '../composables/useSkillHub'
 import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
 import ThinkingMode from './ThinkingMode.vue'
-import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
+import { ChevronUpIcon, ChevronDownIcon, DownloadIcon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
+import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
+import { MessagePlugin } from 'tdesign-vue-next'
 
 const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
@@ -16,6 +18,7 @@ const { skills, fetchSkills } = useSkillHub()
 const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
+const downloadLoading = ref(false)
 
 // 从通知中心跳转标记：进入页面时显示一个"已从通知进入"的 banner，几秒后自动消失
 const showFromNotificationBanner = ref(false)
@@ -494,6 +497,22 @@ const chatItems = computed(() =>
     avatarEmoji: message.role === 'assistant' ? '🤖' : (currentUser.value?.avatar || '👤'),
   } as any)),
 )
+
+async function handleDownload(format: 'md' | 'pdf') {
+  downloadLoading.value = true
+  try {
+    if (format === 'md') {
+      downloadMarkdown(messages.value)
+    } else {
+      await downloadPdf(messages.value)
+    }
+  } catch (e) {
+    console.error('Download failed:', e)
+    MessagePlugin.error('下载失败，请重试')
+  } finally {
+    downloadLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -733,6 +752,22 @@ const chatItems = computed(() =>
           :content="item.rawContent"
           :operation-btn="['copy']"
         />
+        <t-dropdown
+          v-if="item.role === 'assistant' && messages.length > 0"
+          trigger="click"
+          :disabled="downloadLoading"
+        >
+          <t-button size="small" variant="outline" :loading="downloadLoading">
+            <template #icon><DownloadIcon /></template>
+            下载
+          </t-button>
+          <template #dropdown>
+            <t-dropdown-menu>
+              <t-dropdown-item @click="handleDownload('md')">Markdown (.md)</t-dropdown-item>
+              <t-dropdown-item @click="handleDownload('pdf')">PDF (.pdf)</t-dropdown-item>
+            </t-dropdown-menu>
+          </template>
+        </t-dropdown>
       </template>
     </TChat>
     </template>
