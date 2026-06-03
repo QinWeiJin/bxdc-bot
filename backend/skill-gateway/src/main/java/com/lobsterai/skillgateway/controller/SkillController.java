@@ -440,7 +440,7 @@ public class SkillController {
             return ResponseEntity.badRequest().body(Collections.singletonMap("error", "id is required"));
         }
         Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
-        if (ledgerOpt.isEmpty()) {
+        if (!ledgerOpt.isPresent()) {
             gatewayOutboundAuditService.recordSsh(
                     userId,
                     "unknown",
