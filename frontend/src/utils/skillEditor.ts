@@ -3,6 +3,22 @@ export type ConfigKind = 'api' | 'ssh' | 'template'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
+/**
+ * 异步轮询（PERIODIC）默认配置模板。
+ * 用户在 UI 切到 PERIODIC 且字段为空时，会自动写入这份默认 JSON。
+ */
+export const DEFAULT_ASYNC_POLL_TEMPLATE = `{
+  "pollEndpoint": "https://api.example.com/tasks/{id}/status",
+  "idJsonPath": "data.task_id",
+  "pollMethod": "GET",
+  "pollIntervalSeconds": 5,
+  "maxWaitSeconds": 600,
+  "completionJsonPath": "status",
+  "completionValue": "completed",
+  "failedValues": ["failed", "error"],
+  "resultJsonPath": "result"
+}`
+
 /** 与 agent-core `ExtendedSkillConfig.parameterBinding` 一致：扁平契约字段进 query、JSON body 或 form-urlencoded body。 */
 export type ApiParameterBinding = 'query' | 'jsonBody' | 'formBody'
 
@@ -24,7 +40,11 @@ export interface ApiConfigDraft {
   parameterContractText: string
   /** 是否启用异步轮询模式 */
   asyncPollEnabled: boolean
-  /** 异步轮询配置 JSON */
+  /** 轮询策略：'PERIODIC' = 周期轮询（默认，需要 pollEndpoint + {id}）；'SINGLE_CALL' = 单次长调用（不依赖 pollEndpoint） */
+  asyncPollStrategy: 'PERIODIC' | 'SINGLE_CALL'
+  /** SINGLE_CALL 模式专用：read timeout（秒），默认 600 */
+  asyncPollReadTimeoutSeconds: number
+  /** 异步轮询配置 JSON（PERIODIC 模式使用；SINGLE_CALL 模式自动从上面两个字段生成） */
   asyncPollText: string
 }
 
@@ -180,6 +200,12 @@ function parseJsonText(text: string, fieldName: string): unknown {
   }
 }
 
+function readAsyncPollReadTimeout(asyncPoll: unknown): number {
+  if (!asyncPoll || typeof asyncPoll !== 'object') return 600
+  const v = (asyncPoll as { singleCallReadTimeoutSeconds?: unknown }).singleCallReadTimeoutSeconds
+  return typeof v === 'number' ? v : 600
+}
+
 function readParameterBinding(record: JsonRecord): ApiParameterBinding {
   const v = record.parameterBinding
   if (v === undefined || v === null || v === '') return 'query'
@@ -205,6 +231,11 @@ function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
     interfaceDescription: readString(configuration, 'interfaceDescription'),
     parameterContractText: formatJsonText(configuration.parameterContract),
     asyncPollEnabled: configuration.asyncPoll != null,
+    asyncPollStrategy:
+      (configuration.asyncPoll && typeof configuration.asyncPoll === 'object' && (configuration.asyncPoll as { pollStrategy?: string }).pollStrategy === 'SINGLE_CALL')
+        ? 'SINGLE_CALL'
+        : 'PERIODIC',
+    asyncPollReadTimeoutSeconds: readAsyncPollReadTimeout(configuration.asyncPoll),
     asyncPollText: formatJsonText(configuration.asyncPoll),
   }
 }
@@ -226,6 +257,8 @@ function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
     interfaceDescription: '',
     parameterContractText: '',
     asyncPollEnabled: false,
+    asyncPollStrategy: 'PERIODIC',
+    asyncPollReadTimeoutSeconds: 600,
     asyncPollText: '',
   }
 }
@@ -335,6 +368,8 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       timeoutSeconds: 30,
       parameterBinding: 'query',
       responseTimestampField: '',
+      asyncPollStrategy: 'PERIODIC',
+      asyncPollReadTimeoutSeconds: 600,
       headersText: '',
       queryText: '',
       bodyText: '',
@@ -412,7 +447,18 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
     const query = parseJsonText(draft.queryText, 'Query')
     const body = parseJsonText(draft.bodyText, 'Body')
     const parameterContract = parseJsonText(draft.parameterContractText, '参数契约')
-    const asyncPoll = draft.asyncPollEnabled ? parseJsonText(draft.asyncPollText, '异步轮询配置') : undefined
+    // asyncPoll 配置：PERIODIC 用 asyncPollText，SINGLE_CALL 自动生成（不依赖 pollEndpoint）
+    let asyncPoll: unknown = undefined
+    if (draft.asyncPollEnabled) {
+      if (draft.asyncPollStrategy === 'SINGLE_CALL') {
+        asyncPoll = {
+          pollStrategy: 'SINGLE_CALL',
+          singleCallReadTimeoutSeconds: draft.asyncPollReadTimeoutSeconds,
+        }
+      } else {
+        asyncPoll = parseJsonText(draft.asyncPollText, '异步轮询配置')
+      }
+    }
     return JSON.stringify({
       kind: 'api',
       ...(draft.preset !== 'none' ? { preset: draft.preset } : {}),

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useAsyncTaskNotifications, type AsyncTaskNotification } from '../composables/useAsyncTaskNotifications'
+import { fmtShortTime, fmtFullTime } from '../utils/datetime'
 
 const {
   unreadCount,
@@ -19,6 +20,7 @@ function statusColor(status: string): 'primary' | 'success' | 'warning' | 'dange
   switch (status) {
     case 'PENDING': return 'default'
     case 'POLLING': return 'primary'
+    case 'SINGLE_CALLED': return 'primary'
     case 'COMPLETED': return 'success'
     case 'FAILED': return 'danger'
     case 'TIMEOUT': return 'warning'
@@ -30,6 +32,7 @@ function statusLabel(status: string): string {
   switch (status) {
     case 'PENDING': return '等待中'
     case 'POLLING': return '轮询中'
+    case 'SINGLE_CALLED': return '单次调用中'
     case 'COMPLETED': return '已完成'
     case 'FAILED': return '失败'
     case 'TIMEOUT': return '超时'
@@ -37,15 +40,16 @@ function statusLabel(status: string): string {
   }
 }
 
-function fmtTime(s: string | null): string {
-  if (!s) return ''
-  try {
-    const d = new Date(s)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-  } catch {
-    return ''
+function pollStrategyLabel(ps: string | null | undefined): string {
+  switch (ps) {
+    case 'PERIODIC': return '周期轮询'
+    case 'SINGLE_CALL': return '单次长调用'
+    default: return '周期轮询'
   }
+}
+
+function fmtTime(s: string | null): string {
+  return fmtShortTime(s)
 }
 
 function durationLabel(t: AsyncTaskNotification): string {
@@ -69,7 +73,7 @@ function durationLabel(t: AsyncTaskNotification): string {
 function progressPercent(t: AsyncTaskNotification): number {
   if (t.status === 'COMPLETED') return 100
   if (t.status === 'FAILED' || t.status === 'TIMEOUT') return 100
-  if (t.status === 'POLLING') {
+  if (t.status === 'POLLING' || t.status === 'SINGLE_CALLED') {
     // 粗略估算：基于 elapsed vs maxWait，超出则 99%
     const max = 1800 // 默认最长 30 分钟
     return Math.min(99, Math.floor(((t.elapsedSeconds || 0) / max) * 100))
@@ -82,6 +86,10 @@ function progressStatus(t: AsyncTaskNotification): 'success' | 'error' | 'active
   if (t.status === 'COMPLETED') return 'success'
   if (t.status === 'FAILED' || t.status === 'TIMEOUT') return 'error'
   return 'active'
+}
+
+function fmtDetailTime(s: string | null): string {
+  return fmtFullTime(s)
 }
 
 // 批量选择模式 + 选中集合
@@ -193,7 +201,6 @@ function handleClose() {
         </div>
         <t-loading v-if="loading && tasks.length === 0" text="加载中..." />
         <t-empty v-else-if="tasks.length === 0" description="暂无任务通知" />
-        <!-- 批量操作工具条 -->
         <div v-if="batchMode" class="batch-toolbar">
           <t-checkbox
             :checked="selectedIds.size === tasks.length && tasks.length > 0"
@@ -250,7 +257,7 @@ function handleClose() {
                 </div>
 
                 <t-progress
-                  v-if="t.status === 'POLLING' || t.status === 'PENDING' || t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'TIMEOUT'"
+                  v-if="t.status === 'POLLING' || t.status === 'PENDING' || t.status === 'SINGLE_CALLED' || t.status === 'COMPLETED' || t.status === 'FAILED' || t.status === 'TIMEOUT'"
                   :percentage="progressPercent(t)"
                   :status="progressStatus(t)"
                   :stroke-width="3"
@@ -271,7 +278,6 @@ function handleClose() {
               </div>
             </div>
 
-            <!-- 单条操作按钮：非批量模式显示 -->
             <div v-if="!batchMode" class="task-item-actions">
               <t-button theme="primary" size="small" variant="text" @click="handleViewDetail(t)">
                 查看
@@ -285,7 +291,6 @@ function handleClose() {
       </div>
     </t-drawer>
 
-    <!-- 任务详情弹窗（不跳转） -->
     <t-dialog
       v-model:visible="detailVisible"
       :header="detailTask ? `任务详情 #${detailTask.id}` : '任务详情'"
@@ -316,6 +321,10 @@ function handleClose() {
           <span class="detail-value mono">{{ detailTask.sessionId }}</span>
         </div>
         <div class="detail-row">
+          <span class="detail-label">轮询策略：</span>
+          <span class="detail-value">{{ pollStrategyLabel(detailTask.pollStrategy) }}</span>
+        </div>
+        <div class="detail-row">
           <span class="detail-label">重试次数：</span>
           <span class="detail-value">{{ detailTask.retryCount }}</span>
         </div>
@@ -325,19 +334,19 @@ function handleClose() {
         </div>
         <div class="detail-row">
           <span class="detail-label">开始时间：</span>
-          <span class="detail-value mono">{{ detailTask.startedAt || '—' }}</span>
+          <span class="detail-value mono">{{ fmtDetailTime(detailTask.startedAt) }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">创建时间：</span>
-          <span class="detail-value mono">{{ detailTask.createdAt || '—' }}</span>
+          <span class="detail-value mono">{{ fmtDetailTime(detailTask.createdAt) }}</span>
         </div>
         <div v-if="detailTask.completedAt" class="detail-row">
           <span class="detail-label">完成时间：</span>
-          <span class="detail-value mono">{{ detailTask.completedAt }}</span>
+          <span class="detail-value mono">{{ fmtDetailTime(detailTask.completedAt) }}</span>
         </div>
 
         <t-progress
-          v-if="detailTask.status === 'POLLING' || detailTask.status === 'PENDING'"
+          v-if="detailTask.status === 'POLLING' || detailTask.status === 'PENDING' || detailTask.status === 'SINGLE_CALLED'"
           :percentage="progressPercent(detailTask)"
           :status="progressStatus(detailTask)"
           :stroke-width="4"
@@ -397,15 +406,6 @@ function handleClose() {
   transition: all 0.2s ease;
 }
 
-.task-item.is-clickable {
-  cursor: pointer;
-}
-
-.task-item.is-clickable:hover {
-  border-color: var(--td-brand-color);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
 .task-item.is-unread {
   border-left: 3px solid var(--td-brand-color);
   background: var(--td-brand-color-light);
@@ -460,14 +460,6 @@ function handleClose() {
   color: var(--td-error-color);
 }
 
-.task-no-session-hint {
-  font-size: 11px;
-  color: var(--td-text-color-disabled);
-  margin-top: 6px;
-  font-style: italic;
-}
-
-/* ====== 批量操作工具条 ====== */
 .list-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -490,7 +482,6 @@ function handleClose() {
   gap: 4px;
 }
 
-/* ====== 单条任务改造 ====== */
 .task-item-main {
   display: flex;
   align-items: flex-start;
@@ -507,52 +498,35 @@ function handleClose() {
 
 .task-item-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
   gap: 4px;
   margin-left: 8px;
 }
 
-.task-item-actions .t-button {
-  padding: 0 4px;
-  min-width: 0;
-  font-size: 12px;
-}
-
-.task-item.is-selected {
-  border-color: var(--td-brand-color);
-  background: var(--td-brand-color-light);
-}
-
-/* ====== 详情弹窗 ====== */
 .task-detail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
+  gap: 8px;
 }
 
 .detail-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 13px;
 }
 
 .detail-label {
-  min-width: 84px;
-  color: var(--td-text-color-placeholder);
-  flex-shrink: 0;
+  color: var(--td-text-color-secondary);
+  min-width: 80px;
 }
 
 .detail-value {
   color: var(--td-text-color-primary);
-  word-break: break-all;
 }
 
 .detail-value.mono {
   font-family: var(--td-font-family-mono);
-  font-size: 12px;
+  word-break: break-all;
 }
 
 .muted {
@@ -561,35 +535,35 @@ function handleClose() {
 }
 
 .detail-progress {
-  margin: 8px 0;
+  margin: 12px 0;
 }
 
 .detail-block {
-  border: 1px solid var(--td-component-stroke);
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--td-bg-color-secondarycontainer);
   border-radius: 6px;
-  padding: 8px 12px;
-  background: var(--td-bg-color-container);
 }
 
 .detail-block-error {
-  border-color: var(--td-error-color);
   background: var(--td-error-color-light);
 }
 
 .detail-block-title {
   font-size: 12px;
   font-weight: 500;
-  color: var(--td-text-color-placeholder);
+  color: var(--td-text-color-secondary);
   margin-bottom: 6px;
 }
 
 .detail-block-content {
-  margin: 0;
   font-size: 12px;
-  font-family: var(--td-font-family-mono);
+  color: var(--td-text-color-primary);
   white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 280px;
-  overflow-y: auto;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  font-family: var(--td-font-family-mono);
 }
 </style>

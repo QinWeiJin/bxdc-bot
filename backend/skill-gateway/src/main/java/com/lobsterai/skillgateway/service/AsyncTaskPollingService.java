@@ -102,6 +102,16 @@ public class AsyncTaskPollingService {
         return newCount;
     }
 
+    /**
+     * 按 session 维度查找最近的同签名任务。
+     * null 输入直接返回 null（由调用方处理）；窗口由调用方传（PER_SESSION / NO_SESSION）。
+     */
+    public AsyncTask findRecentBySignatureInSession(
+            String userId, String sessionId, String signature, int windowSeconds) {
+        if (userId == null || signature == null) return null;
+        return asyncTaskMapper.findRecentBySignatureInSession(userId, sessionId, signature, windowSeconds);
+    }
+
     public List<AsyncTask> findPendingOrPollingTasks(int limit) {
         return asyncTaskMapper.findPendingOrPolling(limit);
     }
@@ -210,7 +220,13 @@ public class AsyncTaskPollingService {
             String skillName = t.getSkillId() == null ? null : skillNameCache.get(t.getSkillId());
             long elapsed = 0;
             if (t.getStartedAt() != null) {
-                elapsed = ChronoUnit.SECONDS.between(t.getStartedAt(), LocalDateTime.now());
+                // 终态（COMPLETED / FAILED / TIMEOUT）用 completedAt 冻结耗时，
+                // 否则用 now() 实时增长。未启动的任务 elapsed=0。
+                String status = t.getStatus();
+                boolean isTerminal = "COMPLETED".equals(status) || "FAILED".equals(status) || "TIMEOUT".equals(status);
+                LocalDateTime end = (isTerminal && t.getCompletedAt() != null) ? t.getCompletedAt() : LocalDateTime.now();
+                elapsed = ChronoUnit.SECONDS.between(t.getStartedAt(), end);
+                if (elapsed < 0) elapsed = 0;
             }
             String preview = buildPreview(t);
             return AsyncTaskNotificationDto.from(t, skillName, 0, elapsed, preview);

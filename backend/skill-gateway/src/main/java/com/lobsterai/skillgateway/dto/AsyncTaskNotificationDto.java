@@ -9,6 +9,9 @@ import java.util.List;
 /**
  * 异步任务通知 DTO。
  * 用于通知中心列表展示，合并了 AsyncTask + skill.name + 进度统计。
+ *
+ * 时间字段一律按 UTC 序列化（pattern 末尾带 'Z' + timezone="UTC"），
+ * 由前端 utils/datetime.ts 的 parseBackendTimeAsUtc 反序列化为本地时间显示。
  */
 public class AsyncTaskNotificationDto {
 
@@ -19,22 +22,23 @@ public class AsyncTaskNotificationDto {
     private String sessionId;
 
     private String status;
+    private String pollStrategy; // 'PERIODIC' | 'SINGLE_CALL' | null
     private Integer retryCount;
     private Long elapsedSeconds;
     private Integer pollResponseCount;
 
     private String errorMessage;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
     private LocalDateTime startedAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
     private LocalDateTime completedAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
     private LocalDateTime createdAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
     private LocalDateTime notifiedAt;
 
     private boolean unread;
@@ -49,6 +53,7 @@ public class AsyncTaskNotificationDto {
         d.externalTaskId = t.getExternalTaskId();
         d.sessionId = t.getSessionId();
         d.status = t.getStatus();
+        d.pollStrategy = t.getPollStrategy();
         d.retryCount = t.getPollRetryCount() == null ? 0 : t.getPollRetryCount();
         d.elapsedSeconds = elapsedSeconds;
         d.pollResponseCount = pollResponseCount;
@@ -75,6 +80,8 @@ public class AsyncTaskNotificationDto {
     public void setSessionId(String sessionId) { this.sessionId = sessionId; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getPollStrategy() { return pollStrategy; }
+    public void setPollStrategy(String pollStrategy) { this.pollStrategy = pollStrategy; }
     public Integer getRetryCount() { return retryCount; }
     public void setRetryCount(Integer retryCount) { this.retryCount = retryCount; }
     public Long getElapsedSeconds() { return elapsedSeconds; }

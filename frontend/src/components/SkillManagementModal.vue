@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import TextOptimizeModal from './TextOptimizeModal.vue';
@@ -22,6 +22,7 @@ import {
   getPresetLabel,
   parseSkillDraft,
   serializeSkillDraft,
+  DEFAULT_ASYNC_POLL_TEMPLATE,
   type ConfigKind,
   type ExecutionMode,
   type SkillConfigDraft,
@@ -101,6 +102,18 @@ const apiDraft = computed(() => (isApiDraft(configDraft.value) ? configDraft.val
 const sshDraft = computed(() => (isSshDraft(configDraft.value) ? configDraft.value : null));
 const templateDraft = computed(() => (isTemplateDraft(configDraft.value) ? configDraft.value : null));
 const openClawDraft = computed(() => (isOpenClawDraft(configDraft.value) ? configDraft.value : null));
+
+// PERIODIC 切回时，如果 JSON 字段为空，自动写入默认模板（避免用户重新手写）
+watch(
+  () => (apiDraft.value ? apiDraft.value.asyncPollStrategy : null),
+  (newStrategy, oldStrategy) => {
+    const draft = apiDraft.value
+    if (!draft) return
+    if (newStrategy === 'PERIODIC' && oldStrategy !== 'PERIODIC' && !draft.asyncPollText.trim()) {
+      draft.asyncPollText = DEFAULT_ASYNC_POLL_TEMPLATE
+    }
+  }
+)
 
 const suggestedTools = computed(() => {
   const names = new Set<string>(['compute']);
@@ -482,21 +495,24 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
               要求上游提供独立的状态查询端点（见文档）。
             </p>
           </t-form-item>
-          <t-form-item v-if="apiDraft.asyncPollEnabled" label="异步轮询配置 (JSON)" name="apiAsyncPollText">
+          <t-form-item v-if="apiDraft.asyncPollEnabled" label="轮询策略" name="apiAsyncPollStrategy">
+            <t-radio-group v-model="apiDraft.asyncPollStrategy">
+              <t-radio value="PERIODIC">周期轮询（需要提供状态查询端点 + {id} 占位符）</t-radio>
+              <t-radio value="SINGLE_CALL">单次长调用（无需 pollEndpoint，提交后立即返回，长 readTimeout 等结果）</t-radio>
+            </t-radio-group>
+          </t-form-item>
+          <t-form-item v-if="apiDraft.asyncPollEnabled && apiDraft.asyncPollStrategy === 'SINGLE_CALL'" label="单次调用 read timeout（秒）" name="apiAsyncPollReadTimeoutSeconds">
+            <t-input-number v-model="apiDraft.asyncPollReadTimeoutSeconds" :min="1" :max="3600" :step="30" />
+            <p class="skill-param-binding-hint">
+              单次调用的最大等待时间（秒）。到达后由后台线程继续等待，完成后写回通知中心。默认 600。
+            </p>
+          </t-form-item>
+          <t-form-item v-if="apiDraft.asyncPollEnabled && apiDraft.asyncPollStrategy === 'PERIODIC'" label="异步轮询配置 (JSON)" name="apiAsyncPollText">
             <div class="optimize-textarea-wrap">
               <t-textarea
                 v-model="apiDraft.asyncPollText"
                 :autosize="{ minRows: 6, maxRows: 14 }"
-                placeholder='{
-  "pollEndpoint": "https://api.example.com/tasks/{id}/status",
-  "idJsonPath": "data.task_id",
-  "completionJsonPath": "status",
-  "completionValue": "completed",
-  "failedValues": ["failed", "error"],
-  "resultJsonPath": "result",
-  "maxWaitSeconds": 600,
-  "pollIntervalSeconds": 5
-}'
+                :placeholder="DEFAULT_ASYNC_POLL_TEMPLATE"
               />
               <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('api_async_poll', '异步轮询配置', apiDraft!.asyncPollText)">
                 ✨ AI 优化
