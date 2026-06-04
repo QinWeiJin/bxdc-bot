@@ -793,8 +793,8 @@ async function copyContent(text: string) {
             </t-tooltip>
             <template #dropdown>
               <t-dropdown-menu>
-                <t-dropdown-item @click="handleDownload('md', messages.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
-                <t-dropdown-item @click="handleDownload('pdf', messages.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('md', messages?.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('pdf', messages?.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
               </t-dropdown-menu>
             </template>
           </t-dropdown>
