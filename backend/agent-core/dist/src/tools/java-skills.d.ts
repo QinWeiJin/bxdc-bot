@@ -83,7 +83,7 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
     parameterBinding: z.ZodOptional<z.ZodEnum<["query", "jsonBody", "formBody"]>>;
     timeoutSeconds: z.ZodEffects<z.ZodOptional<z.ZodNumber>, number, unknown>;
     asyncPoll: z.ZodEffects<z.ZodOptional<z.ZodObject<{
-        pollEndpoint: z.ZodString;
+        pollEndpoint: z.ZodOptional<z.ZodString>;
         idJsonPath: z.ZodOptional<z.ZodString>;
         pollMethod: z.ZodOptional<z.ZodString>;
         pollIntervalSeconds: z.ZodOptional<z.ZodNumber>;
@@ -93,6 +93,8 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
         failedValues: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         resultJsonPath: z.ZodOptional<z.ZodString>;
         pollHeaders: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
+        pollStrategy: z.ZodOptional<z.ZodEnum<["PERIODIC", "SINGLE_CALL"]>>;
+        singleCallReadTimeoutSeconds: z.ZodOptional<z.ZodNumber>;
     }, "strip", z.ZodTypeAny, {
         pollEndpoint?: string;
         idJsonPath?: string;
@@ -104,6 +106,8 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
         failedValues?: string[];
         resultJsonPath?: string;
         pollHeaders?: Record<string, string>;
+        pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+        singleCallReadTimeoutSeconds?: number;
     }, {
         pollEndpoint?: string;
         idJsonPath?: string;
@@ -115,6 +119,8 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
         failedValues?: string[];
         resultJsonPath?: string;
         pollHeaders?: Record<string, string>;
+        pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+        singleCallReadTimeoutSeconds?: number;
     }>>, {
         pollEndpoint?: string;
         idJsonPath?: string;
@@ -126,6 +132,8 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
         failedValues?: string[];
         resultJsonPath?: string;
         pollHeaders?: Record<string, string>;
+        pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+        singleCallReadTimeoutSeconds?: number;
     }, unknown>;
     testInput: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>, Record<string, unknown>, unknown>;
     enabled: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
@@ -161,6 +169,8 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
         failedValues?: string[];
         resultJsonPath?: string;
         pollHeaders?: Record<string, string>;
+        pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+        singleCallReadTimeoutSeconds?: number;
     };
     testInput?: Record<string, unknown>;
     enabled?: boolean;

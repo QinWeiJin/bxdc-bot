@@ -17,7 +17,8 @@ export interface AsyncTaskNotification {
   skillName: string | null
   externalTaskId: string | null
   sessionId: string | null
-  status: 'PENDING' | 'POLLING' | 'COMPLETED' | 'FAILED' | 'TIMEOUT' | string
+  status: 'PENDING' | 'POLLING' | 'SINGLE_CALLED' | 'COMPLETED' | 'FAILED' | 'TIMEOUT' | string
+  pollStrategy: 'PERIODIC' | 'SINGLE_CALL' | null
   retryCount: number
   elapsedSeconds: number
   pollResponseCount: number

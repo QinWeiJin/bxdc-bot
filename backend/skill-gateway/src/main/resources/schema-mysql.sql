@@ -149,9 +149,14 @@ CREATE TABLE IF NOT EXISTS async_tasks (
     created_at DATETIME,
     updated_at DATETIME,
     notified_at DATETIME DEFAULT NULL COMMENT '用户已读时间；NULL 表示尚未读',
+    poll_strategy VARCHAR(20) DEFAULT 'PERIODIC' COMMENT 'PERIODIC=周期轮询；SINGLE_CALL=单次长调用',
+    single_call_read_timeout_seconds INT DEFAULT NULL COMMENT 'SINGLE_CALL 专用 read timeout（秒）；NULL 回退 maxWaitSeconds',
+    request_signature VARCHAR(64) DEFAULT NULL COMMENT '请求签名 SHA-256 hex（去重用）',
+    request_body MEDIUMTEXT DEFAULT NULL COMMENT 'SINGLE_CALL 模式的原始请求体（JSON 字符串）；PERIODIC 模式为 NULL',
     INDEX idx_async_status (status),
     INDEX idx_async_skill_id (skill_id),
-    INDEX idx_async_user_unread (user_id, status, notified_at)
+    INDEX idx_async_user_unread (user_id, status, notified_at),
+    INDEX idx_async_user_session_sig_time (user_id, session_id, request_signature, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS skill_text_prompts (
