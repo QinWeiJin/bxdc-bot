@@ -1,4 +1,5 @@
 import type { Message } from '../composables/useChat'
+import { loadPdfLibs } from './vendorLoader'
 
 /**
  * 获取当前时间戳字符串，用于文件名
@@ -19,9 +20,9 @@ function formatTime(ts: number): string {
 }
 
 /**
- * 构建 Markdown 内容
+ * 构建 Markdown 内容（单条消息）
  */
-export function buildMarkdownContent(messages: Message[]): string {
+export function buildMarkdownContent(msg: Message): string {
   const lines: string[] = []
   lines.push('# BXDC.bot 对话记录')
   lines.push('')
@@ -30,31 +31,24 @@ export function buildMarkdownContent(messages: Message[]): string {
   lines.push('---')
   lines.push('')
 
-  for (const msg of messages) {
-    const time = formatTime(msg.timestamp)
-    if (msg.role === 'user') {
-      lines.push(`### 用户 (${time})`)
-    } else {
-      lines.push(`### BXDC.bot (${time})`)
-    }
-    lines.push('')
-    lines.push(msg.content || '')
-    lines.push('')
-    lines.push('---')
-    lines.push('')
-  }
+  const time = formatTime(msg.timestamp)
+  const label = msg.role === 'user' ? '用户' : 'BXDC.bot'
+  lines.push(`### ${label} (${time})`)
+  lines.push('')
+  lines.push(msg.content || '')
+  lines.push('')
 
   return lines.join('\n')
 }
 
 /**
- * 下载 Markdown 文件
+ * 下载 Markdown 文件（单条消息）
  */
-export function downloadMarkdown(messages: Message[]): void {
-  if (!messages.length) {
+export function downloadMarkdown(msg: Message): void {
+  if (!msg || !msg.content) {
     return
   }
-  const content = buildMarkdownContent(messages)
+  const content = buildMarkdownContent(msg)
   const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
   downloadBlob(blob, `bxdc-chat-${timestamp()}.md`)
 }
@@ -71,28 +65,14 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * 构建 PDF 渲染用的 HTML 字符串
+ * 构建 PDF 渲染用的 HTML 字符串（单条消息）
  */
-function buildPdfHtml(messages: Message[]): string {
-  const rows: string[] = []
-
-  for (const msg of messages) {
-    const label = msg.role === 'user' ? '用户' : 'BXDC.bot'
-    const time = formatTime(msg.timestamp)
-    const body = escapeHtml(msg.content || '')
-      .replace(/\n/g, '<br>')
-    const roleColor = msg.role === 'user' ? '#2563eb' : '#059669'
-
-    rows.push(`
-      <div style="margin-bottom: 12px; padding: 8px 12px; border-left: 3px solid ${roleColor}; background: #f8fafc; border-radius: 4px;">
-        <div style="font-size: 12px; color: ${roleColor}; font-weight: 600; margin-bottom: 4px;">
-          ${escapeHtml(label)} · ${escapeHtml(time)}
-        </div>
-        <div style="font-size: 13px; color: #1e293b; line-height: 1.6; white-space: pre-wrap;">
-          ${body}
-        </div>
-      </div>`)
-  }
+function buildPdfHtml(msg: Message): string {
+  const label = msg.role === 'user' ? '用户' : 'BXDC.bot'
+  const time = formatTime(msg.timestamp)
+  const body = escapeHtml(msg.content || '')
+    .replace(/\n/g, '<br>')
+  const roleColor = msg.role === 'user' ? '#2563eb' : '#059669'
 
   return `<!DOCTYPE html>
 <html>
@@ -102,54 +82,96 @@ function buildPdfHtml(messages: Message[]): string {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
-      padding: 20px;
+      padding: 30px;
       color: #1e293b;
     }
-    .title { font-size: 22px; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
-    .subtitle { font-size: 11px; color: #64748b; margin-bottom: 12px; }
-    .divider { height: 1px; background: #e2e8f0; margin-bottom: 16px; }
+    .title { font-size: 26px; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+    .subtitle { font-size: 14px; color: #64748b; margin-bottom: 16px; }
+    .divider { height: 1px; background: #e2e8f0; margin-bottom: 20px; }
+    .msg-block { margin-bottom: 16px; padding: 12px 16px; border-left: 4px solid ${roleColor}; background: #f8fafc; border-radius: 6px; }
+    .msg-label { font-size: 15px; color: ${roleColor}; font-weight: 600; margin-bottom: 6px; }
+    .msg-body { font-size: 16px; color: #1e293b; line-height: 1.8; white-space: pre-wrap; }
   </style>
 </head>
 <body>
   <div class="title">BXDC.bot 对话记录</div>
   <div class="subtitle">导出时间：${escapeHtml(new Date().toLocaleString('zh-CN'))}</div>
   <div class="divider"></div>
-  ${rows.join('')}
+  <div class="msg-block">
+    <div class="msg-label">${escapeHtml(label)} · ${escapeHtml(time)}</div>
+    <div class="msg-body">${body}</div>
+  </div>
 </body>
 </html>`
 }
 
 /**
- * 下载 PDF 文件（动态 import jspdf，使用 html() 方法通过浏览器 DOM 渲染中文）
+ * 下载 PDF 文件（离屏 iframe + 本地 vendor JS 渲染，无 npm 依赖）
  */
-export async function downloadPdf(messages: Message[]): Promise<void> {
-  if (!messages.length) {
+export async function downloadPdf(msg: Message): Promise<void> {
+  if (!msg || !msg.content) {
     return
   }
 
-  const { jsPDF } = await import('jspdf')
+  // 加载本地 vendor 脚本（jspdf + html2canvas），已加载过则跳过
+  await loadPdfLibs()
+
+  const { jsPDF } = (window as any).jspdf
+  const html2canvas = (window as any).html2canvas
+
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const html = buildPdfHtml(msg)
 
-  const html = buildPdfHtml(messages)
+  // 离屏 iframe：渲染在屏幕外，html2canvas 捕获，用户完全看不到
+  const iframe = document.createElement('iframe')
+  iframe.style.cssText = 'position:fixed;top:-99999px;left:-99999px;width:900px;height:1400px;border:none;'
+  document.body.appendChild(iframe)
 
-  // 在 body 下创建一个隐藏容器用于 html() 渲染
-  const container = document.createElement('div')
-  container.style.cssText = 'position:absolute;left:-9999px;top:0;width:190mm;'
-  container.innerHTML = html
-  document.body.appendChild(container)
+  const iframeDoc = iframe.contentDocument!
+  iframeDoc.open()
+  iframeDoc.write(html)
+  iframeDoc.close()
+
+  // 等待 iframe 内浏览器完成布局 + 字体渲染
+  await new Promise<void>(resolve => {
+    const win = iframe.contentWindow!
+    win.requestAnimationFrame(() => win.requestAnimationFrame(() => resolve()))
+  })
 
   try {
-    await doc.html(container, {
-      callback: (doc) => {
-        doc.save(`bxdc-chat-${timestamp()}.pdf`)
-      },
-      margin: [10, 10, 10, 10],
-      autoPaging: 'text',
-      width: 190,
-      windowWidth: 800,
+    const body = iframeDoc.body
+    const canvas = await html2canvas(body, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
     })
+
+    const pageWidth = 210  // A4 宽度 mm
+    const pageHeight = 297 // A4 高度 mm
+    const pxPerMm = canvas.width / pageWidth
+    let srcY = 0
+    let page = 0
+
+    while (srcY < canvas.height) {
+      if (page > 0) doc.addPage()
+
+      const sliceH = Math.min(pageHeight * pxPerMm, canvas.height - srcY)
+      const sliceCanvas = document.createElement('canvas')
+      sliceCanvas.width = canvas.width
+      sliceCanvas.height = sliceH
+      const ctx = sliceCanvas.getContext('2d')!
+      ctx.drawImage(canvas, 0, srcY, canvas.width, sliceH, 0, 0, canvas.width, sliceH)
+
+      const sliceMmHeight = (sliceH * pageWidth) / canvas.width
+      doc.addImage(sliceCanvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, sliceMmHeight)
+
+      srcY += pageHeight * pxPerMm
+      page++
+    }
+
+    doc.save(`bxdc-chat-${timestamp()}.pdf`)
   } finally {
-    document.body.removeChild(container)
+    document.body.removeChild(iframe)
   }
 }
 

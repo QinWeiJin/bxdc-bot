@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue'
-import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
+import { Chat as TChat, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest, type PollingStatus } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useSkillHub } from '../composables/useSkillHub'
 import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
 import ThinkingMode from './ThinkingMode.vue'
-import { ChevronUpIcon, ChevronDownIcon, DownloadIcon } from 'tdesign-icons-vue-next'
+import { ChevronUpIcon, ChevronDownIcon, DownloadIcon, RefreshIcon, CopyIcon, ThumbUpIcon, ThumbDownIcon, Share1Icon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
 import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
 import { MessagePlugin } from 'tdesign-vue-next'
@@ -498,19 +498,28 @@ const chatItems = computed(() =>
   } as any)),
 )
 
-async function handleDownload(format: 'md' | 'pdf') {
+async function handleDownload(format: 'md' | 'pdf', msg: Message) {
   downloadLoading.value = true
   try {
     if (format === 'md') {
-      downloadMarkdown(messages.value)
+      downloadMarkdown(msg)
     } else {
-      await downloadPdf(messages.value)
+      await downloadPdf(msg)
     }
   } catch (e) {
     console.error('Download failed:', e)
     MessagePlugin.error('下载失败，请重试')
   } finally {
     downloadLoading.value = false
+  }
+}
+
+async function copyContent(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    MessagePlugin.success('已复制到剪贴板')
+  } catch {
+    MessagePlugin.error('复制失败')
   }
 }
 </script>
@@ -747,27 +756,49 @@ async function handleDownload(format: 'md' | 'pdf') {
       </template>
 
       <template #actions="{ item }">
-        <TChatAction
-          v-if="item.role === 'assistant' && item.rawContent"
-          :content="item.rawContent"
-          :operation-btn="['copy']"
-        />
-        <t-dropdown
-          v-if="item.role === 'assistant' && messages.length > 0"
-          trigger="click"
-          :disabled="downloadLoading"
-        >
-          <t-button size="small" variant="outline" :loading="downloadLoading">
-            <template #icon><DownloadIcon /></template>
-            下载
-          </t-button>
-          <template #dropdown>
-            <t-dropdown-menu>
-              <t-dropdown-item @click="handleDownload('md')">Markdown (.md)</t-dropdown-item>
-              <t-dropdown-item @click="handleDownload('pdf')">PDF (.pdf)</t-dropdown-item>
-            </t-dropdown-menu>
-          </template>
-        </t-dropdown>
+        <div v-if="item.role === 'assistant' && item.rawContent" class="chat-actions-bar">
+          <t-tooltip content="重新生成">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><RefreshIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-tooltip content="复制">
+            <t-button theme="default" size="small" variant="text" @click="copyContent(item.rawContent)">
+              <template #icon><CopyIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip content="点赞">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><ThumbUpIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip content="踩">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><ThumbDownIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-tooltip content="分享">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><Share1Icon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-dropdown trigger="click" :disabled="downloadLoading">
+            <t-tooltip content="下载">
+              <t-button theme="default" size="small" variant="text" :loading="downloadLoading">
+                <template #icon><DownloadIcon /></template>
+              </t-button>
+            </t-tooltip>
+            <template #dropdown>
+              <t-dropdown-menu>
+                <t-dropdown-item @click="handleDownload('md', messages.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('pdf', messages.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
+              </t-dropdown-menu>
+            </template>
+          </t-dropdown>
+        </div>
       </template>
     </TChat>
     </template>
@@ -1626,5 +1657,39 @@ async function handleDownload(format: 'md' | 'pdf') {
 
 .confirmation-badge--expired {
   color: var(--td-text-color-placeholder);
+}
+
+/* 自定义操作栏，与 TDesign t-chat__actions 样式一致 */
+.chat-actions-bar {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  margin-top: var(--td-comp-margin-xs);
+  background-color: var(--td-bg-color-secondarycontainer);
+  border-radius: var(--td-radius-medium);
+  border: 1px solid var(--td-border-level-2-color);
+  gap: 0;
+}
+.chat-actions-bar .t-button {
+  padding: var(--td-comp-paddingTB-xs) var(--td-comp-paddingLR-xs);
+  width: var(--td-comp-size-xxxs);
+  height: var(--td-comp-size-xxxs);
+  box-sizing: content-box;
+  color: var(--td-text-color-primary);
+  background-color: transparent;
+  border: 0;
+  margin-right: var(--td-comp-margin-xs);
+}
+.chat-actions-bar .t-button .t-icon {
+  font-size: var(--td-font-size-body-large);
+}
+.chat-actions-bar .t-button:hover {
+  background-color: var(--td-bg-color-secondarycontainer-hover);
+}
+.chat-actions-divider {
+  width: 1px;
+  height: var(--td-comp-size-xxxs);
+  background-color: var(--td-component-stroke);
+  margin-right: var(--td-comp-margin-xs);
 }
 </style>
