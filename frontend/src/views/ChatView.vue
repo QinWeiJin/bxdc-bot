@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, onErrorCaptured, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { provideChat } from '../composables/useChat'
 import Layout from '../components/Layout.vue'
@@ -11,23 +11,63 @@ const route = useRoute()
 
 onMounted(() => {
   fetchGreeting()
-  // 如果是从任务通知跳过来的（?taskId=xxx），把任务 ID 暂存到 sessionStorage，
-  // MessageList 会读取并展示"已从通知进入"的提示横幅。
   const taskId = route.query.taskId
   if (typeof taskId === 'string' && taskId) {
     try {
       sessionStorage.setItem('pendingTaskId', taskId)
     } catch {
-      // 忽略：sessionStorage 可能不可用
+      // ignore
     }
   }
+  // 调试：抓 TCard 内部结构
+  nextTick(() => {
+    setTimeout(() => {
+      const shell = document.querySelector('.chat-shell')
+      if (shell) {
+        console.log('=== .chat-shell 子节点 ===')
+        Array.from(shell.children).forEach((c, i) => {
+          const r = c.getBoundingClientRect()
+          const cs = getComputedStyle(c)
+          console.log(`  child[${i}]: <${c.tagName.toLowerCase()}> class="${c.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)} display=${cs.display}`)
+          Array.from(c.children).forEach((cc, j) => {
+            const rr = cc.getBoundingClientRect()
+            const ccs = getComputedStyle(cc)
+            console.log(`    grandchild[${j}]: <${cc.tagName.toLowerCase()}> class="${cc.className}" ${rr.width.toFixed(0)}x${rr.height.toFixed(0)} display=${ccs.display}`)
+          })
+        })
+      }
+      // 查 TCard 全部 children
+      const tc = document.querySelector('.t-card')
+      if (tc) {
+        console.log('=== .t-card 内部（不通过 .chat-shell .t-card 链） ===')
+        Array.from(tc.children).forEach((c, i) => {
+          const r = c.getBoundingClientRect()
+          console.log(`  tcc[${i}]: <${c.tagName.toLowerCase()}> class="${c.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)}`)
+        })
+      } else {
+        console.log('=== .t-card not found, 直接查 chat-shell 内层 ===')
+      }
+      // 打印 .t-card__body 上一层（直接父级）
+      const body = document.querySelector('.chat-shell .t-card__body')
+      if (body && body.parentElement) {
+        const pe = body.parentElement
+        const r = pe.getBoundingClientRect()
+        console.log(`t-card__body parent: <${pe.tagName.toLowerCase()}> class="${pe.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)}`)
+      }
+    }, 1000)
+  })
+})
+
+onErrorCaptured((err) => {
+  console.error('[ChatView captured error]:', err)
+  return false
 })
 </script>
 
 <template>
   <Layout>
     <div class="chat-wrapper">
-      <t-card class="chat-shell" :bordered="false">
+      <div class="chat-shell">
         <div class="chat-container">
           <div class="chat-main">
             <MessageList />
@@ -39,7 +79,7 @@ onMounted(() => {
             :message="error"
           />
         </div>
-      </t-card>
+      </div>
 
       <div class="input-box">
         <MessageInput />
@@ -52,36 +92,33 @@ onMounted(() => {
 .chat-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   padding: 12px;
+  gap: 16px;
 }
 
 @media (min-width: 768px) {
   .chat-wrapper {
-    gap: 20px;
     padding: 16px;
+    gap: 20px;
   }
 }
 
 .chat-shell {
-  flex: 1;
-  padding: 0;
-  border-radius: 16px;
-  background: var(--td-bg-color-container);
+  flex: 1 1 0;
   min-height: 0;
-}
-
-.chat-shell :deep(.t-card__body) {
-  height: 100%;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  border-radius: 16px;
+  background: var(--td-bg-color-container);
+  overflow: hidden;
+  box-shadow: var(--td-shadow-1);
+  border: 1px solid var(--td-component-border);
 }
 
 .input-box {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   padding: 12px 16px 16px;
   border-radius: 16px;
   background: var(--td-bg-color-container);
@@ -96,22 +133,23 @@ onMounted(() => {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  width: 100%;
+  flex: 1 1 0;
   min-height: 0;
+  width: 100%;
   overflow: hidden;
   gap: 12px;
 }
 
 .chat-main {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .chat-error {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   margin: 0 12px;
 }
 
