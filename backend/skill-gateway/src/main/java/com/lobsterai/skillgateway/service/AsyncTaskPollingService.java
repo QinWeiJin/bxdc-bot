@@ -15,6 +15,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class AsyncTaskPollingService {
@@ -230,7 +231,7 @@ public class AsyncTaskPollingService {
             }
             String preview = buildPreview(t);
             return AsyncTaskNotificationDto.from(t, skillName, 0, elapsed, preview);
-        }).toList();
+        }).collect(Collectors.toList());
     }
 
     public int countUnreadByUser(String userId) {

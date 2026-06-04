@@ -138,7 +138,7 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
                     LocalDateTime.now().minusSeconds(windowSeconds))
                 .orderByDesc(AsyncTask::getCreatedAt)
                 .last("LIMIT 1");
-        if (sessionId != null && !sessionId.isBlank()) {
+        if (sessionId != null && !sessionId.trim().isEmpty()) {
             wrapper.eq(AsyncTask::getSessionId, sessionId);
         }
         return selectOne(wrapper);

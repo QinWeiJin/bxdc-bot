@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { onMounted, onBeforeUnmount } from 'vue'
+import { provideFileUpload } from './composables/useFileUpload'
+
 const globalConfig = {
   locale: {
     empty: { titleText: { empty: '' } },
@@ -11,6 +14,22 @@ const globalConfig = {
     treeSelect: { empty: '' },
   },
 }
+
+// 在 App 层级 provide，跨路由切换（ChatView 卸载/重建）时状态保持
+const fileUpload = provideFileUpload()
+
+/** 关闭/刷新浏览器窗口时清空文件状态（图片 previewUrl 释放） */
+function clearOnWindowUnload() {
+  fileUpload.clearFiles()
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', clearOnWindowUnload)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', clearOnWindowUnload)
+})
 </script>
 
 <template>
