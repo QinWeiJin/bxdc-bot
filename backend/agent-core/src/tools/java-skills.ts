@@ -228,7 +228,7 @@ const skillGeneratorAsyncPollSchema = z.preprocess((val) => {
   }
   return val;
 }, z.object({
-  pollEndpoint: z.string(),
+  pollEndpoint: z.string().optional(),
   idJsonPath: z.string().optional(),
   pollMethod: z.string().optional(),
   pollIntervalSeconds: z.number().int().min(1).optional(),
@@ -238,6 +238,11 @@ const skillGeneratorAsyncPollSchema = z.preprocess((val) => {
   failedValues: z.array(z.string()).optional(),
   resultJsonPath: z.string().optional(),
   pollHeaders: z.record(z.string()).optional(),
+  // 新增：轮询策略。'PERIODIC' = 周期轮询（默认，需要 pollEndpoint）；
+  // 'SINGLE_CALL' = 单次长调用（不依赖 pollEndpoint，长 readTimeout 等最终结果）。
+  pollStrategy: z.enum(["PERIODIC", "SINGLE_CALL"]).optional(),
+  // SINGLE_CALL 专用 read timeout（秒）。未设置时回退到 maxWaitSeconds。
+  singleCallReadTimeoutSeconds: z.number().int().min(1).optional(),
 }).optional());
 
 /** Skill generator schema - flat object with optional fields for all target types */
@@ -389,9 +394,9 @@ interface ExtendedSkillConfig {
 }
 
 interface AsyncPollConfig {
-  /** 轮询端点模板，{id} 会被替换为外部任务 ID */
-  pollEndpoint: string;
-  /** 从初始响应中提取任务 ID 的 JSON 路径，如 "data.task_id" */
+  /** 轮询端点模板，{id} 会被替换为外部任务 ID。SINGLE_CALL 模式下可省略（fallback 到请求 URL）。 */
+  pollEndpoint?: string;
+  /** 从初始响应中提取任务 ID 的 JSON 路径，如 "data.task_id"。SINGLE_CALL 模式下不需要。 */
   idJsonPath?: string;
   /** 轮询 HTTP method，默认 GET */
   pollMethod?: string;
@@ -413,6 +418,15 @@ interface AsyncPollConfig {
   resultJsonPath?: string;
   /** 轮询请求头 */
   pollHeaders?: Record<string, string>;
+  /**
+   * 轮询策略：
+   * - 'PERIODIC'（默认）：周期轮询，需要 pollEndpoint 包含 {id} 占位符。
+   * - 'SINGLE_CALL'：单次长调用（无 pollEndpoint 也可以，靠长 readTimeout 等结果）；
+   *                 提交后立即返回 asyncTaskId，LLM 异步获知结果。
+   */
+  pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+  /** SINGLE_CALL 模式专用 read timeout（秒）。未设置时回退到 maxWaitSeconds。 */
+  singleCallReadTimeoutSeconds?: number;
 }
 
 function readPreset(config: ExtendedSkillConfig): string | undefined {
@@ -1514,10 +1528,25 @@ async function executeConfiguredApiSkill(
   const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
   const timeoutSeconds = validateTimeoutSeconds(config.timeoutSeconds);
 
-  if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
+  if (config.asyncPoll) {
+    // 异步配置规范化：用户只勾「启用异步轮询」但没配 pollEndpoint 时，
+    // 自动 fallback 到 SINGLE_CALL 模式（提交后立即返回，长 readTimeout 等结果）。
+    // 这样长程 GET / POST 接口不用配轮询端点也能异步返回大模型。
+    const effectiveAsyncPoll: AsyncPollConfig = { ...config.asyncPoll };
+    if (!effectiveAsyncPoll.pollEndpoint && effectiveAsyncPoll.pollStrategy !== "PERIODIC") {
+      effectiveAsyncPoll.pollStrategy = "SINGLE_CALL";
+    }
+    if (effectiveAsyncPoll.pollStrategy === "SINGLE_CALL") {
+      // SINGLE_CALL：readTimeout 默认 600s（10 分钟）。
+      // 不复用 maxWaitSeconds —— 后者是 PERIODIC 轮询的最长等待时间，语义不同。
+      // 太小（如 10s）会导致长程任务在到达前就被服务端断开。
+      if (!effectiveAsyncPoll.singleCallReadTimeoutSeconds || effectiveAsyncPoll.singleCallReadTimeoutSeconds < 60) {
+        effectiveAsyncPoll.singleCallReadTimeoutSeconds = 600;
+      }
+    }
     return await executeConfiguredApiSkillAsync(
       gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody,
-      timeoutSeconds, config.asyncPoll, skillId, sessionId
+      timeoutSeconds, effectiveAsyncPoll, skillId, sessionId
     );
   }
 
@@ -1587,6 +1616,7 @@ async function executeConfiguredApiSkillAsync(
   const auditHeaders = gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId);
 
   try {
+    console.log(`[executeConfiguredApiSkillAsync] submit user=${userId} session=${sessionId} method=${method} url=${endpoint} bodyType=${typeof requestBody} bodyPreview=${JSON.stringify(requestBody).substring(0, 200)} sig-pre=(${method}|${endpoint}|${JSON.stringify(requestBody).substring(0, 80)})`);
     const submitResponse = await axios.post(
       `${gatewayUrl}/api/skills/api/async`,
       {
@@ -1613,6 +1643,32 @@ async function executeConfiguredApiSkillAsync(
       return JSON.stringify({
         error: "Async task submission failed",
         details: submitResponse.data,
+      });
+    }
+
+    // SINGLE_CALL 模式：提交后立即返回，不阻塞 LLM。
+    // 后台由 Scheduler 跑长调用，结果进通知中心。
+    if (asyncPoll.pollStrategy === "SINGLE_CALL") {
+      postPollingAudit(gatewayUrl, auditHeaders, {
+        asyncTaskId,
+        skillId,
+        userId,
+        sessionId,
+        phase: "AGENT_REQUEST",
+        extraJson: JSON.stringify({
+          pollStrategy: "SINGLE_CALL",
+          singleCallReadTimeoutSeconds: asyncPoll.singleCallReadTimeoutSeconds
+            || asyncPoll.maxWaitSeconds || 600,
+        }),
+      });
+      return JSON.stringify({
+        asyncTaskId,
+        externalTaskId,
+        status: "SINGLE_CALLED",
+        note:
+          `Long-running one-shot call submitted (id=${asyncTaskId}). `
+          + "The result will be available in the notification center when the upstream returns. "
+          + "Tell the user the operation is being processed in the background.",
       });
     }
 

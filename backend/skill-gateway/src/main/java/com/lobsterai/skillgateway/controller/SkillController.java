@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.config.DedupConfig;
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
@@ -27,6 +28,7 @@ import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
 import com.lobsterai.skillgateway.service.ApiProxyService;
 import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
+import com.lobsterai.skillgateway.util.RequestSignatureUtil;
 import com.lobsterai.skillgateway.util.StringUtils;
 
 /**
@@ -206,34 +208,36 @@ public class SkillController {
     ) {
         try {
             Map<String, Object> asyncPoll = request.getAsyncPoll();
-            if (asyncPoll == null || !asyncPoll.containsKey("pollEndpoint")) {
-                return ResponseEntity.badRequest().body(Collections.singletonMap("error", "asyncPoll.pollEndpoint is required for async API calls"));
+            if (asyncPoll == null) {
+                return ResponseEntity.badRequest().body(Collections.singletonMap("error", "asyncPoll is required for async API calls"));
             }
 
-            int timeoutSeconds = request.getTimeoutSeconds() != null ? request.getTimeoutSeconds() : 30;
-            Object initialResponse = builtinToolExecutionService.callExternalApi(request);
+            // 读取 pollStrategy，决定后续流程分支
+            String pollStrategy = asyncPoll.get("pollStrategy") instanceof String
+                    ? (String) asyncPoll.get("pollStrategy") : "PERIODIC";
+            boolean singleCallMode = "SINGLE_CALL".equals(pollStrategy);
+            Integer singleCallReadTimeoutSeconds = asyncPoll.get("singleCallReadTimeoutSeconds") instanceof Number
+                    ? ((Number) asyncPoll.get("singleCallReadTimeoutSeconds")).intValue() : null;
 
-            String initialResponseStr = initialResponse instanceof String
-                    ? (String) initialResponse
-                    : objectMapper.writeValueAsString(initialResponse);
-
+            // ====== 步骤 1：参数解析（前置，以便去重也能拿到这些字段）======
             String idJsonPath = (String) asyncPoll.get("idJsonPath");
-            String externalTaskId = asyncTaskPollingService.extractTaskId(initialResponseStr, idJsonPath);
-            if (externalTaskId == null || StringUtils.isBlank(externalTaskId)) {
-                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
-            put("error", "Failed to extract task id from initial response");
-            put("idJsonPath", idJsonPath);
-            put("initialResponse", initialResponseStr);
-        }});
-            }
+            String pollMethod = asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET";
+            String pollEndpointTemplate = (String) asyncPoll.get("pollEndpoint");
 
-            String pollEndpoint = ((String) asyncPoll.get("pollEndpoint")).replace("{id}", externalTaskId);
-
-            if (!((String) asyncPoll.get("pollEndpoint")).contains("{id}")) {
-                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
-            put("error", "asyncPoll.pollEndpoint must contain {id} placeholder");
-            put("hint", "The {id} placeholder is replaced with the extracted task ID. Example: /status?task_id={id}");
+            if (singleCallMode) {
+                // SINGLE_CALL：pollEndpoint 可省略；省略时 fallback 到请求 URL。
+                // 同时不需要 {id} 占位符，也不需要 idJsonPath。
+                if (pollEndpointTemplate == null || pollEndpointTemplate.isBlank()) {
+                    pollEndpointTemplate = request.getUrl();
+                }
+            } else {
+                // PERIODIC：pollEndpoint 必填，且必须含 {id}
+                if (pollEndpointTemplate == null || !pollEndpointTemplate.contains("{id}")) {
+                    return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
+            put("error", "asyncPoll.pollEndpoint is required and must contain {id} placeholder for PERIODIC mode");
+            put("hint", "Use pollStrategy: SINGLE_CALL for long-running one-shot calls without a poll endpoint.");
         }});
+                }
             }
             int pollIntervalSeconds = asyncPoll.get("pollIntervalSeconds") instanceof Number
                     ? ((Number) asyncPoll.get("pollIntervalSeconds")).intValue()
@@ -246,18 +250,118 @@ public class SkillController {
                             ? Math.max(1, ((Number) asyncPoll.get("maxWaitMs")).intValue() / 1000)
                             : 600);
 
+            // ====== 步骤 2（v2.2 关键）：计算请求签名 + 按 session 维度去重（在调第三方**之前**）======
+            String signature = RequestSignatureUtil.compute(
+                    request.getMethod() != null ? request.getMethod() : "GET",
+                    request.getUrl(),
+                    request.getBody(),
+                    idJsonPath,
+                    pollMethod,
+                    pollEndpointTemplate
+            );
+
+            // 诊断日志：打印签名计算输入 + 结果，便于排查"调了两次"是否签名漂移
+            org.slf4j.LoggerFactory.getLogger(SkillController.class).info(
+                    "[callApiAsync] dedup-check user={} session={} method={} url={} bodyType={} bodyPreview={} idJsonPath={} pollMethod={} pollEndpoint={} sig={}",
+                    userId, sessionId,
+                    request.getMethod(), request.getUrl(),
+                    request.getBody() == null ? "null" : request.getBody().getClass().getSimpleName(),
+                    String.valueOf(request.getBody()).substring(0, Math.min(200, String.valueOf(request.getBody()).length())),
+                    idJsonPath, pollMethod, pollEndpointTemplate, signature);
+
+            int windowSeconds = (sessionId != null && !sessionId.isBlank())
+                    ? DedupConfig.PER_SESSION_WINDOW_SECONDS
+                    : DedupConfig.NO_SESSION_WINDOW_SECONDS;
+            AsyncTask existing = asyncTaskPollingService.findRecentBySignatureInSession(
+                    userId, sessionId, signature, windowSeconds);
+            if (existing != null) {
+                // 命中去重 → **不调第三方**，直接返回既有 asyncTaskId
+                org.slf4j.LoggerFactory.getLogger(SkillController.class).info(
+                        "[callApiAsync] Duplicate request dedup'd before third-party call: user={}, session={}, sig={}, existing asyncTaskId={}, status={}",
+                        userId, sessionId, signature, existing.getId(), existing.getStatus());
+
+                // 写一条 DUPLICATE_REQUEST 审计日志
+                try {
+                    AsyncTask synthetic = new AsyncTask();
+                    synthetic.setId(existing.getId());
+                    synthetic.setSkillId(skillId);
+                    synthetic.setUserId(userId);
+                    synthetic.setSessionId(sessionId);
+                    AsyncPollingAuditLog dupLog = pollingAuditService.buildBaseLog(synthetic, "DUPLICATE_REQUEST");
+                    Map<String, Object> dupExtra = new HashMap<>();
+                    dupExtra.put("signature", signature);
+                    dupExtra.put("windowSeconds", windowSeconds);
+                    dupExtra.put("existingStatus", existing.getStatus());
+                    dupLog.setExtraJson(pollingAuditService.safeJson(dupExtra));
+                    pollingAuditService.log(dupLog);
+                } catch (Exception auditEx) {
+                    // 审计失败不阻塞响应
+                }
+
+                return ResponseEntity.ok(new HashMap<String, Object>() {{
+            put("asyncTaskId", existing.getId());
+            put("status", existing.getStatus());
+            put("externalTaskId", existing.getExternalTaskId());
+            put("deduped", true);
+        }});
+            }
+
+            // ====== 步骤 3：调第三方（PERIODIC 才同步调，SINGLE_CALL 不调——交给 scheduler 长 readTimeout）======
+            int timeoutSeconds = request.getTimeoutSeconds() != null ? request.getTimeoutSeconds() : 30;
+            String initialResponseStr = null;
+            String externalTaskId = null;
+            String pollEndpoint = null;
+
+            if (!singleCallMode) {
+                // PERIODIC：同步调第三方，拿到 initialResponse + externalTaskId
+                Object initialResponse = builtinToolExecutionService.callExternalApi(request);
+
+                initialResponseStr = initialResponse instanceof String
+                        ? (String) initialResponse
+                        : objectMapper.writeValueAsString(initialResponse);
+
+                externalTaskId = asyncTaskPollingService.extractTaskId(initialResponseStr, idJsonPath);
+                if (externalTaskId == null || StringUtils.isBlank(externalTaskId)) {
+                    Map<String, Object> errBody = new HashMap<>();
+                    errBody.put("error", "Failed to extract task id from initial response");
+                    errBody.put("idJsonPath", idJsonPath);
+                    errBody.put("initialResponse", initialResponseStr);
+                    return ResponseEntity.badRequest().body(errBody);
+                }
+
+                pollEndpoint = pollEndpointTemplate.replace("{id}", externalTaskId);
+            } else {
+                // SINGLE_CALL：pollEndpoint 已在 step 1 fallback 到 request URL（或用户提供的）
+                pollEndpoint = pollEndpointTemplate;
+            }
+
+            // ====== 步骤 4：构造 AsyncTask 并入库（包含签名）======
+            // 对于 SINGLE_CALL：effectiveMethod = 原始请求 method（默认）
+            // 对于 PERIODIC：effectiveMethod = asyncPoll.pollMethod（默认 GET，因为是轮询）
+            String effectiveMethod = singleCallMode
+                    ? (request.getMethod() != null ? request.getMethod().toUpperCase() : pollMethod.toUpperCase())
+                    : pollMethod;
+
             AsyncTask task = new AsyncTask();
             task.setSkillId(skillId);
             task.setUserId(userId);
             task.setSessionId(sessionId);
-            task.setExternalTaskId(externalTaskId);
+            task.setExternalTaskId(externalTaskId); // SINGLE_CALL 时为 null
             task.setPollEndpoint(pollEndpoint);
-            task.setPollMethod(asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET");
+            task.setPollMethod(effectiveMethod);
             task.setPollIntervalSeconds(pollIntervalSeconds);
             task.setMaxWaitSeconds(maxWaitSeconds);
             task.setCompletionJsonPath((String) asyncPoll.get("completionJsonPath"));
             task.setCompletionValue((String) asyncPoll.get("completionValue"));
             task.setResultJsonPath((String) asyncPoll.get("resultJsonPath"));
+            task.setPollStrategy(pollStrategy);
+            if (singleCallReadTimeoutSeconds != null && singleCallReadTimeoutSeconds >= 60) {
+                task.setSingleCallReadTimeoutSeconds(singleCallReadTimeoutSeconds);
+            } else if (singleCallMode) {
+                // SINGLE_CALL 兜底：未传或 < 60s 都强制用 600s（10 分钟），
+                // 避免 maxWaitSeconds=10 这种小值被误当作 readTimeout 写入
+                task.setSingleCallReadTimeoutSeconds(600);
+            }
 
             if (asyncPoll.get("failedValues") != null) {
                 task.setFailedValues(objectMapper.writeValueAsString(asyncPoll.get("failedValues")));
@@ -265,15 +369,29 @@ public class SkillController {
             if (asyncPoll.get("pollHeaders") != null) {
                 task.setPollHeaders(objectMapper.writeValueAsString(asyncPoll.get("pollHeaders")));
             }
-            task.setInitialResponse(initialResponseStr);
+            if (singleCallMode) {
+                // SINGLE_CALL：把原始 body 存到 requestBody，scheduler 长调用时用
+                if (request.getBody() != null) {
+                    task.setRequestBody(objectMapper.writeValueAsString(request.getBody()));
+                }
+                task.setInitialResponse(null);
+            } else {
+                // PERIODIC：照旧存 initialResponse
+                task.setInitialResponse(initialResponseStr);
+                task.setRequestBody(null);
+            }
+            // ★ 关键：写入签名，用于未来去重查询
+            task.setRequestSignature(signature);
 
             asyncTaskPollingService.createTask(task);
 
-            return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("asyncTaskId", task.getId());
-            put("status", "PENDING");
-            put("externalTaskId", externalTaskId);
-        }});
+            Map<String, Object> response = new HashMap<>();
+            response.put("asyncTaskId", task.getId());
+            response.put("status", "PENDING");
+            response.put("externalTaskId", externalTaskId);
+            response.put("pollStrategy", pollStrategy);
+            response.put("deduped", false);
+            return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Async API call failed: " + e.getMessage()));
         }

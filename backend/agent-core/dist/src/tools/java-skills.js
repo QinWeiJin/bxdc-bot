@@ -168,7 +168,7 @@ const skillGeneratorAsyncPollSchema = zod_1.z.preprocess((val) => {
     }
     return val;
 }, zod_1.z.object({
-    pollEndpoint: zod_1.z.string(),
+    pollEndpoint: zod_1.z.string().optional(),
     idJsonPath: zod_1.z.string().optional(),
     pollMethod: zod_1.z.string().optional(),
     pollIntervalSeconds: zod_1.z.number().int().min(1).optional(),
@@ -178,6 +178,8 @@ const skillGeneratorAsyncPollSchema = zod_1.z.preprocess((val) => {
     failedValues: zod_1.z.array(zod_1.z.string()).optional(),
     resultJsonPath: zod_1.z.string().optional(),
     pollHeaders: zod_1.z.record(zod_1.z.string()).optional(),
+    pollStrategy: zod_1.z.enum(["PERIODIC", "SINGLE_CALL"]).optional(),
+    singleCallReadTimeoutSeconds: zod_1.z.number().int().min(1).optional(),
 }).optional());
 const skillGeneratorToolInputSchema = zod_1.z.object({
     targetType: zod_1.z.enum(["api", "ssh", "openclaw", "template"]).describe("Type of skill to create."),
@@ -1165,8 +1167,17 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
     }
     const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
     const timeoutSeconds = validateTimeoutSeconds(config.timeoutSeconds);
-    if (config.asyncPoll && config.asyncPoll.pollEndpoint) {
-        return await executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, config.asyncPoll, skillId, sessionId);
+    if (config.asyncPoll) {
+        const effectiveAsyncPoll = { ...config.asyncPoll };
+        if (!effectiveAsyncPoll.pollEndpoint && effectiveAsyncPoll.pollStrategy !== "PERIODIC") {
+            effectiveAsyncPoll.pollStrategy = "SINGLE_CALL";
+        }
+        if (effectiveAsyncPoll.pollStrategy === "SINGLE_CALL") {
+            if (!effectiveAsyncPoll.singleCallReadTimeoutSeconds || effectiveAsyncPoll.singleCallReadTimeoutSeconds < 60) {
+                effectiveAsyncPoll.singleCallReadTimeoutSeconds = 600;
+            }
+        }
+        return await executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, effectiveAsyncPoll, skillId, sessionId);
     }
     try {
         const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
@@ -1213,6 +1224,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, co
 async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endpoint, method, headersOut, requestBody, timeoutSeconds, asyncPoll, skillId, sessionId) {
     const auditHeaders = gatewayApiProxyInboundHeaders(apiToken, userId, skillId, sessionId);
     try {
+        console.log(`[executeConfiguredApiSkillAsync] submit user=${userId} session=${sessionId} method=${method} url=${endpoint} bodyType=${typeof requestBody} bodyPreview=${JSON.stringify(requestBody).substring(0, 200)} sig-pre=(${method}|${endpoint}|${JSON.stringify(requestBody).substring(0, 80)})`);
         const submitResponse = await axios_1.default.post(`${gatewayUrl}/api/skills/api/async`, {
             url: endpoint,
             method,
@@ -1229,6 +1241,28 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
             return JSON.stringify({
                 error: "Async task submission failed",
                 details: submitResponse.data,
+            });
+        }
+        if (asyncPoll.pollStrategy === "SINGLE_CALL") {
+            postPollingAudit(gatewayUrl, auditHeaders, {
+                asyncTaskId,
+                skillId,
+                userId,
+                sessionId,
+                phase: "AGENT_REQUEST",
+                extraJson: JSON.stringify({
+                    pollStrategy: "SINGLE_CALL",
+                    singleCallReadTimeoutSeconds: asyncPoll.singleCallReadTimeoutSeconds
+                        || asyncPoll.maxWaitSeconds || 600,
+                }),
+            });
+            return JSON.stringify({
+                asyncTaskId,
+                externalTaskId,
+                status: "SINGLE_CALLED",
+                note: `Long-running one-shot call submitted (id=${asyncTaskId}). `
+                    + "The result will be available in the notification center when the upstream returns. "
+                    + "Tell the user the operation is being processed in the background.",
             });
         }
         const maxWaitMs = asyncPoll.maxWaitSeconds

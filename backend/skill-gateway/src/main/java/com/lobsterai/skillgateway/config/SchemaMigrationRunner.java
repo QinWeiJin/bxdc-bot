@@ -67,6 +67,30 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 2. idx_async_user_unread 索引
         ensureIndex(conn, table, "idx_async_user_unread", existingIndexes,
                 "ALTER TABLE async_tasks ADD INDEX idx_async_user_unread (user_id, status, notified_at)");
+
+        // 3. poll_strategy 列（原子 2：SINGLE_CALL 兼容）
+        ensureColumn(conn, table, "poll_strategy", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN poll_strategy VARCHAR(20) DEFAULT 'PERIODIC' " +
+                "COMMENT 'PERIODIC=周期轮询；SINGLE_CALL=单次长调用（无 pollEndpoint，靠 HTTP 长 readTimeout 等结果）'");
+
+        // 4. single_call_read_timeout_seconds 列（原子 2）
+        ensureColumn(conn, table, "single_call_read_timeout_seconds", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN single_call_read_timeout_seconds INT DEFAULT NULL " +
+                "COMMENT 'SINGLE_CALL 模式专用 read timeout（秒）；NULL 时回退到 maxWaitSeconds'");
+
+        // 5. request_signature 列（原子 3：去重）
+        ensureColumn(conn, table, "request_signature", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN request_signature VARCHAR(64) DEFAULT NULL " +
+                "COMMENT '请求签名 SHA-256 hex（去重用）'");
+
+        // 6. idx_async_user_session_sig_time 索引（原子 3）
+        ensureIndex(conn, table, "idx_async_user_session_sig_time", existingIndexes,
+                "ALTER TABLE async_tasks ADD INDEX idx_async_user_session_sig_time (user_id, session_id, request_signature, created_at)");
+
+        // 7. request_body 列（SINGLE_CALL 兼容：scheduler 发起长调用需要原始 body）
+        ensureColumn(conn, table, "request_body", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN request_body MEDIUMTEXT DEFAULT NULL " +
+                "COMMENT 'SINGLE_CALL 模式的原始请求体（JSON 字符串）；PERIODIC 模式为 NULL'");
     }
 
     private boolean tableExists(Connection conn, String table) {
