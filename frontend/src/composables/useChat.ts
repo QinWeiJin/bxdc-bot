@@ -2,6 +2,7 @@ import { ref, provide, inject, type InjectionKey } from 'vue'
 import { confirmAction, getAgentStreamUrl } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
+import { useFileUpload } from './useFileUpload'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
 import {
   extractArgumentsFromToolCallPayload,
@@ -9,6 +10,7 @@ import {
   mergeToolArgumentsField,
 } from '../utils/toolInvocationUtils'
 import { useThinkingMode } from './useThinkingMode'
+import type { UploadFileInfo } from '../types/fileUpload'
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
 
@@ -118,7 +120,7 @@ export interface ChatState {
   messages: ReturnType<typeof ref<Message[]>>
   isThinking: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
-  sendMessage: (content: string, userId?: string) => Promise<void>
+  sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
   addMessage: (message: Message) => void
   fetchGreeting: () => Promise<void>
   confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
@@ -134,6 +136,7 @@ export function provideChat() {
   const activeSessionId = ref<string | null>(null)
   const { currentUser } = useUser()
   const { createSession, processStreamEvent, completeSession } = useThinkingMode()
+  const fileUpload = useFileUpload()
 
   function generateConversationSessionId(): string {
     // 为每条消息生成唯一的 sessionId，确保每条消息有独立的思考状态
@@ -695,7 +698,7 @@ export function provideChat() {
     }));
   }
 
-  async function sendMessage(content: string, userId?: string) {
+  async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[]) {
     if (isThinking.value) return
 
     const userMessage: Message = {
@@ -734,6 +737,18 @@ export function provideChat() {
 
       const url = getAgentStreamUrl()
 
+      // 拼接文件解析内容到 instruction（任务 8）
+      let finalInstruction = content
+      if (attachedFiles && attachedFiles.length > 0) {
+        const fileParts = attachedFiles
+          .filter((f) => f.parsedText && f.parsedText.length > 0)
+          .map((f) => `--- 文件：${f.fileName} ---\n${f.parsedText}`)
+          .join('\n\n')
+        if (fileParts.length > 0) {
+          finalInstruction = `${content}\n\n${fileParts}`
+        }
+      }
+
       const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -741,7 +756,7 @@ export function provideChat() {
           'Accept': 'text/event-stream',
         },
         body: JSON.stringify({
-          instruction: content,
+          instruction: finalInstruction,
           context: {
             userId,
             sessionId,
@@ -779,6 +794,25 @@ export function provideChat() {
             completeSession(activeSessionId.value)
           }
           activeSessionId.value = null
+
+          // 上报本次对话涉及的文件名（任务 8.3）
+          if (attachedFiles && attachedFiles.length > 0 && userId) {
+            const fileNames = attachedFiles.map((f) => f.fileName)
+            try {
+              await fetch(agentUrl('/memory/add'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  userId,
+                  text: `本次对话涉及文件：${fileNames.join('、')}`,
+                  role: 'system',
+                }),
+              })
+            } catch (e) {
+              console.error('[chat] Failed to add file memory:', e)
+            }
+          }
+
           break
         }
 
@@ -896,6 +930,11 @@ export function provideChat() {
       error.value = err instanceof Error ? err.message : 'Failed to send message'
       isThinking.value = false
       activeSessionId.value = null
+    } finally {
+      // 发送完成后清空文件状态（任务 8.4）
+      if (attachedFiles && attachedFiles.length > 0) {
+        fileUpload.clearFiles()
+      }
     }
   }
 

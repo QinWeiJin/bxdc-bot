@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -63,7 +64,7 @@ public class AsyncTaskPollingScheduler {
 
             log.info("Polling scheduler picked up {} tasks: {}", tasks.size(),
                     tasks.stream().map(t -> String.format("id=%d/strategy=%s/status=%s",
-                            t.getId(), t.getPollStrategy(), t.getStatus())).toList());
+                            t.getId(), t.getPollStrategy(), t.getStatus())).collect(Collectors.toList()));
 
             for (AsyncTask task : tasks) {
                 // 按 pollStrategy 分发到不同线程池
@@ -136,7 +137,7 @@ public class AsyncTaskPollingScheduler {
                 // 把"要发请求的 URL"放在 pollEndpoint（即使没有轮询），这样 SINGLE_CALL
                 // 也能用同一个 ApiProxyService.callApi 路径。
                 requestUrl = task.getPollEndpoint();
-                if (requestUrl == null || requestUrl.isBlank()) {
+                if (requestUrl == null || requestUrl.trim().isEmpty()) {
                     String err = "SINGLE_CALL task must have pollEndpoint (reused as long-call URL)";
                     pollingService.updatePollResult(task.getId(), "FAILED", null, err);
                     auditService.log(buildCompleteLog(task, "FAILED", err));
@@ -153,7 +154,7 @@ public class AsyncTaskPollingScheduler {
                 if (singleCallMode) {
                     // SINGLE_CALL：反序列化 requestBody（JSON 字符串 → Object），带长 readTimeout 调一次
                     Object requestBody = null;
-                    if (task.getRequestBody() != null && !task.getRequestBody().isBlank()) {
+                    if (task.getRequestBody() != null && !task.getRequestBody().trim().isEmpty()) {
                         try {
                             requestBody = objectMapper.readValue(task.getRequestBody(), Object.class);
                         } catch (Exception bodyParseEx) {

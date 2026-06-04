@@ -39,3 +39,7 @@ skills/
 # Maven
 backend/skill-gateway/apache-maven-3.9.6/
 
+# One-click scripts
+start-services.bat
+stop-services.bat
+
