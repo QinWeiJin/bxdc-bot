@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -63,7 +64,7 @@ public class AsyncTaskNotificationDto {
         d.createdAt = t.getCreatedAt();
         d.notifiedAt = t.getNotifiedAt();
         d.unread = t.getNotifiedAt() == null
-                && List.of("COMPLETED", "FAILED", "TIMEOUT").contains(t.getStatus());
+                && Arrays.asList("COMPLETED", "FAILED", "TIMEOUT").contains(t.getStatus());
         d.previewResult = previewResult;
         return d;
     }

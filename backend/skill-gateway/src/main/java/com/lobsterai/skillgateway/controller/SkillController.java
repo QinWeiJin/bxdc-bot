@@ -227,7 +227,7 @@ public class SkillController {
             if (singleCallMode) {
                 // SINGLE_CALL：pollEndpoint 可省略；省略时 fallback 到请求 URL。
                 // 同时不需要 {id} 占位符，也不需要 idJsonPath。
-                if (pollEndpointTemplate == null || pollEndpointTemplate.isBlank()) {
+                if (pollEndpointTemplate == null || pollEndpointTemplate.trim().isEmpty()) {
                     pollEndpointTemplate = request.getUrl();
                 }
             } else {
@@ -269,7 +269,7 @@ public class SkillController {
                     String.valueOf(request.getBody()).substring(0, Math.min(200, String.valueOf(request.getBody()).length())),
                     idJsonPath, pollMethod, pollEndpointTemplate, signature);
 
-            int windowSeconds = (sessionId != null && !sessionId.isBlank())
+            int windowSeconds = (sessionId != null && !sessionId.trim().isEmpty())
                     ? DedupConfig.PER_SESSION_WINDOW_SECONDS
                     : DedupConfig.NO_SESSION_WINDOW_SECONDS;
             AsyncTask existing = asyncTaskPollingService.findRecentBySignatureInSession(
@@ -558,7 +558,7 @@ public class SkillController {
             return ResponseEntity.badRequest().body(Collections.singletonMap("error", "id is required"));
         }
         Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
-        if (ledgerOpt.isEmpty()) {
+        if (!ledgerOpt.isPresent()) {
             gatewayOutboundAuditService.recordSsh(
                     userId,
                     "unknown",
