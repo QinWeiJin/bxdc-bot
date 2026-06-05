@@ -17,6 +17,10 @@ import { ref, provide, inject, type InjectionKey, type Ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 import {
+  PARSED_TEXT_MAX_BYTES,
+  INSTRUCTION_FILES_MAX_BYTES,
+} from '../types/fileUpload'
+import {
   getFileTypeFromName,
   validateFile,
   validateTotalSize,
@@ -35,9 +39,24 @@ export interface FileUploadState {
   addFiles: (files: File[]) => Promise<void>
   removeFile: (fileId: string) => void
   clearFiles: () => void
-  getAllParsedText: () => string
+  getAllParsedText: (files?: UploadFileInfo[]) => string
   getFileNamesForMemory: () => string[]
   parseFileContent: (file: UploadFileInfo) => Promise<string>
+  /**
+   * 等待所有处于 `parsing` 状态的文件完成解析，最多等待 `timeoutMs` 毫秒后返回当前状态。
+   * 返回三分类：`done`（已 parsed 或 failed）、`pending`（仍 parsing）、`failed`。
+   * 任务 pass-parsed-content-to-llm 引入。
+   */
+  waitForAllParsing: (opts?: { timeoutMs?: number }) => Promise<{
+    done: UploadFileInfo[]
+    pending: UploadFileInfo[]
+    failed: UploadFileInfo[]
+  }>
+  /**
+   * 外部更新文件状态（如把 parsing 文件标为 skipped）。
+   * 任务 pass-parsed-content-to-llm 引入。
+   */
+  setFileStatus: (fileId: string, status: UploadFileInfo['status']) => void
 }
 
 const FileUploadKey: InjectionKey<FileUploadState> = Symbol('FileUploadKey')
@@ -157,14 +176,62 @@ export function provideFileUpload(): FileUploadState {
   }
 
   // ---- getAllParsedText ----
-  function getAllParsedText(): string {
+  // 任务 pass-parsed-content-to-llm：增加单文件 / 总大小截断 + truncated 标记
+  // 接受外部传入的 files 列表（避免在 sendMessage 内部调用 useFileUpload 时 inject 失败）
+  function getAllParsedText(files?: UploadFileInfo[]): string {
+    const source: UploadFileInfo[] = files
+      ? files
+      : (() => {
+          const out: UploadFileInfo[] = []
+          for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+            for (const f of uploadedFiles.value[ft]) out.push(f)
+          }
+          return out
+        })()
     const parts: string[] = []
-    for (const fileType of Object.keys(uploadedFiles.value) as FileType[]) {
-      for (const f of uploadedFiles.value[fileType]) {
-        if (f.status === 'parsed' && f.parsedText) {
-          parts.push(`--- 文件：${f.fileName} ---\n${f.parsedText}`)
+    let totalBytes = 0
+    for (const f of source) {
+        if (f.status !== 'parsed' || !f.parsedText) continue
+
+        const encoder = new TextEncoder()
+        const originalBytes = encoder.encode(f.parsedText).length
+        const originalKB = Math.ceil(originalBytes / 1024)
+        let text = f.parsedText
+        let truncated = false
+
+        // 单文件截断
+        if (originalBytes > PARSED_TEXT_MAX_BYTES) {
+          // 按字符数粗略截断（避免乱码），约 1.3 字符 / 字节
+          const maxChars = Math.floor(PARSED_TEXT_MAX_BYTES / 1.3)
+          text = text.slice(0, maxChars) + `\n... [内容已截断，原 ${originalKB} KB]`
+          truncated = true
         }
-      }
+
+        // 总大小截断（按 UTF-8 字节数计算当前累计）
+        const currentBytes = encoder.encode(text).length
+        if (totalBytes + currentBytes > INSTRUCTION_FILES_MAX_BYTES) {
+          const remainingBytes = INSTRUCTION_FILES_MAX_BYTES - totalBytes
+          if (remainingBytes <= 0) {
+            // 配额已用完，文件整段截断为提示
+            text = `... [因总大小限制已截断：${f.fileName} 内容未发送]`
+            truncated = true
+          } else {
+            const maxChars = Math.floor(remainingBytes / 1.3)
+            text = text.slice(0, maxChars) + `\n... [因总大小限制已截断]`
+            truncated = true
+          }
+        }
+
+        // 标记 truncated 状态（供 UI 徽标展示），仅在尚未设置时写入
+        if (truncated && !f.truncated) {
+          f.truncated = true
+        }
+
+        totalBytes += encoder.encode(text).length
+        parts.push(`--- 文件：${f.fileName} ---\n${text}`)
+
+        // 总配额已用完，后续文件不再追加（避免无意义拼接）
+        if (totalBytes >= INSTRUCTION_FILES_MAX_BYTES) break
     }
     return parts.join('\n\n')
   }
@@ -180,21 +247,82 @@ export function provideFileUpload(): FileUploadState {
     return names
   }
 
-  // ---- parseFileContent (占位) ----
-  // 任务 4-5 完成后回填实际解析逻辑（docxParser / xlsxParser / pptxParser / imageOcr）
+  // ---- parseFileContent ----
+  // 任务 4-5 接入 fileParser.parseDocument（docx/xlsx/txt 已实做；ppt/image 走 agent-core 兜底）
   async function parseFileContent(file: UploadFileInfo): Promise<string> {
     if (file.status === 'parsed') {
       return file.parsedText ?? ''
     }
 
     file.status = 'parsing'
-    // 占位：当前不实现实际解析，状态保持 'parsing' 等待任务 4-5 接入
-    // 任务 4-5 完成后，此处会替换为：
-    //   const parser = getParser(file.fileType)
-    //   const text = await parser(file.file)
-    //   file.parsedText = text
-    //   file.status = 'parsed'
-    return ''
+    try {
+      const { parseDocument } = await import('../utils/fileParser')
+      const text = await parseDocument(file.file, file.fileType)
+      file.parsedText = text
+      file.status = 'parsed'
+      return text
+    } catch (err) {
+      file.status = 'failed'
+      file.errorMessage = err instanceof Error ? err.message : '解析失败'
+      throw err
+    }
+  }
+
+  // ---- waitForAllParsing ----
+  // 任务 pass-parsed-content-to-llm：等待所有 parsing 状态文件完成（解析完成 / 失败 / 超时）
+  function listAll(): UploadFileInfo[] {
+    const out: UploadFileInfo[] = []
+    for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+      for (const f of uploadedFiles.value[ft]) out.push(f)
+    }
+    return out
+  }
+  async function waitForAllParsing(opts: { timeoutMs?: number } = {}): Promise<{
+    done: UploadFileInfo[]
+    pending: UploadFileInfo[]
+    failed: UploadFileInfo[]
+  }> {
+    const timeoutMs = opts.timeoutMs ?? 5000
+    const all = listAll()
+    const parsing = all.filter((f) => f.status === 'parsing')
+    if (parsing.length === 0) {
+      return {
+        done: all.filter((f) => f.status === 'parsed'),
+        pending: [],
+        failed: all.filter((f) => f.status === 'failed'),
+      }
+    }
+    // 通过轮询方式等待所有 parsing 完成（5s 超时）
+    const start = Date.now()
+    const tick = 100
+    return await new Promise((resolve) => {
+      const check = () => {
+        const cur = listAll()
+        const stillParsing = cur.filter((f) => f.status === 'parsing')
+        if (stillParsing.length === 0 || Date.now() - start >= timeoutMs) {
+          resolve({
+            done: cur.filter((f) => f.status === 'parsed'),
+            pending: cur.filter((f) => f.status === 'parsing'),
+            failed: cur.filter((f) => f.status === 'failed'),
+          })
+        } else {
+          setTimeout(check, tick)
+        }
+      }
+      check()
+    })
+  }
+
+  // ---- setFileStatus ----
+  // 任务 pass-parsed-content-to-llm：外部更新文件状态（如把 parsing 标为 skipped）
+  function setFileStatus(fileId: string, status: UploadFileInfo['status']): void {
+    for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+      const target = uploadedFiles.value[ft].find((f) => f.id === fileId)
+      if (target) {
+        target.status = status
+        return
+      }
+    }
   }
 
   const state: FileUploadState = {
@@ -207,6 +335,8 @@ export function provideFileUpload(): FileUploadState {
     getAllParsedText: getAllParsedText,
     getFileNamesForMemory: getFileNamesForMemory,
     parseFileContent: parseFileContent,
+    waitForAllParsing: waitForAllParsing,
+    setFileStatus: setFileStatus,
   }
   provide(FileUploadKey, state)
   return state
@@ -271,14 +401,52 @@ export function useFileUpload(): FileUploadState {
     uploadError.value = null
   }
 
-  function getAllParsedText(): string {
+  function getAllParsedText(files?: UploadFileInfo[]): string {
+    const source: UploadFileInfo[] = files
+      ? files
+      : (() => {
+          const out: UploadFileInfo[] = []
+          for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+            for (const f of uploadedFiles.value[ft]) out.push(f)
+          }
+          return out
+        })()
     const parts: string[] = []
-    for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
-      for (const f of uploadedFiles.value[ft]) {
-        if (f.status === 'parsed' && f.parsedText) {
-          parts.push(`--- 文件：${f.fileName} ---\n${f.parsedText}`)
+    let totalBytes = 0
+    for (const f of source) {
+        if (f.status !== 'parsed' || !f.parsedText) continue
+
+        const encoder = new TextEncoder()
+        const originalBytes = encoder.encode(f.parsedText).length
+        const originalKB = Math.ceil(originalBytes / 1024)
+        let text = f.parsedText
+        let truncated = false
+
+        if (originalBytes > PARSED_TEXT_MAX_BYTES) {
+          const maxChars = Math.floor(PARSED_TEXT_MAX_BYTES / 1.3)
+          text = text.slice(0, maxChars) + `\n... [内容已截断，原 ${originalKB} KB]`
+          truncated = true
         }
-      }
+
+        const currentBytes = encoder.encode(text).length
+        if (totalBytes + currentBytes > INSTRUCTION_FILES_MAX_BYTES) {
+          const remainingBytes = INSTRUCTION_FILES_MAX_BYTES - totalBytes
+          if (remainingBytes <= 0) {
+            text = `... [因总大小限制已截断：${f.fileName} 内容未发送]`
+            truncated = true
+          } else {
+            const maxChars = Math.floor(remainingBytes / 1.3)
+            text = text.slice(0, maxChars) + `\n... [因总大小限制已截断]`
+            truncated = true
+          }
+        }
+
+        if (truncated && !f.truncated) f.truncated = true
+
+        totalBytes += encoder.encode(text).length
+        parts.push(`--- 文件：${f.fileName} ---\n${text}`)
+
+        if (totalBytes >= INSTRUCTION_FILES_MAX_BYTES) break
     }
     return parts.join('\n\n')
   }
@@ -294,7 +462,69 @@ export function useFileUpload(): FileUploadState {
   async function parseFileContent(file: UploadFileInfo): Promise<string> {
     if (file.status === 'parsed') return file.parsedText ?? ''
     file.status = 'parsing'
-    return ''
+    try {
+      const { parseDocument } = await import('../utils/fileParser')
+      const text = await parseDocument(file.file, file.fileType)
+      file.parsedText = text
+      file.status = 'parsed'
+      return text
+    } catch (err) {
+      file.status = 'failed'
+      file.errorMessage = err instanceof Error ? err.message : '解析失败'
+      throw err
+    }
+  }
+
+  function listAll(): UploadFileInfo[] {
+    const out: UploadFileInfo[] = []
+    for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+      for (const f of uploadedFiles.value[ft]) out.push(f)
+    }
+    return out
+  }
+  async function waitForAllParsing(opts: { timeoutMs?: number } = {}): Promise<{
+    done: UploadFileInfo[]
+    pending: UploadFileInfo[]
+    failed: UploadFileInfo[]
+  }> {
+    const timeoutMs = opts.timeoutMs ?? 5000
+    const all = listAll()
+    const parsing = all.filter((f) => f.status === 'parsing')
+    if (parsing.length === 0) {
+      return {
+        done: all.filter((f) => f.status === 'parsed'),
+        pending: [],
+        failed: all.filter((f) => f.status === 'failed'),
+      }
+    }
+    const start = Date.now()
+    const tick = 100
+    return await new Promise((resolve) => {
+      const check = () => {
+        const cur = listAll()
+        const stillParsing = cur.filter((f) => f.status === 'parsing')
+        if (stillParsing.length === 0 || Date.now() - start >= timeoutMs) {
+          resolve({
+            done: cur.filter((f) => f.status === 'parsed'),
+            pending: cur.filter((f) => f.status === 'parsing'),
+            failed: cur.filter((f) => f.status === 'failed'),
+          })
+        } else {
+          setTimeout(check, tick)
+        }
+      }
+      check()
+    })
+  }
+
+  function setFileStatus(fileId: string, status: UploadFileInfo['status']): void {
+    for (const ft of Object.keys(uploadedFiles.value) as FileType[]) {
+      const target = uploadedFiles.value[ft].find((f) => f.id === fileId)
+      if (target) {
+        target.status = status
+        return
+      }
+    }
   }
 
   const state: FileUploadState = {
@@ -307,6 +537,8 @@ export function useFileUpload(): FileUploadState {
     getAllParsedText: getAllParsedText,
     getFileNamesForMemory: getFileNamesForMemory,
     parseFileContent: parseFileContent,
+    waitForAllParsing: waitForAllParsing,
+    setFileStatus: setFileStatus,
   }
   return state
 }

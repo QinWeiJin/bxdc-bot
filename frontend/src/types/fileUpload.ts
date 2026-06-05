@@ -44,13 +44,16 @@ export interface UploadFileInfo {
    * - parsing：正在解析
    * - parsed：解析成功，parsedText 可用
    * - failed：解析失败，errorMessage 可用
+   * - skipped：用户主动跳过 / 解析超时，文件不参与本次对话
    */
-  status: 'pending' | 'parsing' | 'parsed' | 'failed';
+  status: 'pending' | 'parsing' | 'parsed' | 'failed' | 'skipped';
 
   /** 解析后的纯文本内容（仅 parsed 状态时有值） */
   parsedText?: string;
   /** 解析/上传错误信息（仅 failed 状态时有值） */
   errorMessage?: string;
+  /** 解析内容是否被截断（超过 PARSED_TEXT_MAX_BYTES 或总大小限制），仅 parsed 状态时相关 */
+  truncated?: boolean;
 
   /** 图片预览 URL（仅 image 类型，由 URL.createObjectURL 生成） */
   previewUrl?: string;
@@ -205,7 +208,24 @@ export const FILE_UPLOAD_CONFIG: FileUploadConfig = {
 };
 
 // ============================================================
-// 6. 展示辅助常量
+// 6. 解析文本长度限额（任务 pass-parsed-content-to-llm）
+// ============================================================
+
+/**
+ * 单文件解析结果的最大字节数。超过此值会被截断到该上限，并追加 `[内容已截断，原 X KB]` 标记。
+ * 单位：字节（UTF-8 编码后），80KB ≈ 20K 汉字。
+ */
+export const PARSED_TEXT_MAX_BYTES = 80 * 1024;
+
+/**
+ * 单次 sendMessage 中所有「参与对话」的文件解析结果累计最大字节数。
+ * 超过此值时按文件顺序累加，最后一个超限的文件被截断，并追加 `[因总大小限制已截断]` 标记。
+ * 200KB ≈ 5 万汉字，足够覆盖大多数文档场景。
+ */
+export const INSTRUCTION_FILES_MAX_BYTES = 200 * 1024;
+
+// ============================================================
+// 7. 展示辅助常量
 // ============================================================
 
 /** 中文展示名，用于文件列表 / 错误提示 */
