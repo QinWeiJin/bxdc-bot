@@ -34,8 +34,10 @@ cp backend/skill-gateway/src/main/resources/application.properties.example \
 # 改 password= 为内网 MySQL 密码
 
 # 3. 部署环境 build dist
-cd frontend && npm install && npm run build
-cd backend/agent-core && npm install && npm run build
+# 部署环境已经预装好 node_modules/（基础镜像 / 容器复用），
+# 所以不需要 npm install，直接 build 即可
+cd frontend && npm run build
+cd backend/agent-core && npm run build
 
 # 4. 拿 dist/ + jar + config 部署到 nginx / jvm
 ```
