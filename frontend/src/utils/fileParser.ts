@@ -115,8 +115,9 @@ export async function parseDocument(
 
   // ── PPT ──
   if (fileType === 'ppt') {
-    // ppt / pptx 均回退 agent-core（前端不引入 JSZip + XML 解析链）
-    return agentFallback(file)
+    // ppt / pptx 直接调用 skill-gateway 解析
+    const { parsePpt } = await import('./pptParser')
+    return parsePpt(file, signal)
   }
 
   // ── TXT / MD ──

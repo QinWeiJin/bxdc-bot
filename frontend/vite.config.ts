@@ -33,6 +33,11 @@ export default defineConfig({
         target: 'http://127.0.0.1:18080',
         changeOrigin: true,
       },
+      '/features/file/parse-ppt': {
+        target: 'http://127.0.0.1:18080',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/features\/file\/parse-ppt/, '/api/features/file/parse-ppt'),
+      },
       '/features': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
