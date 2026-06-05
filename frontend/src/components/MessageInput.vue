@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
@@ -13,6 +14,9 @@ const { currentUser } = useUser()
 const fileUpload = useFileUpload()
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+/** 等待解析时的 loading 状态（spinner） */
+const isWaitingForParse = ref(false)
 
 /** 扁平化所有已上传文件 */
 const allFiles = computed<UploadFileInfo[]>(() => {
@@ -76,18 +80,105 @@ function getFileLabel(type: FileType): string {
   return FILE_TYPE_LABELS[type]
 }
 
-async function handleSend(value: string) {
-  // @ts-ignore
-  const text = (typeof value === 'string' ? value : value?.text || '').trim()
-  if (!text || isThinking.value) return
+/** 把所有处于 parsing 状态的文件标记为 skipped */
+function skipParsingFiles() {
+  for (const f of allFiles.value) {
+    if (f.status === 'parsing') {
+      fileUpload.setFileStatus(f.id, 'skipped')
+    }
+  }
+}
+
+/** 实际执行 sendMessage（统一入口，处理 parsing 决策后调用） */
+async function doSendMessage(text: string) {
   input.value = ''
-  // 任务 8：若有文件则一并传给 sendMessage（拼接内容 + /memory/add + clearFiles）
   const files = allFiles.value
   if (files.length > 0) {
     await sendMessage(text, currentUser.value?.id, files)
   } else {
     await sendMessage(text, currentUser.value?.id)
   }
+}
+
+async function handleSend(value: string) {
+  // @ts-ignore
+  const text = (typeof value === 'string' ? value : value?.text || '').trim()
+  if (!text || isThinking.value) return
+
+  const files = allFiles.value
+  const hasParsing = files.some((f) => f.status === 'parsing')
+
+  // 无文件 或 无 parsing 文件 → 直接发送
+  if (files.length === 0 || !hasParsing) {
+    await doSendMessage(text)
+    return
+  }
+
+  // 有 parsing 文件 → 弹 t-dialog 三选一
+  const parsingCount = files.filter((f) => f.status === 'parsing').length
+  const result = await new Promise<'wait' | 'now' | 'cancel'>((resolve) => {
+    const dlg = DialogPlugin({
+      header: '文件正在解析',
+      body: `${parsingCount} 个文件正在解析，是否等待解析完成后发送？`,
+      footer: false, // 使用自定义 footer
+      onClose: () => resolve('cancel'),
+    })
+    // TDesign Dialog 渲染后通过 DOM 注入 3 个按钮
+    nextTick(() => {
+      const root = document.querySelector(`.t-dialog__ctx [role="dialog"]`) as HTMLElement | null
+      if (!root) {
+        resolve('cancel')
+        dlg.destroy?.()
+        return
+      }
+      const footer = document.createElement('div')
+      footer.className = 'parsing-confirm-footer'
+      footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;padding:16px 0 0;'
+      const makeBtn = (label: string, theme: 'primary' | 'default' | 'danger', value: 'wait' | 'now' | 'cancel') => {
+        const btn = document.createElement('button')
+        btn.textContent = label
+        btn.className = `t-button t-button--theme-${theme} t-button--variant-base`
+        btn.style.cssText = 'padding:6px 16px;border-radius:6px;border:1px solid var(--td-component-border);background:var(--td-bg-color-container);color:var(--td-text-color-primary);cursor:pointer;'
+        if (theme === 'primary') {
+          btn.style.background = 'var(--td-brand-color)'
+          btn.style.color = 'var(--td-text-color-anti)'
+          btn.style.borderColor = 'var(--td-brand-color)'
+        }
+        btn.onclick = () => { resolve(value); dlg.destroy?.() }
+        return btn
+      }
+      footer.appendChild(makeBtn('取消', 'default', 'cancel'))
+      footer.appendChild(makeBtn('立即发送', 'default', 'now'))
+      footer.appendChild(makeBtn('等待解析', 'primary', 'wait'))
+      // 找到 dialog body 容器
+      const body = root.querySelector('.t-dialog__body') || root.querySelector('.t-dialog__main') || root
+      body.appendChild(footer)
+    })
+  })
+
+  if (result === 'cancel') return
+
+  if (result === 'now') {
+    skipParsingFiles()
+    await doSendMessage(text)
+    return
+  }
+
+  // 'wait'：等待解析（最多 5s）
+  isWaitingForParse.value = true
+  try {
+    const { pending } = await fileUpload.waitForAllParsing({ timeoutMs: 5000 })
+    if (pending.length > 0) {
+      // 超时未完成 → 标记 skipped + 提示
+      for (const f of pending) {
+        fileUpload.setFileStatus(f.id, 'skipped')
+      }
+      MessagePlugin.warning(`${pending.length} 个文件解析超时，已跳过`)
+    }
+  } finally {
+    isWaitingForParse.value = false
+  }
+  await doSendMessage(text)
 }
 </script>
 
@@ -109,7 +200,12 @@ async function handleSend(value: string) {
       <div v-if="documentFiles.length > 0" class="file-list-group">
         <div class="file-list-group-title">文档 ({{ documentFiles.length }})</div>
         <div class="file-list-items">
-          <div v-for="f in documentFiles" :key="f.id" class="file-list-item">
+          <div
+            v-for="f in documentFiles"
+            :key="f.id"
+            class="file-list-item"
+            :class="{ 'file-list-item--skipped': f.status === 'skipped' }"
+          >
             <span class="file-icon">{{ FILE_TYPE_ICONS[f.fileType] }}</span>
             <div class="file-info">
               <div class="file-name" :title="f.fileName">{{ f.fileName }}</div>
@@ -119,7 +215,17 @@ async function handleSend(value: string) {
                 <span>{{ formatSize(f.size) }}</span>
                 <span v-if="f.status === 'parsing'" class="status status-parsing">解析中...</span>
                 <span v-else-if="f.status === 'parsed'" class="status status-parsed">✓</span>
-                <span v-else-if="f.status === 'failed'" class="status status-failed" :title="f.errorMessage">失败</span>
+                <span
+                  v-else-if="f.status === 'failed'"
+                  class="status status-failed"
+                  :title="f.errorMessage || '该文件未能解析，不参与本次对话'"
+                >失败</span>
+                <span v-else-if="f.status === 'skipped'" class="status status-skipped">已跳过</span>
+                <span
+                  v-if="f.truncated"
+                  class="badge badge-truncated"
+                  title="解析内容超过长度限制，已自动截断"
+                >内容已截断</span>
               </div>
             </div>
             <t-button
@@ -139,7 +245,12 @@ async function handleSend(value: string) {
       <div v-if="imageFiles.length > 0" class="file-list-group">
         <div class="file-list-group-title">图片 ({{ imageFiles.length }})</div>
         <div class="file-list-items file-list-images">
-          <div v-for="f in imageFiles" :key="f.id" class="file-list-item file-list-image-item">
+          <div
+            v-for="f in imageFiles"
+            :key="f.id"
+            class="file-list-item file-list-image-item"
+            :class="{ 'file-list-item--skipped': f.status === 'skipped' }"
+          >
             <div class="image-thumb">
               <img v-if="f.previewUrl" :src="f.previewUrl" :alt="f.fileName" />
               <span v-else class="file-icon">{{ FILE_TYPE_ICONS.image }}</span>
@@ -150,7 +261,17 @@ async function handleSend(value: string) {
                 <span>{{ formatSize(f.size) }}</span>
                 <span v-if="f.status === 'parsing'" class="status status-parsing">识别中...</span>
                 <span v-else-if="f.status === 'parsed'" class="status status-parsed">✓</span>
-                <span v-else-if="f.status === 'failed'" class="status status-failed" :title="f.errorMessage">失败</span>
+                <span
+                  v-else-if="f.status === 'failed'"
+                  class="status status-failed"
+                  :title="f.errorMessage || '该文件未能解析，不参与本次对话'"
+                >失败</span>
+                <span v-else-if="f.status === 'skipped'" class="status status-skipped">已跳过</span>
+                <span
+                  v-if="f.truncated"
+                  class="badge badge-truncated"
+                  title="解析内容超过长度限制，已自动截断"
+                >内容已截断</span>
               </div>
             </div>
             <t-button
@@ -172,8 +293,8 @@ async function handleSend(value: string) {
       <TChatSender
         v-model="input"
         class="chat-sender"
-        :loading="isThinking"
-        placeholder="输入消息，Enter 发送，Shift + Enter 换行"
+        :loading="isThinking || isWaitingForParse"
+        :placeholder="isWaitingForParse ? '正在等待文件解析...' : '输入消息，Enter 发送，Shift + Enter 换行'"
         :textarea-props="{ autosize: { minRows: 1, maxRows: 6 } }"
         @send="handleSend"
       />
@@ -181,7 +302,7 @@ async function handleSend(value: string) {
         <button
           type="button"
           class="upload-btn"
-          :disabled="isThinking"
+          :disabled="isThinking || isWaitingForParse"
           @click="triggerFilePicker"
         >
           <span class="upload-emoji">📎</span>
@@ -314,6 +435,36 @@ async function handleSend(value: string) {
 
 .status-failed {
   color: var(--td-error-color);
+}
+
+.status-skipped {
+  color: var(--td-text-color-placeholder);
+  text-decoration: line-through;
+}
+
+.file-list-item--skipped {
+  opacity: 0.55;
+}
+
+.file-list-item--skipped .file-name,
+.file-list-item--skipped .file-meta {
+  text-decoration: line-through;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.badge-truncated {
+  background-color: var(--td-warning-color-1, #fff3e0);
+  color: var(--td-warning-color, #d97706);
+  border: 1px solid var(--td-warning-color-3, #fcd9a4);
 }
 
 .file-remove {

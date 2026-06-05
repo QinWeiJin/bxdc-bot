@@ -737,13 +737,14 @@ export function provideChat() {
 
       const url = getAgentStreamUrl()
 
-      // 拼接文件解析内容到 instruction（任务 8）
+      // 拼接文件解析内容到 instruction（任务 8 拼接，任务 pass-parsed-content-to-llm 改用统一截断逻辑）
       let finalInstruction = content
       if (attachedFiles && attachedFiles.length > 0) {
-        const fileParts = attachedFiles
-          .filter((f) => f.parsedText && f.parsedText.length > 0)
-          .map((f) => `--- 文件：${f.fileName} ---\n${f.parsedText}`)
-          .join('\n\n')
+        // sendMessage 在函数体内调用 useFileUpload() 会让 inject 失败（currentInstance 为 null），
+        // 降级分支返回新的空 state，getAllParsedText() 因此返回空。
+        // 解决：在 MessageInput 端拿到 fileUpload state，把截断函数传一个能接受 files 参数的实现。
+        const fileUpload = useFileUpload()
+        const fileParts = fileUpload.getAllParsedText(attachedFiles)
         if (fileParts.length > 0) {
           finalInstruction = `${content}\n\n${fileParts}`
         }

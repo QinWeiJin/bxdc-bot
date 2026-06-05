@@ -3,6 +3,7 @@ import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
 import SettingsView from '../views/SettingsView.vue'
+import FileParserTest from '../views/FileParserTest.vue'
 import { useUser } from '../composables/useUser'
 
 const router = createRouter({
@@ -29,7 +30,12 @@ const router = createRouter({
       name: 'settings',
       component: SettingsView,
       meta: { requiresAuth: true }
-    }
+    },
+    {
+      path: '/dev/file-parser',
+      name: 'file-parser-test',
+      component: FileParserTest,
+    },
   ],
 })
 

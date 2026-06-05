@@ -793,8 +793,8 @@ async function copyContent(text: string) {
             </t-tooltip>
             <template #dropdown>
               <t-dropdown-menu>
-                <t-dropdown-item @click="handleDownload('md', messages.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
-                <t-dropdown-item @click="handleDownload('pdf', messages.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('md', messages?.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('pdf', messages?.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
               </t-dropdown-menu>
             </template>
           </t-dropdown>
@@ -1360,16 +1360,19 @@ async function copyContent(text: string) {
 }
 
 :deep(.t-chat) {
-  height: 100% !important;
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
+  height: 100% !important;
 }
 
 :deep(.t-chat__list) {
-  flex: 1 !important;
+  flex: 1 1 0 !important;
   min-height: 0 !important;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
 }
 
 :deep(.t-chat__inner) {

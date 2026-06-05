@@ -221,7 +221,7 @@ export async function isEncryptedFile(file: File): Promise<boolean> {
  */
 export async function validateFile(
   file: File,
-  existingFiles: UploadFileInfo[],
+  _existingFiles: UploadFileInfo[],
 ): Promise<FileValidationResult> {
   const errors: string[] = []
   const warnings: string[] = []
