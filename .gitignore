@@ -21,6 +21,13 @@ backend/agent-core/go-cursor-help/
 .env.local
 *.local
 
+# Local dev config (per-developer MySQL password etc.)
+# Use the .example template:
+#   cp backend/skill-gateway/src/main/resources/application.properties.example \
+#      backend/skill-gateway/src/main/resources/application.properties
+backend/skill-gateway/src/main/resources/application.properties
+backend/skill-gateway/src/main/resources/application-local.properties
+
 # Database & runtime data
 backend/skill-gateway/data/
 backend/skill-gateway/.m2-test/

@@ -23,11 +23,11 @@ declare const linuxScriptToolInputSchema: z.ZodObject<{
     id: z.ZodNumber;
     command: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    id?: number;
     command?: string;
+    id?: number;
 }, {
-    id?: number;
     command?: string;
+    id?: number;
 }>;
 export declare const apiCallerToolInputSchema: z.ZodObject<{
     url: z.ZodString;
@@ -54,16 +54,16 @@ export declare const sshExecutorToolInputSchema: z.ZodObject<{
     confirmed: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
     password?: string;
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
     confirmed?: boolean;
 }, {
     password?: string;
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
     confirmed?: boolean;
 }>;
@@ -143,10 +143,10 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
     allowedTools: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     prompt: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
-    command?: string;
     method?: string;
     headers?: Record<string, string>;
     body?: any;
+    command?: string;
     targetType?: "api" | "ssh" | "openclaw" | "template";
     rawDescription?: string;
     name?: string;
@@ -179,10 +179,10 @@ declare const skillGeneratorToolInputSchema: z.ZodObject<{
     allowedTools?: string[];
     prompt?: string;
 }, {
-    command?: string;
     method?: string;
     headers?: unknown;
     body?: any;
+    command?: string;
     targetType?: "api" | "ssh" | "openclaw" | "template";
     rawDescription?: string;
     name?: string;
