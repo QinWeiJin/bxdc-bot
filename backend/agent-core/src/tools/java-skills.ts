@@ -1672,6 +1672,11 @@ async function executeConfiguredApiSkillAsync(
       });
     }
 
+    // PERIODIC 模式（带 pollEndpoint 的轮询式异步）：
+    // 与 SINGLE_CALL 一样，提交后立即返回，不阻塞 LLM。
+    // gateway 已经在 submit 阶段同步调过一次第三方拿到 externalTaskId，
+    // 后续轮询由 gateway Scheduler 后台跑，结果进通知中心。
+    // maxWaitMs 只作为 gateway Scheduler 兜底超时用，agent-core 不再等待。
     const maxWaitMs = asyncPoll.maxWaitSeconds
       ? asyncPoll.maxWaitSeconds * 1000
       : (asyncPoll.maxWaitMs || 600000);
@@ -1682,68 +1687,23 @@ async function executeConfiguredApiSkillAsync(
       userId,
       sessionId,
       phase: "AGENT_REQUEST",
-      extraJson: JSON.stringify({ timeoutMs: maxWaitMs, pollMethod: asyncPoll.pollMethod || "GET" }),
+      extraJson: JSON.stringify({
+        pollStrategy: "PERIODIC",
+        pollMethod: asyncPoll.pollMethod || "GET",
+        pollIntervalSeconds: asyncPoll.pollIntervalSeconds || 5,
+        maxWaitMs,
+        fireAndForget: true,
+      }),
     });
-
-    const waitResponse = await axios.get(
-      `${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`,
-      {
-        params: { timeoutMs: maxWaitMs },
-        headers: auditHeaders,
-        timeout: maxWaitMs + 10000,
-      }
-    );
-
-    const { status, result, errorMessage } = waitResponse.data as {
-      status: string;
-      result: unknown;
-      errorMessage?: string;
-    };
-
-    postPollingAudit(gatewayUrl, auditHeaders, {
-      asyncTaskId,
-      skillId,
-      userId,
-      sessionId,
-      phase: "AGENT_RESPONSE",
-      responseBody: JSON.stringify(waitResponse.data),
-      status,
-    });
-
-    if (status === "COMPLETED") {
-      return JSON.stringify({
-        asyncTaskId,
-        externalTaskId,
-        status: "COMPLETED",
-        result: result ? (typeof result === "string" ? tryParseJson(result) ?? result : result) : null,
-        note: `Async task ${externalTaskId || asyncTaskId} completed successfully. Present the result to the user.`,
-      });
-    }
-
-    if (status === "FAILED") {
-      return JSON.stringify({
-        asyncTaskId,
-        externalTaskId,
-        status: "FAILED",
-        error: errorMessage || "Task execution failed",
-      });
-    }
-
-    if (status === "TIMEOUT") {
-      return JSON.stringify({
-        asyncTaskId,
-        externalTaskId,
-        status: "TIMEOUT",
-        error: errorMessage || "Task timed out",
-      });
-    }
 
     return JSON.stringify({
       asyncTaskId,
       externalTaskId,
-      status: status || "POLLING",
-      result: null,
-      hint: `The task (${externalTaskId || asyncTaskId}) is still being processed. You can check the status later or wait for it to complete.`,
+      status: "POLLING",
+      note:
+        `Polling-based async task submitted (id=${asyncTaskId}, external=${externalTaskId || "n/a"}). `
+        + "The result will be available in the notification center when polling completes. "
+        + "Tell the user the operation is being processed in the background.",
     });
   } catch (error) {
     const auditLog: {

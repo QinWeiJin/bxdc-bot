@@ -1274,54 +1274,21 @@ async function executeConfiguredApiSkillAsync(gatewayUrl, apiToken, userId, endp
             userId,
             sessionId,
             phase: "AGENT_REQUEST",
-            extraJson: JSON.stringify({ timeoutMs: maxWaitMs, pollMethod: asyncPoll.pollMethod || "GET" }),
+            extraJson: JSON.stringify({
+                pollStrategy: "PERIODIC",
+                pollMethod: asyncPoll.pollMethod || "GET",
+                pollIntervalSeconds: asyncPoll.pollIntervalSeconds || 5,
+                maxWaitMs,
+                fireAndForget: true,
+            }),
         });
-        const waitResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/async-tasks/${asyncTaskId}/wait`, {
-            params: { timeoutMs: maxWaitMs },
-            headers: auditHeaders,
-            timeout: maxWaitMs + 10000,
-        });
-        const { status, result, errorMessage } = waitResponse.data;
-        postPollingAudit(gatewayUrl, auditHeaders, {
-            asyncTaskId,
-            skillId,
-            userId,
-            sessionId,
-            phase: "AGENT_RESPONSE",
-            responseBody: JSON.stringify(waitResponse.data),
-            status,
-        });
-        if (status === "COMPLETED") {
-            return JSON.stringify({
-                asyncTaskId,
-                externalTaskId,
-                status: "COMPLETED",
-                result: result ? (typeof result === "string" ? tryParseJson(result) ?? result : result) : null,
-                note: `Async task ${externalTaskId || asyncTaskId} completed successfully. Present the result to the user.`,
-            });
-        }
-        if (status === "FAILED") {
-            return JSON.stringify({
-                asyncTaskId,
-                externalTaskId,
-                status: "FAILED",
-                error: errorMessage || "Task execution failed",
-            });
-        }
-        if (status === "TIMEOUT") {
-            return JSON.stringify({
-                asyncTaskId,
-                externalTaskId,
-                status: "TIMEOUT",
-                error: errorMessage || "Task timed out",
-            });
-        }
         return JSON.stringify({
             asyncTaskId,
             externalTaskId,
-            status: status || "POLLING",
-            result: null,
-            hint: `The task (${externalTaskId || asyncTaskId}) is still being processed. You can check the status later or wait for it to complete.`,
+            status: "POLLING",
+            note: `Polling-based async task submitted (id=${asyncTaskId}, external=${externalTaskId || "n/a"}). `
+                + "The result will be available in the notification center when polling completes. "
+                + "Tell the user the operation is being processed in the background.",
         });
     }
     catch (error) {
