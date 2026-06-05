@@ -2,8 +2,11 @@
 node_modules/
 
 # Build outputs
+# dist/ 在部署环境（内网）从源码 npm run build 生成，不进 git
 dist-ssr/
 target/
+frontend/dist/
+backend/agent-core/dist/
 frontend/dist.zip
 frontend/dist 2.zip
 

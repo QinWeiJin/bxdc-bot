@@ -7,35 +7,43 @@
 
 ## 1. 部署规则 ⚠️ 最重要
 
-**用户内网生产部署靠 `git pull` + 拿 `frontend/dist/` 和 `backend/agent-core/dist/` 直接跑。**
+**dist/ 已被 .gitignore 排除（commit c5d6ff3 之后）**。
 
-所以**任何代码改动合并后，必须在本地 rebuild + commit + push 产物**，否则同事部署会拿到旧版本。
+- `frontend/dist/` 和 `backend/agent-core/dist/` **不进 git**
+- `application.properties` **不进 git**（用 `.example` 模板 + 各人 cp）
+- 部署/同事 clone 下来**自己 `npm run build` 生成 dist**
 
-### 触发条件
-- 同事 PR 合并后
-- 自己改了 `frontend/src/` 或 `backend/agent-core/src/` 后
-- 用户说"传一下代码"/"重新拉取"/"重启"等交付动词
-- OpenSpec 归档前（如 archive 一个含代码改动的 change 时）
+### 工作流
 
-### 不会触发
-- 纯文档改动（`openspec/`、`.md`、`.gitignore`、`*.example`）
-- `skill-gateway` Java 端代码改动（产物在 `target/`，不通过 dist 部署）
-- 没动 `frontend/agent-core src` 时
-
-### 完整工作流
+**本地开发（不需要 dist）：**
 ```bash
-# 1. 拉最新代码
-git pull --rebase myfork low-version
-
-# 2. 本地 build
-cd frontend && npm run build           # vue-tsc -b && vite build
-cd backend/agent-core && npm run build  # nest build (incremental)
-
-# 3. commit + push
-git add -A
-git commit -m "build: 同步 dist 产物（<说明>）"
-git push myfork low-version
+# 启动 3 个服务（都走源码，不走 dist）
+cd backend/skill-gateway && ./apache-maven-3.9.6/bin/mvn spring-boot:run
+cd backend/agent-core && npm run start:dev   # nest start --watch 走 ts-node
+cd frontend && npm run dev                    # Vite 实时编译
 ```
+
+**内网生产部署（自己 build dist）：**
+```bash
+# 1. 拉源码
+git pull <origin-url> low-version
+
+# 2. cp 配置模板
+cp backend/skill-gateway/src/main/resources/application.properties.example \
+   backend/skill-gateway/src/main/resources/application.properties
+# 改 password= 为内网 MySQL 密码
+
+# 3. 部署环境 build dist
+cd frontend && npm install && npm run build
+cd backend/agent-core && npm install && npm run build
+
+# 4. 拿 dist/ + jar + config 部署到 nginx / jvm
+```
+
+### 提交源码时
+- **只 commit 源码**（`frontend/src/`、`backend/agent-core/src/`、`backend/skill-gateway/src/main/java/`、OpenSpec、`.md`、`.gitignore` 等）
+- **不 commit dist 产物**
+- 跑 `git status` 确认没把 `dist/` 误带进来
 
 ---
 
