@@ -125,3 +125,24 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 - **TypeScript `erasableSyntaxOnly: true` 禁用 enum**：用 union type + `as const satisfies Record<...>` 对象模式代替。
 - **dist hash 变化**：Vite 会给主入口 css/js 换 hash，commit 时会删一堆旧 hash 文件 + 加新 hash 文件，正常。
 - **应用 `192.168.65.1` client IP**：MySQL 看到的客户端 IP，Docker 桥接网络常见，可忽略。
+
+---
+
+## 7. 编程约束规范
+
+团队代码规范，遵循这 3 条：
+
+### 7.1 尽量不新增第三方包
+- 新增第三方包意味着 supply chain 风险 + 依赖升级成本 + 团队学习成本
+- 优先用 JDK 17 / NestJS 11 / Vue 3 / Spring Boot 2.7 自带的标准库
+- 必须新增时需要评审：能不能用现有工具实现？有没有轻量级替代？
+
+### 7.2 尽量不要新增环境变量配置
+- 新的 env 变量意味着部署同事多配一项、新同事上手成本高
+- 优先用代码内的合理默认值 + 配置文件覆盖
+- 必须新增时需要用户明确要求，且要有默认值兜底
+
+### 7.3 涉及数据库表操作可以使用 Java 代码做，尽量不增量运行 SQL 文件
+- schema 变更优先用 Flyway / Liquibase 或 Spring Data JPA 自动 ddl，或者 `schema-mysql.sql` 一次性初始化（Spring `spring.sql.init.mode=always` 自动跑）
+- **不要**在多个增量 commit 里改 `schema-mysql.sql` 让用户手动 `mysql -e "..."` 跑
+- 复杂 schema 变更（加索引 / 改字段类型 / 数据迁移）走 Java migration 类（参考 `StartupRecoveryRunner` 模式）
