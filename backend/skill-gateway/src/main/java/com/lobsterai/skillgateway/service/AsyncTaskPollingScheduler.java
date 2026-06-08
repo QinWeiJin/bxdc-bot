@@ -33,6 +33,20 @@ public class AsyncTaskPollingScheduler {
     private final AsyncPollingAuditService auditService;
     private final ObjectMapper objectMapper;
     private final ExecutorService executor = Executors.newFixedThreadPool(20);
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.CompletableFuture<String>> pendingFutures = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public java.util.concurrent.CompletableFuture<String> registerFuture(Long asyncTaskId) {
+        java.util.concurrent.CompletableFuture<String> future = new java.util.concurrent.CompletableFuture<>();
+        pendingFutures.put(asyncTaskId, future);
+        return future;
+    }
+
+    private void completeFuture(Long asyncTaskId, String result) {
+        java.util.concurrent.CompletableFuture<String> future = pendingFutures.remove(asyncTaskId);
+        if (future != null) {
+            future.complete(result);
+        }
+    }
 
     public AsyncTaskPollingScheduler(
             AsyncTaskPollingService pollingService,
@@ -192,6 +206,7 @@ public class AsyncTaskPollingScheduler {
             if (completed) {
                 String result = pollingService.extractResult(pollResponseStr, task.getResultJsonPath());
                 pollingService.updatePollResult(task.getId(), "COMPLETED", result, null);
+                completeFuture(task.getId(), result != null ? result : pollResponseStr);
                 log.info("Async task {} completed", task.getId());
 
                 AsyncPollingAuditLog completeLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -203,6 +218,7 @@ public class AsyncTaskPollingScheduler {
             if (isFailed) {
                 String errMsg = "Task failed: status matched failed values";
                 pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
+                completeFuture(task.getId(), "{\"status\":\"FAILED\",\"errorMessage\":\"" + errMsg + "\"}");
                 log.info("Async task {} failed", task.getId());
 
                 AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -215,6 +231,7 @@ public class AsyncTaskPollingScheduler {
             if (expired) {
                 String errMsg = "Task timed out after " + task.getMaxWaitSeconds() + " seconds";
                 pollingService.updatePollResult(task.getId(), "TIMEOUT", null, errMsg);
+                completeFuture(task.getId(), "{\"status\":\"TIMEOUT\",\"errorMessage\":\"" + errMsg + "\"}");
                 log.info("Async task {} timed out", task.getId());
 
                 AsyncPollingAuditLog timeoutLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -231,6 +248,7 @@ public class AsyncTaskPollingScheduler {
                 String errMsg = "Poll failed after " + retryCount + " retries: " + e.getMessage();
                 log.warn("Async task {} failed {} consecutive times, marking FAILED", task.getId(), retryCount);
                 pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
+                completeFuture(task.getId(), "{\"status\":\"FAILED\",\"errorMessage\":\"" + errMsg + "\"}");
 
                 AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
                 failLog.setStatus("FAILED");

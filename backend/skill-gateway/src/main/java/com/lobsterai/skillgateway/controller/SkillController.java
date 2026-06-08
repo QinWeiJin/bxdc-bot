@@ -26,6 +26,7 @@ import com.lobsterai.skillgateway.entity.SkillTextPrompt;
 import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
 import com.lobsterai.skillgateway.service.ApiProxyService;
 import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
+import com.lobsterai.skillgateway.service.SkillExecutionService;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
 
@@ -52,6 +53,8 @@ public class SkillController {
     private final AsyncPollingAuditService pollingAuditService;
     private final ObjectMapper objectMapper;
 
+    private final SkillExecutionService skillExecutionService;
+
     public SkillController(
             SkillService skillService,
             LinuxScriptExecutionService linuxScriptExecutionService,
@@ -62,7 +65,8 @@ public class SkillController {
             SkillTextPromptMapper skillTextPromptMapper,
             ApiProxyService apiProxyService,
             AsyncPollingAuditService pollingAuditService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            SkillExecutionService skillExecutionService
     ) {
         this.skillService = skillService;
         this.linuxScriptExecutionService = linuxScriptExecutionService;
@@ -74,6 +78,7 @@ public class SkillController {
         this.apiProxyService = apiProxyService;
         this.pollingAuditService = pollingAuditService;
         this.objectMapper = objectMapper;
+        this.skillExecutionService = skillExecutionService;
     }
 
     // --- Skill Management (CRUD) ---
@@ -165,170 +170,36 @@ public class SkillController {
         }});
     }
 
+    // --- Unified Skill Execution ---
+
+    @PostMapping("/execute")
+    public ResponseEntity<?> executeSkill(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestBody Map<String, Object> body
+    ) {
+        try {
+            SkillExecutionService.ExecuteRequest req = new SkillExecutionService.ExecuteRequest();
+            req.skillId = body.get("skillId") instanceof Number ? ((Number) body.get("skillId")).longValue() : null;
+            req.parameters = body.get("parameters");
+            req.confirmed = Boolean.TRUE.equals(body.get("confirmed"));
+            req.requestId = (String) body.get("requestId");
+            req.adjustedParams = body.get("adjustedParams");
+            req.userId = userId;
+            req.sessionId = sessionId;
+
+            Object result = skillExecutionService.execute(req);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Skill execution failed: " + e.getMessage()));
+        }
+    }
+
     // --- Skill Execution ---
 
-    /**
-     * 执行 SSH 命令。
-     *
-     * @param request 包含主机、端口、认证信息和命令的请求体
-     * @return 命令执行结果或错误信息
-     */
-    @PostMapping("/ssh")
-    public ResponseEntity<String> executeSshCommand(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestBody SshRequest request
-    ) {
-        return builtinToolExecutionService.executeSsh(request, userId);
-    }
-
-    /**
-     * 调用外部 API。
-     *
-     * @param request 包含 URL、方法、头信息和请求体的请求对象
-     * @return 外部 API 的响应
-     */
-    @PostMapping("/api")
-    public ResponseEntity<Object> callApi(@RequestBody ApiRequest request) {
-        try {
-            Object response = builtinToolExecutionService.callExternalApi(request);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body("API call failed: " + e.getMessage());
-        }
-    }
-
-    @PostMapping("/api/async")
-    public ResponseEntity<?> callApiAsync(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestHeader(value = "X-Skill-Id", required = false) Long skillId,
-            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
-            @RequestBody ApiRequest request
-    ) {
-        try {
-            Map<String, Object> asyncPoll = request.getAsyncPoll();
-            if (asyncPoll == null || !asyncPoll.containsKey("pollEndpoint")) {
-                return ResponseEntity.badRequest().body(Collections.singletonMap("error", "asyncPoll.pollEndpoint is required for async API calls"));
-            }
-
-            int timeoutSeconds = request.getTimeoutSeconds() != null ? request.getTimeoutSeconds() : 30;
-            Object initialResponse = builtinToolExecutionService.callExternalApi(request);
-
-            String initialResponseStr = initialResponse instanceof String
-                    ? (String) initialResponse
-                    : objectMapper.writeValueAsString(initialResponse);
-
-            String idJsonPath = (String) asyncPoll.get("idJsonPath");
-            String externalTaskId = asyncTaskPollingService.extractTaskId(initialResponseStr, idJsonPath);
-            if (externalTaskId == null || StringUtils.isBlank(externalTaskId)) {
-                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
-            put("error", "Failed to extract task id from initial response");
-            put("idJsonPath", idJsonPath);
-            put("initialResponse", initialResponseStr);
-        }});
-            }
-
-            String pollEndpoint = ((String) asyncPoll.get("pollEndpoint")).replace("{id}", externalTaskId);
-
-            if (!((String) asyncPoll.get("pollEndpoint")).contains("{id}")) {
-                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
-            put("error", "asyncPoll.pollEndpoint must contain {id} placeholder");
-            put("hint", "The {id} placeholder is replaced with the extracted task ID. Example: /status?task_id={id}");
-        }});
-            }
-            int pollIntervalSeconds = asyncPoll.get("pollIntervalSeconds") instanceof Number
-                    ? ((Number) asyncPoll.get("pollIntervalSeconds")).intValue()
-                    : (asyncPoll.get("pollIntervalMs") instanceof Number
-                            ? Math.max(1, ((Number) asyncPoll.get("pollIntervalMs")).intValue() / 1000)
-                            : 5);
-            int maxWaitSeconds = asyncPoll.get("maxWaitSeconds") instanceof Number
-                    ? ((Number) asyncPoll.get("maxWaitSeconds")).intValue()
-                    : (asyncPoll.get("maxWaitMs") instanceof Number
-                            ? Math.max(1, ((Number) asyncPoll.get("maxWaitMs")).intValue() / 1000)
-                            : 600);
-
-            AsyncTask task = new AsyncTask();
-            task.setSkillId(skillId);
-            task.setUserId(userId);
-            task.setSessionId(sessionId);
-            task.setExternalTaskId(externalTaskId);
-            task.setPollEndpoint(pollEndpoint);
-            task.setPollMethod(asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET");
-            task.setPollIntervalSeconds(pollIntervalSeconds);
-            task.setMaxWaitSeconds(maxWaitSeconds);
-            task.setCompletionJsonPath((String) asyncPoll.get("completionJsonPath"));
-            task.setCompletionValue((String) asyncPoll.get("completionValue"));
-            task.setResultJsonPath((String) asyncPoll.get("resultJsonPath"));
-
-            if (asyncPoll.get("failedValues") != null) {
-                task.setFailedValues(objectMapper.writeValueAsString(asyncPoll.get("failedValues")));
-            }
-            if (asyncPoll.get("pollHeaders") != null) {
-                task.setPollHeaders(objectMapper.writeValueAsString(asyncPoll.get("pollHeaders")));
-            }
-            task.setInitialResponse(initialResponseStr);
-
-            asyncTaskPollingService.createTask(task);
-
-            return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("asyncTaskId", task.getId());
-            put("status", "PENDING");
-            put("externalTaskId", externalTaskId);
-        }});
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Async API call failed: " + e.getMessage()));
-        }
-    }
-
-    @GetMapping("/async-tasks/{id}/wait")
-    public ResponseEntity<?> waitForAsyncTask(
-            @PathVariable Long id,
-            @RequestParam(defaultValue = "300000") long timeoutMs
-    ) {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-
-        while (System.currentTimeMillis() < deadline) {
-            AsyncTask task = asyncTaskPollingService.findById(id);
-            if (task == null) {
-                return ResponseEntity.notFound().build();
-            }
-
-            String status = task.getStatus();
-            if ("COMPLETED".equals(status)) {
-                return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("status", "COMPLETED");
-            put("result", (Object) task.getPollResult());
-        }});
-            }
-            if ("FAILED".equals(status)) {
-                return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("status", "FAILED");
-            put("errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task failed");
-        }});
-            }
-            if ("TIMEOUT".equals(status)) {
-                return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("status", "TIMEOUT");
-            put("errorMessage", task.getErrorMessage() != null ? task.getErrorMessage() : "Task timed out");
-        }});
-            }
-
-            try {
-                Thread.sleep(2000);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("status", task.getStatus());
-            put("result", null);
-        }});
-            }
-        }
-
-        AsyncTask task = asyncTaskPollingService.findById(id);
-        return ResponseEntity.ok(new HashMap<String, Object>() {{
-            put("status", task != null ? task.getStatus() : "UNKNOWN");
-            put("result", null);
-        }});
-    }
+    // Old async endpoints removed — async polling now handled internally by POST /api/skills/execute
 
     // --- Text Prompts (AI optimization) ---
 
@@ -422,95 +293,9 @@ public class SkillController {
         }
     }
 
-    /**
-     * 在预配置的 Linux 服务器上执行脚本命令。
-     *
-     * @param request 包含台账 id 与 command；需 {@code X-User-Id} 以解析当前用户下的服务器名称
-     * @return 成功时 { "result": "..." }，失败时返回错误信息
-     */
-    @PostMapping("/linux-script")
-    public ResponseEntity<Map<String, Object>> executeLinuxScript(
-            @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestBody LinuxScriptRequest request
-    ) {
-        if (userId == null || StringUtils.isBlank(userId)) {
-            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required for linux-script"));
-        }
-        if (request.getId() == null) {
-            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "id is required"));
-        }
-        Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
-        if (ledgerOpt.isEmpty()) {
-            gatewayOutboundAuditService.recordSsh(
-                    userId,
-                    "unknown",
-                    0,
-                    request.getCommand() != null ? request.getCommand() : "",
-                    false,
-                    "Unknown server id: " + request.getId(),
-                    "skill.linux-script",
-                    null,
-                    request.getId()
-            );
-            return ResponseEntity.status(404).body(Collections.singletonMap("error", "Unknown server id: " + request.getId()));
-        }
-        ServerLedger ledger = ledgerOpt.get();
-        int defaultPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
-        String defaultHost = ledger.getHost() != null ? ledger.getHost().trim() : "unknown";
-        try {
-            String output = linuxScriptExecutionService.executeFromLedger(ledger, request.getCommand());
-            gatewayOutboundAuditService.recordSsh(
-                    userId,
-                    defaultHost,
-                    defaultPort,
-                    request.getCommand() != null ? request.getCommand() : "",
-                    true,
-                    null,
-                    "skill.linux-script",
-                    output,
-                    ledger.getId()
-            );
-            return ResponseEntity.ok(Collections.singletonMap("result", output));
-        } catch (IllegalArgumentException e) {
-            gatewayOutboundAuditService.recordSsh(
-                    userId,
-                    defaultHost,
-                    defaultPort,
-                    request.getCommand() != null ? request.getCommand() : "",
-                    false,
-                    e.getMessage(),
-                    "skill.linux-script",
-                    null,
-                    ledger.getId()
-            );
-            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
-        } catch (IOException e) {
-            gatewayOutboundAuditService.recordSsh(
-                    userId,
-                    defaultHost,
-                    defaultPort,
-                    request.getCommand() != null ? request.getCommand() : "",
-                    false,
-                    e.getMessage(),
-                    "skill.linux-script",
-                    null,
-                    ledger.getId()
-            );
-            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Linux script execution failed: " + e.getMessage()));
-        }
-    }
+    // Old linux-script endpoint removed — use POST /api/skills/execute instead
 
-    /**
-     * 执行计算运算。
-     * 支持：时间戳转日期、日期差值、加减乘除、阶乘、平方、开方。
-     *
-     * @param request 包含 operation 和 operands 的请求体
-     * @return 成功时 { "result": <value> }，失败时 { "error": "<message>" }
-     */
-    @PostMapping("/compute")
-    public ResponseEntity<Map<String, Object>> compute(@RequestBody ComputeRequest request) {
-        return ResponseEntity.ok(builtinToolExecutionService.compute(request));
-    }
+    // Old compute endpoint removed — use POST /api/skills/execute instead
 
     /**
      * SSH 请求数据传输对象。

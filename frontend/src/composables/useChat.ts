@@ -881,7 +881,7 @@ export function provideChat() {
         }
       })
 
-      eventSource.addEventListener('error', (e) => {
+      eventSource.addEventListener('error', () => {
         console.error('[skill] SSE connection error:', {
           readyState: eventSource.readyState,
           sessionId: activeSessionId.value,
