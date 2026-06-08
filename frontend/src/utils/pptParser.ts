@@ -27,7 +27,7 @@ export async function parsePpt(file: File, signal?: AbortSignal): Promise<string
   form.append('file', file)
 
   let abortSignal: AbortSignal
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let timer: ReturnType<typeof setTimeout> | undefined
 
   if (signal) {
     abortSignal = signal

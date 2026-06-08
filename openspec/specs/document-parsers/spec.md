@@ -70,15 +70,28 @@ The system SHALL provide a `parseTxt(file: File, signal?: AbortSignal): Promise<
 
 The system SHALL provide a `parseDocument(file: File, fileType: FileType, signal?: AbortSignal): Promise<string>` function as the single public entry point for all document parsing. It SHALL route to the appropriate parser based on file extension and FileType.
 
-#### Scenario: .docx 路由到 docxParser
+#### Scenario: .docx 前端优先 + Java gateway 兜底
 - **WHEN** `parseDocument(file, 'word')` is called and `file.name` ends with `.docx`
-- **THEN** the function SHALL invoke `parseDocx(file)`
+- **THEN** the function SHALL invoke `parseDocx(file)` first
 - **AND** the parser module SHALL be loaded via dynamic `import()` (lazy loading)
+- **AND** if mammoth throws or exceeds 5s timeout, SHALL fallback to `parseWord(file)` (Java gateway)
+- **AND** `parseWord` POSTs the file to `/features/file/parse-word`
 
-#### Scenario: .doc 旧格式回退 agent-core
+#### Scenario: .doc 直接走 Java gateway
 - **WHEN** `parseDocument(file, 'word')` is called and `file.name` ends with `.doc`
-- **THEN** the function SHALL invoke `agentFallback(file, 'word')`
-- **AND** it SHALL POST the file to `/features/file/parse-document`
+- **THEN** the function SHALL invoke `parseWord(file)` (gatewayDocParser)
+- **AND** it SHALL POST the file to `/features/file/parse-word`
+
+#### Scenario: .xlsx 前端优先 + Java gateway 兜底
+- **WHEN** `parseDocument(file, 'excel')` is called and `file.name` ends with `.xlsx`
+- **THEN** the function SHALL invoke `parseXlsx(file)` first
+- **AND** if SheetJS throws or exceeds 5s timeout, SHALL fallback to `parseExcel(file)` (Java gateway)
+- **AND** `parseExcel` POSTs the file to `/features/file/parse-excel`
+
+#### Scenario: .xls 直接走 Java gateway
+- **WHEN** `parseDocument(file, 'excel')` is called and `file.name` ends with `.xls`
+- **THEN** the function SHALL invoke `parseExcel(file)` (gatewayExcelParser)
+- **AND** it SHALL POST the file to `/features/file/parse-excel`
 
 #### Scenario: .pptx/.ppt 回退 agent-core
 - **WHEN** `parseDocument(file, 'ppt')` is called with any .ppt/.pptx file
@@ -95,15 +108,15 @@ All parser functions SHALL provide user-friendly Chinese error messages. The `pa
 - **THEN** the error message SHALL be in Chinese (e.g., "Word 文档解析失败：report.docx")
 - **AND** the message SHALL include the original file name
 
-#### Scenario: agent-core 兜底服务不可用
-- **WHEN** `agentFallback()` receives HTTP 404 or 502 from `/features/file/parse-document`
-- **THEN** the error message SHALL be: "文档解析服务暂不可用，请联系管理员"
-- **AND** the function SHALL NOT retry more than once (避免级联超时)
+#### Scenario: gateway 兜底服务不可用
+- **WHEN** `parseWord()` or `parseExcel()` receives HTTP 404 or 502 from skill-gateway
+- **THEN** the error message SHALL be in Chinese (e.g., "Word 解析服务暂不可用，请联系管理员")
+- **AND** the frontend error (if exists) SHALL take priority over gateway error
 
 #### Scenario: 未知扩展名处理
 - **WHEN** `parseDocument()` receives a file with an unrecognized extension
-- **THEN** the function SHALL fall back to `agentFallback()`
-- **AND** 前端 SHALL NOT throw or reject based on extension alone
+- **THEN** the function SHALL throw an Error
+- **AND** the error message SHALL be "不支持的文件类型：{fileType}"
 
 ### Requirement: 按需延迟加载
 

@@ -216,7 +216,7 @@ export class MemoryService implements OnModuleInit {
     }
 
     try {
-      const response = await axios.post(url, {
+      const response = await axios.post(`${url}/dreamsearch`, {
         sentence: '梦境记忆',
         userid: userId,
         topk: 1
