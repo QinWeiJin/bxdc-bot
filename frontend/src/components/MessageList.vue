@@ -1,18 +1,39 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue'
-import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
+import { Chat as TChat, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest, type PollingStatus } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useSkillHub } from '../composables/useSkillHub'
+import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
-import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
+import ThinkingMode from './ThinkingMode.vue'
+import { ChevronUpIcon, ChevronDownIcon, DownloadIcon, RefreshIcon, CopyIcon, ThumbUpIcon, ThumbDownIcon, Share1Icon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
+import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
+import { MessagePlugin } from 'tdesign-vue-next'
 
 const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
 const { skills, fetchSkills } = useSkillHub()
+const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
+const downloadLoading = ref(false)
+
+// 从通知中心跳转标记：进入页面时显示一个"已从通知进入"的 banner，几秒后自动消失
+const showFromNotificationBanner = ref(false)
+const fromNotificationTaskId = ref<string | null>(null)
+try {
+  const pending = sessionStorage.getItem('pendingTaskId')
+  if (pending) {
+    fromNotificationTaskId.value = pending
+    showFromNotificationBanner.value = true
+    sessionStorage.removeItem('pendingTaskId')
+    setTimeout(() => { showFromNotificationBanner.value = false }, 6000)
+  }
+} catch {
+  // ignore
+}
 
 onMounted(() => { fetchSkills() })
 
@@ -468,12 +489,39 @@ const chatItems = computed(() =>
     confirmations: message.confirmations ?? [],
     toolInvocations: message.toolInvocations ?? [],
     llmLogs: message.llmLogs ?? [],
+    sessionId: message.sessionId,
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
+    isLast: index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
     avatarEmoji: message.role === 'assistant' ? '🤖' : (currentUser.value?.avatar || '👤'),
   } as any)),
 )
+
+async function handleDownload(format: 'md' | 'pdf', msg: Message) {
+  downloadLoading.value = true
+  try {
+    if (format === 'md') {
+      downloadMarkdown(msg)
+    } else {
+      await downloadPdf(msg)
+    }
+  } catch (e) {
+    console.error('Download failed:', e)
+    MessagePlugin.error('下载失败，请重试')
+  } finally {
+    downloadLoading.value = false
+  }
+}
+
+async function copyContent(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    MessagePlugin.success('已复制到剪贴板')
+  } catch {
+    MessagePlugin.error('复制失败')
+  }
+}
 </script>
 
 <template>
@@ -494,8 +542,18 @@ const chatItems = computed(() =>
       <span class="empty-hint">开始与 BXDC.bot 对话</span>
     </div>
 
-    <TChat
-      v-else
+    <template v-else>
+      <transition name="banner-fade">
+        <div v-if="showFromNotificationBanner" class="from-notification-banner">
+          <span class="banner-icon">消息</span>
+          <span class="banner-text">
+            已从任务通知进入
+            <span v-if="fromNotificationTaskId" class="banner-task-id">#{{ fromNotificationTaskId }}</span>
+          </span>
+        </div>
+      </transition>
+
+      <TChat
       class="chat-panel"
       :data="chatItems"
       layout="both"
@@ -503,7 +561,7 @@ const chatItems = computed(() =>
       default-scroll-to="bottom"
       :show-scroll-button="true"
       :clear-history="false"
-      :is-stream-load="false"
+      :is-stream-load="true"
       :text-loading="false"
       :animation="'moving'"
     >
@@ -519,22 +577,34 @@ const chatItems = computed(() =>
 
       <template #content="{ item }">
         <div class="message-content-block">
-          <transition name="thinking-fade">
-            <div v-if="item.showThinking" class="thinking-indicator">
-              <span class="thinking-emoji">🤔</span>
-              <span class="thinking-text">思考中</span>
-              <span class="thinking-wave" />
-            </div>
-          </transition>
-
-          <TChatContent
-            :role="item.role"
-            :content="
-              item.role === 'assistant'
-                ? { type: 'markdown', data: item.rawContent || '' }
-                : item.rawContent || ''
-            "
+          <!-- 思考模式组件：始终只用 ThinkingMode，不再显示老的小思考框 -->
+          <ThinkingMode
+            v-if="item.sessionId && getSession(item.sessionId)"
+            :nodes="getSession(item.sessionId)?.nodes || []"
+            :is-active="getSession(item.sessionId)?.isActive || false"
           />
+
+          <!-- 兜底：未进入 ThinkingMode session 时，构造一个初始 session 触发显示 -->
+          <ThinkingMode
+            v-else-if="item.showThinking"
+            :nodes="[]"
+            :is-active="true"
+          />
+
+          <div class="content-wrapper">
+            <TChatContent
+              :role="item.role"
+              :content="
+                item.role === 'assistant'
+                  ? { type: 'markdown', data: item.rawContent || '' }
+                  : item.rawContent || ''
+              "
+            />
+            <span
+              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent"
+              class="typewriter-cursor"
+            />
+          </div>
 
           <div
             v-for="conf in item.confirmations"
@@ -686,13 +756,52 @@ const chatItems = computed(() =>
       </template>
 
       <template #actions="{ item }">
-        <TChatAction
-          v-if="item.role === 'assistant' && item.rawContent"
-          :content="item.rawContent"
-          :operation-btn="['copy']"
-        />
+        <div v-if="item.role === 'assistant' && item.rawContent" class="chat-actions-bar">
+          <t-tooltip content="重新生成">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><RefreshIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-tooltip content="复制">
+            <t-button theme="default" size="small" variant="text" @click="copyContent(item.rawContent)">
+              <template #icon><CopyIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip content="点赞">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><ThumbUpIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <t-tooltip content="踩">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><ThumbDownIcon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-tooltip content="分享">
+            <t-button theme="default" size="small" variant="text">
+              <template #icon><Share1Icon /></template>
+            </t-button>
+          </t-tooltip>
+          <span class="chat-actions-divider"></span>
+          <t-dropdown trigger="click" :disabled="downloadLoading">
+            <t-tooltip content="下载">
+              <t-button theme="default" size="small" variant="text" :loading="downloadLoading">
+                <template #icon><DownloadIcon /></template>
+              </t-button>
+            </t-tooltip>
+            <template #dropdown>
+              <t-dropdown-menu>
+                <t-dropdown-item @click="handleDownload('md', messages?.find(m => m.id === item.id)!)">Markdown (.md)</t-dropdown-item>
+                <t-dropdown-item @click="handleDownload('pdf', messages?.find(m => m.id === item.id)!)">PDF (.pdf)</t-dropdown-item>
+              </t-dropdown-menu>
+            </template>
+          </t-dropdown>
+        </div>
       </template>
     </TChat>
+    </template>
 
     <t-dialog
       :visible="activeLogMessageId !== null"
@@ -1182,54 +1291,6 @@ const chatItems = computed(() =>
   word-break: break-word;
 }
 
-.thinking-indicator {
-  display: inline-flex;
-  align-items: center;
-  align-self: flex-start;
-  gap: 10px;
-  margin: 0;
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(0, 82, 217, 0.08), rgba(0, 82, 217, 0.16));
-  color: var(--td-text-color-secondary);
-  animation: thinkingPulse 1.8s ease-in-out infinite;
-}
-
-.thinking-emoji {
-  display: inline-block;
-  font-size: 18px;
-  animation: thinkingBob 1.4s ease-in-out infinite;
-  transform-origin: center bottom;
-}
-
-.thinking-text {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.thinking-wave {
-  position: relative;
-  width: 48px;
-  height: 8px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(0, 82, 217, 0.12);
-}
-
-.thinking-wave::after {
-  content: '';
-  position: absolute;
-  /* `inset` is Chrome 87+; anchor bar to the left for Chromium 86 */
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 40%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, transparent, var(--td-brand-color), transparent);
-  animation: thinkingWave 1.2s linear infinite;
-}
-
 .empty-state {
   display: flex;
   align-items: center;
@@ -1245,6 +1306,48 @@ const chatItems = computed(() =>
   color: var(--td-text-color-placeholder);
 }
 
+.from-notification-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: 0 12px 8px 12px;
+  background: linear-gradient(90deg, var(--td-brand-color-light), transparent);
+  border-left: 3px solid var(--td-brand-color);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+}
+
+.banner-icon {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-light);
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+
+.banner-task-id {
+  margin-left: 4px;
+  color: var(--td-text-color-placeholder);
+  font-family: var(--td-font-family-mono);
+  font-size: 12px;
+}
+
+.banner-fade-enter-active,
+.banner-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.banner-fade-enter-from,
+.banner-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
 /* 槽位：横向比头像略宽以留白；纵向与昵称顶对齐（TChat 已在 .t-chat__avatar 上设 padding-top 与 content--base 一致，勿再垂直居中把头像顶下去） */
 .chat-avatar-slot {
   display: flex;
@@ -1257,16 +1360,19 @@ const chatItems = computed(() =>
 }
 
 :deep(.t-chat) {
-  height: 100% !important;
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
   display: flex !important;
   flex-direction: column !important;
   overflow: hidden !important;
+  height: 100% !important;
 }
 
 :deep(.t-chat__list) {
-  flex: 1 !important;
+  flex: 1 1 0 !important;
   min-height: 0 !important;
   overflow-y: auto !important;
+  overflow-x: hidden !important;
 }
 
 :deep(.t-chat__inner) {
@@ -1324,41 +1430,91 @@ const chatItems = computed(() =>
 @keyframes thinkingBob {
   0%,
   100% {
-    transform: translateY(0) rotate(0deg);
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateY(-3px) rotate(-6deg) scale(1.02);
   }
   50% {
-    transform: translateY(-2px) rotate(-8deg);
+    transform: translateY(-5px) rotate(-10deg) scale(1.04);
+  }
+  75% {
+    transform: translateY(-3px) rotate(-4deg) scale(1.02);
   }
 }
 
 @keyframes thinkingPulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(0, 82, 217, 0.08);
+    box-shadow: 0 0 0 0 rgba(0, 82, 217, 0.06);
+    transform: scale(1);
   }
   50% {
-    box-shadow: 0 8px 20px 0 rgba(0, 82, 217, 0.14);
+    box-shadow: 0 6px 24px 2px rgba(0, 82, 217, 0.12);
+    transform: scale(1.01);
   }
 }
 
 @keyframes thinkingWave {
   0% {
-    transform: translateX(-120%);
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
   }
   100% {
-    transform: translateX(260%);
+    transform: translateX(280%);
+    opacity: 0;
   }
 }
 
-.thinking-fade-enter-active,
-.thinking-fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+/* 打字机效果 - 闪烁光标 */
+.typewriter-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background-color: var(--td-brand-color);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: typewriterCursor 0.8s ease-in-out infinite;
 }
 
-.thinking-fade-enter-from,
-.thinking-fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
+@keyframes typewriterCursor {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 流式内容容器 */
+.streaming-content {
+  position: relative;
+}
+
+/* 打字机效果 - 淡入动画 */
+.typewriter-content {
+  animation: typewriterFadeIn 0.15s ease-out forwards;
+}
+
+@keyframes typewriterFadeIn {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 流式加载中的内容包装器 */
+.content-wrapper {
+  position: relative;
+  display: inline;
 }
 
 .confirmation-card {
@@ -1504,5 +1660,39 @@ const chatItems = computed(() =>
 
 .confirmation-badge--expired {
   color: var(--td-text-color-placeholder);
+}
+
+/* 自定义操作栏，与 TDesign t-chat__actions 样式一致 */
+.chat-actions-bar {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  margin-top: var(--td-comp-margin-xs);
+  background-color: var(--td-bg-color-secondarycontainer);
+  border-radius: var(--td-radius-medium);
+  border: 1px solid var(--td-border-level-2-color);
+  gap: 0;
+}
+.chat-actions-bar .t-button {
+  padding: var(--td-comp-paddingTB-xs) var(--td-comp-paddingLR-xs);
+  width: var(--td-comp-size-xxxs);
+  height: var(--td-comp-size-xxxs);
+  box-sizing: content-box;
+  color: var(--td-text-color-primary);
+  background-color: transparent;
+  border: 0;
+  margin-right: var(--td-comp-margin-xs);
+}
+.chat-actions-bar .t-button .t-icon {
+  font-size: var(--td-font-size-body-large);
+}
+.chat-actions-bar .t-button:hover {
+  background-color: var(--td-bg-color-secondarycontainer-hover);
+}
+.chat-actions-divider {
+  width: 1px;
+  height: var(--td-comp-size-xxxs);
+  background-color: var(--td-component-stroke);
+  margin-right: var(--td-comp-margin-xs);
 }
 </style>

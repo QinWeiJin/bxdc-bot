@@ -338,17 +338,14 @@ test("api skill generator reports missing required fields", async () => {
   const { JavaSkillGeneratorTool } = require("../dist/src/tools/skill-generator");
   const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
 
-  // interfaceDescription and parameterContract are now required by Zod schema,
-  // so omitting them triggers Zod validation, not INPUT_INCOMPLETE.
-  await assert.rejects(
-    () => tool.invoke({
-      targetType: "api",
-      rawDescription: "调用某个接口",
-      endpoint: "https://example.com/demo",
-    }),
-    /interfaceDescription|parameterContract/,
-    "Should reject when required API fields are missing"
-  );
+  // interfaceDescription and parameterContract are now optional in the flat schema,
+  // so the invocation succeeds even without them (the gateway will validate).
+  const result = await tool.invoke({
+    targetType: "api",
+    rawDescription: "调用某个接口",
+    endpoint: "https://example.com/demo",
+  });
+  assert.ok(typeof result === "string", "Should succeed even without interfaceDescription/parameterContract");
 });
 
 test("api skill generator updates existing skill when overwrite is enabled", async () => {

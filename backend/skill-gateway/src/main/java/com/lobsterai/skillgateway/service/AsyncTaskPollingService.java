@@ -2,7 +2,9 @@ package com.lobsterai.skillgateway.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.dto.AsyncTaskNotificationDto;
 import com.lobsterai.skillgateway.entity.AsyncTask;
+import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.mapper.AsyncTaskMapper;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
@@ -10,18 +12,23 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class AsyncTaskPollingService {
 
     private final AsyncTaskMapper asyncTaskMapper;
     private final ObjectMapper objectMapper;
+    private final SkillService skillService;
 
-    public AsyncTaskPollingService(AsyncTaskMapper asyncTaskMapper, ObjectMapper objectMapper) {
+    public AsyncTaskPollingService(AsyncTaskMapper asyncTaskMapper, ObjectMapper objectMapper,
+                                   SkillService skillService) {
         this.asyncTaskMapper = asyncTaskMapper;
         this.objectMapper = objectMapper;
+        this.skillService = skillService;
     }
 
     public AsyncTask createTask(AsyncTask task) {
@@ -94,6 +101,16 @@ public class AsyncTaskPollingService {
         task.setUpdatedAt(LocalDateTime.now());
         asyncTaskMapper.updateById(task);
         return newCount;
+    }
+
+    /**
+     * 按 session 维度查找最近的同签名任务。
+     * null 输入直接返回 null（由调用方处理）；窗口由调用方传（PER_SESSION / NO_SESSION）。
+     */
+    public AsyncTask findRecentBySignatureInSession(
+            String userId, String sessionId, String signature, int windowSeconds) {
+        if (userId == null || signature == null) return null;
+        return asyncTaskMapper.findRecentBySignatureInSession(userId, sessionId, signature, windowSeconds);
     }
 
     public List<AsyncTask> findPendingOrPollingTasks(int limit) {
@@ -171,5 +188,80 @@ public class AsyncTaskPollingService {
     @SuppressWarnings("unchecked")
     public static Object extractValueByPath(Object obj, String path) {
         return JsonPathUtils.extractValueByPath(obj, path);
+    }
+
+    // ============================ 通知中心 ============================
+
+    /**
+     * 列出指定用户的异步任务（仅走 asyncPoll 分支），转 DTO。
+     * 同时触发一次"7 天前已完成/失败/超时且未读"的自动清理。
+     */
+    public List<AsyncTaskNotificationDto> findNotificationsByUser(String userId, boolean unreadOnly, int limit) {
+        // 自动清理历史未读任务，避免用户登录时看到几个月前的旧任务
+        try {
+            asyncTaskMapper.autoMarkStaleAsRead();
+        } catch (Exception ignore) {
+            // 自动清理失败不应阻塞列表查询
+        }
+        List<AsyncTask> tasks = asyncTaskMapper.findByUserAndAsyncPoll(userId, unreadOnly, limit);
+        if (tasks.isEmpty()) return java.util.Collections.emptyList();
+
+        // 预加载 skill 名称，避免 N+1
+        Map<Long, String> skillNameCache = new HashMap<>();
+        for (AsyncTask t : tasks) {
+            if (t.getSkillId() == null) continue;
+            skillNameCache.computeIfAbsent(t.getSkillId(), sid -> {
+                return skillService.getSkillByIdForUser(sid, userId)
+                        .map(Skill::getName)
+                        .orElse(null);
+            });
+        }
+
+        return tasks.stream().map(t -> {
+            String skillName = t.getSkillId() == null ? null : skillNameCache.get(t.getSkillId());
+            long elapsed = 0;
+            if (t.getStartedAt() != null) {
+                // 终态（COMPLETED / FAILED / TIMEOUT）用 completedAt 冻结耗时，
+                // 否则用 now() 实时增长。未启动的任务 elapsed=0。
+                String status = t.getStatus();
+                boolean isTerminal = "COMPLETED".equals(status) || "FAILED".equals(status) || "TIMEOUT".equals(status);
+                LocalDateTime end = (isTerminal && t.getCompletedAt() != null) ? t.getCompletedAt() : LocalDateTime.now();
+                elapsed = ChronoUnit.SECONDS.between(t.getStartedAt(), end);
+                if (elapsed < 0) elapsed = 0;
+            }
+            String preview = buildPreview(t);
+            return AsyncTaskNotificationDto.from(t, skillName, 0, elapsed, preview);
+        }).collect(Collectors.toList());
+    }
+
+    public int countUnreadByUser(String userId) {
+        return asyncTaskMapper.countUnreadByUser(userId);
+    }
+
+    public int markRead(Long taskId, String userId) {
+        return asyncTaskMapper.markRead(taskId, userId);
+    }
+
+    public int autoMarkStaleAsRead() {
+        return asyncTaskMapper.autoMarkStaleAsRead();
+    }
+
+    public int deleteByIdAndUser(Long taskId, String userId) {
+        return asyncTaskMapper.deleteByIdAndUser(taskId, userId);
+    }
+
+    public int deleteByIdsAndUser(String userId, java.util.List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return 0;
+        return asyncTaskMapper.deleteByIdsAndUser(userId, ids);
+    }
+
+    private String buildPreview(AsyncTask t) {
+        if (!"COMPLETED".equals(t.getStatus())) return null;
+        String src = t.getPollResult();
+        if (src == null || src.isEmpty()) src = t.getInitialResponse();
+        if (src == null || src.isEmpty()) return null;
+        // 截断到 200 字符，避免列表过长
+        if (src.length() > 200) return src.substring(0, 200) + "…";
+        return src;
     }
 }

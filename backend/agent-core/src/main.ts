@@ -53,7 +53,25 @@ if (result.error) {
  */
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+
+  const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || 'http://localhost:8080,http://127.0.0.1:8080')
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      // 无 Origin 头（同源请求或服务端调用）直接放行
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-User-Id', 'X-Agent-Token', 'X-Skill-Id', 'X-Session-Id'],
+    credentials: true,
+  });
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);

@@ -3,9 +3,11 @@ package com.lobsterai.skillgateway.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
+import com.lobsterai.skillgateway.config.DedupConfig;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.util.RequestSignatureUtil;
 import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -436,13 +438,65 @@ public class SkillExecutionService {
 
     @SuppressWarnings("unchecked")
     private Object executeApiSkillAsync(Skill skill, Map<String, Object> config, Object parameters, String userId, String sessionId) throws Exception {
+        Map<String, Object> asyncPoll = (Map<String, Object>) config.get("asyncPoll");
+        String endpoint = (String) config.get("endpoint");
+        String method = (String) config.getOrDefault("method", "GET");
+
+        // 读取 pollStrategy，决定后续流程分支
+        String pollStrategy = asyncPoll.get("pollStrategy") instanceof String
+                ? (String) asyncPoll.get("pollStrategy") : "PERIODIC";
+        boolean singleCallMode = "SINGLE_CALL".equals(pollStrategy);
+
+        // ====== SINGLE_CALL 分支：创建 Task → 提交给 singleCallExecutor → 立即返回 ======
+        if (singleCallMode) {
+            Integer singleCallReadTimeoutSeconds = asyncPoll.get("singleCallReadTimeoutSeconds") instanceof Number
+                    ? ((Number) asyncPoll.get("singleCallReadTimeoutSeconds")).intValue() : null;
+            if (singleCallReadTimeoutSeconds == null || singleCallReadTimeoutSeconds < 60) {
+                singleCallReadTimeoutSeconds = 600;
+            }
+
+            // 序列化请求信息，供 Scheduler 回放
+            String requestBody = null;
+            if (parameters != null) {
+                requestBody = parameters instanceof String
+                        ? (String) parameters
+                        : objectMapper.writeValueAsString(parameters);
+            }
+
+            Map<String, Object> configHeaders = (Map<String, Object>) config.get("headers");
+            String pollHeadersJson = configHeaders != null ? objectMapper.writeValueAsString(configHeaders) : null;
+
+            AsyncTask task = new AsyncTask();
+            task.setSkillId(skill.getId());
+            task.setUserId(userId);
+            task.setSessionId(sessionId);
+            task.setPollStrategy("SINGLE_CALL");
+            task.setPollEndpoint(endpoint);
+            task.setPollMethod(method);
+            task.setRequestBody(requestBody);
+            task.setPollHeaders(pollHeadersJson);
+            task.setSingleCallReadTimeoutSeconds(singleCallReadTimeoutSeconds);
+            task.setStatus("PENDING");
+
+            asyncTaskPollingService.createTask(task);
+            log.info("Created SINGLE_CALL async task {} for skill {} (url={}, timeout={}s)",
+                    task.getId(), skill.getId(), endpoint, singleCallReadTimeoutSeconds);
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("status", "SINGLE_CALLED");
+            result.put("asyncTaskId", task.getId());
+            result.put("note", "Long-running one-shot call submitted (id=" + task.getId() + "). "
+                    + "The result will be available in the notification center when the upstream returns. "
+                    + "Tell the user the operation is being processed in the background.");
+            return result;
+        }
+
+        // ====== PERIODIC 分支：调第三方 → extractTaskId → RequestSignature 去重 → 立即返回 ======
         // Step 1: Execute initial API request
         Object initialResponse = executeApiSkill(config, parameters);
         String initialResponseStr = initialResponse instanceof String
                 ? (String) initialResponse
                 : objectMapper.writeValueAsString(initialResponse);
-
-        Map<String, Object> asyncPoll = (Map<String, Object>) config.get("asyncPoll");
 
         // Step 2: Extract external task ID
         String idJsonPath = (String) asyncPoll.get("idJsonPath");
@@ -458,15 +512,34 @@ public class SkillExecutionService {
 
         // Step 3: Build poll endpoint
         String pollEndpoint = ((String) asyncPoll.get("pollEndpoint")).replace("{id}", externalTaskId);
+        String pollMethod = asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET";
 
-        // Step 4: Create async task
+        // Step 4: RequestSignature 去重（在创建 AsyncTask 之前）
+        String signature = RequestSignatureUtil.compute(method, endpoint, parameters, idJsonPath, pollMethod, pollEndpoint);
+        int dedupWindow = sessionId != null && !sessionId.trim().isEmpty()
+                ? DedupConfig.PER_SESSION_WINDOW_SECONDS
+                : DedupConfig.NO_SESSION_WINDOW_SECONDS;
+        AsyncTask duplicate = asyncTaskPollingService.findRecentBySignatureInSession(userId, sessionId, signature, dedupWindow);
+        if (duplicate != null) {
+            log.info("Dedup hit for async task: existing={} signature={}", duplicate.getId(), signature.substring(0, 16));
+            Map<String, Object> dupResult = new LinkedHashMap<>();
+            dupResult.put("status", "POLLING");
+            dupResult.put("asyncTaskId", duplicate.getId());
+            dupResult.put("externalTaskId", duplicate.getExternalTaskId());
+            dupResult.put("deduplicated", true);
+            dupResult.put("note", "Duplicate request detected. Reusing existing background task (id=" + duplicate.getId() + "). "
+                    + "The result will be available in the notification center when complete.");
+            return dupResult;
+        }
+
+        // Step 5: Create async task
         AsyncTask task = new AsyncTask();
         task.setSkillId(skill.getId());
         task.setUserId(userId);
         task.setSessionId(sessionId);
         task.setExternalTaskId(externalTaskId);
         task.setPollEndpoint(pollEndpoint);
-        task.setPollMethod(asyncPoll.get("pollMethod") instanceof String ? (String) asyncPoll.get("pollMethod") : "GET");
+        task.setPollMethod(pollMethod);
         int pollIntervalSeconds = asyncPoll.get("pollIntervalSeconds") instanceof Number
                 ? ((Number) asyncPoll.get("pollIntervalSeconds")).intValue()
                 : (asyncPoll.get("pollIntervalMs") instanceof Number
@@ -489,23 +562,20 @@ public class SkillExecutionService {
             task.setPollHeaders(objectMapper.writeValueAsString(asyncPoll.get("pollHeaders")));
         }
         task.setInitialResponse(initialResponseStr);
+        task.setRequestSignature(signature);
 
         asyncTaskPollingService.createTask(task);
-        log.info("Created async task {} for skill {} (external={})", task.getId(), skill.getId(), externalTaskId);
+        log.info("Created PERIODIC async task {} for skill {} (external={})", task.getId(), skill.getId(), externalTaskId);
 
-        // Step 5: Register future and wait
-        java.util.concurrent.CompletableFuture<String> future = asyncTaskPollingScheduler.registerFuture(task.getId());
-
-        try {
-            String result = future.get(maxWaitSeconds + 30, java.util.concurrent.TimeUnit.SECONDS);
-            return result.startsWith("{") ? objectMapper.readValue(result, Object.class) : result;
-        } catch (java.util.concurrent.TimeoutException e) {
-            asyncTaskPollingService.updatePollResult(task.getId(), "TIMEOUT", null, "Task timed out after " + maxWaitSeconds + " seconds");
-            Map<String, Object> timeout = new LinkedHashMap<>();
-            timeout.put("status", "TIMEOUT");
-            timeout.put("errorMessage", "Task timed out after " + maxWaitSeconds + " seconds");
-            return timeout;
-        }
+        // ✅ fire-and-forget: 立即返回，不阻塞 agent（轮询由 AsyncTaskPollingScheduler 后台处理）
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "POLLING");
+        result.put("asyncTaskId", task.getId());
+        result.put("externalTaskId", externalTaskId);
+        result.put("note", "Polling-based async task submitted (id=" + task.getId() + ", external=" + externalTaskId + "). "
+                + "The result will be available in the notification center when the polling completes. "
+                + "Tell the user the operation is being processed in the background.");
+        return result;
     }
 
     public static class ExecuteRequest {

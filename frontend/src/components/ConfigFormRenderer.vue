@@ -7,6 +7,7 @@ export interface ConfigSchemaProperty {
   required?: boolean;
   ui: string;
   enum?: string[];
+  enumLabels?: string[];
   default?: unknown;
   minimum?: number;
   maximum?: number;
@@ -14,6 +15,7 @@ export interface ConfigSchemaProperty {
   readonly?: boolean;
   aiHint?: string;
   aiOptimize?: { fieldId: string };
+  visibleWhen?: { field: string; equals: unknown };
 }
 
 export interface ConfigSchema {
@@ -33,6 +35,17 @@ const emit = defineEmits<{
 
 const properties = computed(() => {
   return Object.entries(props.configSchema.properties ?? {});
+});
+
+function isFieldVisible(prop: ConfigSchemaProperty): boolean {
+  const rule = prop.visibleWhen;
+  if (!rule) return true;
+  const currentValue = props.modelValue[rule.field];
+  return currentValue === rule.equals || (typeof rule.equals === 'boolean' && !!currentValue === rule.equals);
+}
+
+const visibleProperties = computed(() => {
+  return properties.value.filter(([_, prop]) => isFieldVisible(prop));
 });
 
 function getFieldValue(key: string): unknown {
@@ -88,7 +101,7 @@ function handleOptimize(key: string) {
 
 <template>
   <t-form-item
-    v-for="[key, prop] in properties"
+    v-for="[key, prop] in visibleProperties"
     :key="key"
     :name="key"
     :rules="prop.required ? [{ validator: (val: unknown) => { const v = val; return v !== undefined && v !== null && String(v).trim() !== ''; }, message: `${prop.label}不能为空` }] : undefined"
@@ -103,8 +116,30 @@ function handleOptimize(key: string) {
       </div>
     </template>
 
+    <t-checkbox
+      v-if="prop.ui === 'checkbox'"
+      :checked="!!getFieldValue(key)"
+      @change="(checked: boolean) => setFieldValue(key, checked)"
+    >
+      {{ prop.label }}
+    </t-checkbox>
+
+    <t-radio-group
+      v-else-if="prop.ui === 'radio'"
+      :model-value="String(getFieldValue(key) ?? prop.default ?? '')"
+      @change="(val: string) => setFieldValue(key, val)"
+    >
+      <t-radio
+        v-for="(item, idx) in prop.enum ?? []"
+        :key="item"
+        :value="item"
+      >
+        {{ prop.enumLabels?.[idx] ?? item }}
+      </t-radio>
+    </t-radio-group>
+
     <t-input
-      v-if="prop.ui === 'input'"
+      v-else-if="prop.ui === 'input'"
       :model-value="String(getFieldValue(key) ?? '')"
       :placeholder="prop.placeholder"
       :readonly="prop.readonly"

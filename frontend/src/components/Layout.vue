@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUser } from '../composables/useUser';
 import { useSkillHub } from '../composables/useSkillHub';
 import { useServerLedger } from '../composables/useServerLedger';
+import { useAsyncTaskNotifications } from '../composables/useAsyncTaskNotifications';
 import UserAvatar from './UserAvatar.vue';
 import ProfileEditModal from './ProfileEditModal.vue';
 import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
+import TaskNotificationBell from './TaskNotificationBell.vue';
 import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
 const router = useRouter();
@@ -15,6 +17,16 @@ const { currentUser, logout } = useUser();
 const profileEditVisible = ref(false);
 const { toggleSkillHub } = useSkillHub();
 const { toggleServerLedger } = useServerLedger();
+const { startPolling, stopPolling } = useAsyncTaskNotifications();
+
+onMounted(() => {
+  // 启动异步任务通知 30s 轮询
+  startPolling(30_000);
+});
+
+onBeforeUnmount(() => {
+  stopPolling();
+});
 </script>
 
 <template>
@@ -43,6 +55,8 @@ const { toggleServerLedger } = useServerLedger();
           <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
             编辑资料
           </t-button>
+
+          <TaskNotificationBell v-if="currentUser" />
 
           <div class="user-info" v-if="currentUser">
             <UserAvatar :avatar="currentUser.avatar" :size="32" />

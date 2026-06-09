@@ -50,7 +50,10 @@ public class TaskController {
 
     @PostMapping
     public ResponseEntity<CreateTaskResponse> createTask(@RequestBody CreateTaskRequest request) {
-        String taskId = UUID.randomUUID().toString();
+        // 如果请求中提供了 sessionId，则使用它；否则生成新的 UUID
+        String taskId = (request.getSessionId() != null && !request.getSessionId().isEmpty()) 
+            ? request.getSessionId() 
+            : UUID.randomUUID().toString();
         taskContexts.put(taskId, new TaskContext(request.getContent(), request.getUserId(), request.getHistory()));
         return ResponseEntity.ok(new CreateTaskResponse(taskId));
     }
@@ -175,6 +178,7 @@ public class TaskController {
         private String content;
         private String userId;
         private java.util.List<Map<String, Object>> history;
+        private String sessionId;
 
         public String getContent() {
             return content;
@@ -198,6 +202,14 @@ public class TaskController {
 
         public void setHistory(java.util.List<Map<String, Object>> history) {
             this.history = history;
+        }
+
+        public String getSessionId() {
+            return sessionId;
+        }
+
+        public void setSessionId(String sessionId) {
+            this.sessionId = sessionId;
         }
     }
 

@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
@@ -117,6 +118,31 @@ public class UserController {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(r);
+    }
+
+    /**
+     * Internal API for agent-core to fetch complete LLM config including API key.
+     * This endpoint should only be accessible from localhost or trusted internal networks.
+     */
+    @GetMapping("/{id}/llm-config-internal")
+    public ResponseEntity<?> getLlmConfigInternal(@PathVariable String id) {
+        User user = userService.getUser(id);
+        if (user == null) {
+            return ResponseEntity.notFound().build();
+        }
+        // 只返回用户显式设置过的字段，不返回 env 兜底值。
+        // agent-core 拿到后用自己的 .env 兜底，避免硬编码 gpt-4 覆盖用户 .env 配置。
+        Map<String, String> userOnly = new LinkedHashMap<>();
+        if (user.getLlmApiBase() != null && !user.getLlmApiBase().trim().isEmpty()) {
+            userOnly.put("llmApiBase", user.getLlmApiBase().trim());
+        }
+        if (user.getLlmModelName() != null && !user.getLlmModelName().trim().isEmpty()) {
+            userOnly.put("llmModelName", user.getLlmModelName().trim());
+        }
+        if (user.getLlmApiKey() != null && !user.getLlmApiKey().trim().isEmpty()) {
+            userOnly.put("llmApiKey", user.getLlmApiKey().trim());
+        }
+        return ResponseEntity.ok(userOnly);
     }
 
     @PutMapping("/{id}/llm-settings")

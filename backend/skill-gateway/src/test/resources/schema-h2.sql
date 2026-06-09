@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS server_ledgers (
     private_key_path VARCHAR(255),
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
-    UNIQUE KEY uk_server_ledgers_user_name (user_id, name),
-    UNIQUE KEY uk_server_ledgers_user_host (user_id, host)
+    UNIQUE (user_id, name),
+    UNIQUE (user_id, host)
 );
 
 CREATE TABLE IF NOT EXISTS system_skills (

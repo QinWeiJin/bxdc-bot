@@ -17,6 +17,7 @@ export class AvatarService {
         fetch: composeOpenAiCompatibleFetch(),
       },
       temperature: 0.7, // Higher creativity for avatar/greeting
+      timeout: 30000, // 30秒超时
     });
   }
 
@@ -85,7 +86,7 @@ export class AvatarService {
             this.greetingCache.set(cacheKey, { content, timestamp: Date.now() });
             console.log(`[AvatarService] Late greeting cached for ${nickname}`);
           }
-        }).catch(err => console.error("[AvatarService] Late generation error:", err));
+        }).catch(err => console.warn("[AvatarService] Late generation error:", err instanceof Error ? err.message : err));
         
         return defaultGreeting;
       }
@@ -105,7 +106,7 @@ export class AvatarService {
       
       return content || defaultGreeting;
     } catch (error) {
-      console.error("Error generating greeting:", error);
+      console.warn("[AvatarService] Greeting generation error (background):", error instanceof Error ? error.message : error);
       return `欢迎你，${nickname} ${avatar}！很高兴见到你。`; // Simple fallback
     }
   }

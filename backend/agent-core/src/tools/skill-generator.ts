@@ -133,71 +133,54 @@ const skillGeneratorAsyncPollSchema = z.preprocess((val) => {
   failedValues: z.array(z.string()).optional(),
   resultJsonPath: z.string().optional(),
   pollHeaders: z.record(z.string()).optional(),
+  // 'SINGLE_CALL' = 单次长调用（不依赖 pollEndpoint，长 readTimeout 等最终结果）。
+  pollStrategy: z.enum(["PERIODIC", "SINGLE_CALL"]).optional(),
+  // SINGLE_CALL 专用 read timeout（秒）。未设置时回退到 maxWaitSeconds。
+  singleCallReadTimeoutSeconds: z.number().int().min(1).optional(),
 }).optional());
 
-/** Skill generator discriminated union - forces model to provide correct fields per targetType */
-const skillGeneratorToolInputSchema = z.discriminatedUnion("targetType", [
-  z.object({
-    targetType: z.literal("api"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    method: z.string().optional(),
-    endpoint: z.string().optional(),
-    headers: skillGeneratorHeadersSchema,
-    query: skillGeneratorQuerySchema,
-    body: z.any().optional(),
-    interfaceDescription: z.string()
-      .describe("Natural language description of the API's purpose, input/output fields, constraints, and usage notes for the LLM. Required for proper skill operation."),
-    parameterContract: skillGeneratorParameterContractSchema
-      .describe("JSON Schema object describing API parameters. Required. Each property supports: "
-        + "type/description/required/default (standard JSON Schema), "
-        + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
-        + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
-        + "for dynamic dropdown options fetched from an API."),
-    parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
-      .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
-    timeoutSeconds: skillGeneratorTimeoutSecondsSchema
-      .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
-    asyncPoll: skillGeneratorAsyncPollSchema
-      .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
-          + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
-          + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
-    /** Overrides default validation payload after save (e.g. { query: { env: "prod" } }). */
-    testInput: skillGeneratorTestInputSchema,
-    enabled: skillGeneratorBooleanOptionalSchema,
-    requiresConfirmation: skillGeneratorBooleanOptionalSchema,
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("ssh"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    command: z.string().optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("openclaw"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    systemPrompt: z.string().optional(),
-    allowedTools: z.preprocess(
-      (v) => (typeof v === "string" ? (() => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : v; } catch { return v; } })() : v),
-      z.array(z.string()),
-    ).optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-  z.object({
-    targetType: z.literal("template"),
-    rawDescription: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-    prompt: z.string().optional(),
-    allowOverwrite: skillGeneratorAllowOverwriteSchema,
-  }),
-]);
+/** Skill generator schema - flat object with optional fields for all target types (DeepSeek compatible). */
+const skillGeneratorToolInputSchema = z.object({
+  targetType: z.enum(["api", "ssh", "openclaw", "template"]).describe("Type of skill to create."),
+  rawDescription: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  allowOverwrite: skillGeneratorAllowOverwriteSchema,
+  // API specific
+  method: z.string().optional(),
+  endpoint: z.string().optional(),
+  headers: skillGeneratorHeadersSchema,
+  query: skillGeneratorQuerySchema,
+  body: z.any().optional(),
+  interfaceDescription: z.string().optional(),
+  parameterContract: skillGeneratorParameterContractSchema
+    .describe("JSON Schema object describing API parameters. Each property supports: "
+      + "type/description/required/default (standard JSON Schema), "
+      + "enum: string[] OR [{label:string, value:string}][] (simple values or with display labels), "
+      + "enumSource (optional): { url, method? (default GET), headers?, jsonPath?, valueKey? (default 'value'), labelKey? (default 'label'), searchParam?, refreshIntervalSec? (default 300) } "
+      + "for dynamic dropdown options fetched from an API."),
+  parameterBinding: z.enum(["query", "jsonBody", "formBody"]).optional()
+    .describe("How scalar parameters map to the HTTP call: query (URL params), jsonBody (JSON request body), formBody (application/x-www-form-urlencoded). Default: jsonBody for POST/PUT/PATCH/DELETE, query for GET/HEAD."),
+  timeoutSeconds: skillGeneratorTimeoutSecondsSchema
+    .describe("HTTP timeout in seconds (1-3600). Default 30. Set higher (e.g. 120) for slow APIs; for minute-to-hour long tasks, set asyncPoll instead."),
+  asyncPoll: skillGeneratorAsyncPollSchema
+    .describe("Async polling configuration for long-running APIs that return a task ID and require status polling. "
+        + "Rules: pollEndpoint MUST contain {id} placeholder; JSON paths use dot notation (e.g. data.status) — NEVER use $ prefix; "
+        + "only valid fields are: pollEndpoint, idJsonPath, pollMethod, pollIntervalSeconds, maxWaitSeconds, completionJsonPath, completionValue, failedValues, resultJsonPath, pollHeaders"),
+  testInput: skillGeneratorTestInputSchema,
+  enabled: skillGeneratorBooleanOptionalSchema,
+  requiresConfirmation: skillGeneratorBooleanOptionalSchema,
+  // SSH specific
+  command: z.string().optional(),
+  // OPENCLAW specific
+  systemPrompt: z.string().optional(),
+  allowedTools: z.preprocess(
+    (v) => (typeof v === "string" ? (() => { try { const p = JSON.parse(v); return Array.isArray(p) ? p : v; } catch { return v; } })() : v),
+    z.array(z.string()),
+  ).optional(),
+  // Template specific
+  prompt: z.string().optional(),
+});
 
 // ============================================================================
 // Skill Generator — Types & Helpers

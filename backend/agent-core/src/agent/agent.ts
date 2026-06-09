@@ -122,6 +122,11 @@ export class AgentFactory {
       sessionId: config?.sessionId,
     });
 
+    // streaming 默认开启，启用流式输出实现打字机效果。
+    // 内网环境若受 LangChain tiktoken 网络访问影响（导致每次响应卡 30s+），
+    // 可通过 .env 设置 AGENT_STREAMING=false 关闭流式响应。
+    const agentStreaming = String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
+
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // 或使用 OneAPI 兼容模型
@@ -132,6 +137,7 @@ export class AgentFactory {
         : {}),
       temperature: 0, // 使用确定性输出，便于调试和复现
       callbacks: config?.callbacks,
+      streaming: agentStreaming, // 流式输出开关
     });
 
     // 获取内置技能路由模式

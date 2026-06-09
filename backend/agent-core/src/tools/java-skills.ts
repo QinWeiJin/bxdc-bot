@@ -223,9 +223,9 @@ export interface ExtendedSkillConfig {
 }
 
 export interface AsyncPollConfig {
-  /** 轮询端点模板，{id} 会被替换为外部任务 ID */
-  pollEndpoint: string;
-  /** 从初始响应中提取任务 ID 的 JSON 路径，如 "data.task_id" */
+  /** 轮询端点模板，{id} 会被替换为外部任务 ID。SINGLE_CALL 模式下可省略（fallback 到请求 URL）。 */
+  pollEndpoint?: string;
+  /** 从初始响应中提取任务 ID 的 JSON 路径，如 "data.task_id"。SINGLE_CALL 模式下不需要。 */
   idJsonPath?: string;
   /** 轮询 HTTP method，默认 GET */
   pollMethod?: string;
@@ -247,6 +247,15 @@ export interface AsyncPollConfig {
   resultJsonPath?: string;
   /** 轮询请求头 */
   pollHeaders?: Record<string, string>;
+  /**
+   * 轮询策略：
+   * - 'PERIODIC'（默认）：周期轮询，需要 pollEndpoint 包含 {id} 占位符。
+   * - 'SINGLE_CALL'：单次长调用（无 pollEndpoint 也可以，靠长 readTimeout 等结果）；
+   *                 提交后立即返回 asyncTaskId，LLM 异步获知结果。
+   */
+  pollStrategy?: "PERIODIC" | "SINGLE_CALL";
+  /** SINGLE_CALL 模式专用 read timeout（秒）。未设置时回退到 maxWaitSeconds。 */
+  singleCallReadTimeoutSeconds?: number;
 }
 
 export function readPreset(config: ExtendedSkillConfig): string | undefined {
@@ -262,7 +271,19 @@ const extendedOpenClawSkillToolSchema = z.object({
   input: z.string().optional().describe("User goal or parameters for the OPENCLAW planner."),
 });
 
-const extendedPassthroughSkillToolSchema = z.object({}).passthrough();
+/**
+ * 包装 zod schema 以保证 JSON Schema 顶层一定有 `type: "object"`，兼容 DeepSeek 严格校验。
+ * 部分 zod schema（如 .passthrough()）在序列化为 JSON Schema 时
+ * 不会自动加 type: "object"，DeepSeek 会返回 400 错误。
+ */
+function ensureObjectType<T extends z.ZodTypeAny>(inner: T, description: string): z.ZodType<{ payload?: unknown }> {
+  return z.object({ payload: inner.optional().describe(description) }).passthrough() as any;
+}
+
+const extendedPassthroughSkillToolSchema = ensureObjectType(
+  z.object({}).passthrough(),
+  "Any parameters passed through as-is"
+);
 
 const extendedSkillConfirmationField = z.object({
   confirmed: z

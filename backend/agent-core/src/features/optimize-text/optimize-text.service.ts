@@ -83,13 +83,36 @@ export class OptimizeTextService {
         : "";
 
     try {
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      // 1) 去掉 markdown 代码块围栏（```json ... ``` / ``` ... ```），避免污染 JSON
+      const stripped = raw
+        .replace(/```(?:json)?\s*/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      // 2) 非贪婪匹配：找第一个完整的 { ... }，避免把 LLM 后续追加的文字也吃进去
+      const jsonMatch = stripped.match(/\{[\s\S]*?\}/);
       if (!jsonMatch) {
-        throw new Error("No JSON found in response");
+        throw new Error("No JSON object found in response");
       }
-      const parsed = JSON.parse(jsonMatch[0]);
+
+      // 3) JSON 解析失败时打印原始内容（截断 500 字符）方便排查
+      let parsed: any;
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch (jsonErr) {
+        console.error(
+          '[optimize-text] JSON.parse failed. raw (first 500 chars):',
+          raw.slice(0, 500),
+          'matched (first 500 chars):',
+          jsonMatch[0].slice(0, 500)
+        );
+        throw jsonErr;
+      }
+
       if (typeof parsed.optimizedText !== "string" || typeof parsed.explanation !== "string") {
-        throw new Error("Missing required fields");
+        throw new Error(
+          `Missing required fields: optimizedText=${typeof parsed.optimizedText}, explanation=${typeof parsed.explanation}`
+        );
       }
       return {
         optimizedText: parsed.optimizedText,

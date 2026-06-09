@@ -5,6 +5,7 @@ import com.lobsterai.skillgateway.entity.AsyncPollingAuditLog;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
+import javax.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -12,14 +13,15 @@ import org.springframework.stereotype.Component;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.SocketTimeoutException;
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 @Component
 public class AsyncTaskPollingScheduler {
@@ -28,25 +30,19 @@ public class AsyncTaskPollingScheduler {
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
     private static final int RESPONSE_TRUNCATE_LENGTH = 4000;
 
+    /** SINGLE_CALL 默认 read timeout（秒），与 maxWaitSeconds 都没设置时用此值。 */
+    private static final int DEFAULT_SINGLE_CALL_READ_TIMEOUT_SECONDS = 600;
+
+    /** PERIODIC 任务的固定线程池。20 个并发足够应对 30s 间隔的轮询。 */
+    private final ExecutorService periodicExecutor = Executors.newFixedThreadPool(20);
+
+    /** SINGLE_CALL 任务的缓存线程池。每个长调用占一个线程，线程数随任务数动态伸缩。 */
+    private final ExecutorService singleCallExecutor = Executors.newCachedThreadPool();
+
     private final AsyncTaskPollingService pollingService;
     private final ApiProxyService apiProxyService;
     private final AsyncPollingAuditService auditService;
     private final ObjectMapper objectMapper;
-    private final ExecutorService executor = Executors.newFixedThreadPool(20);
-    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.CompletableFuture<String>> pendingFutures = new java.util.concurrent.ConcurrentHashMap<>();
-
-    public java.util.concurrent.CompletableFuture<String> registerFuture(Long asyncTaskId) {
-        java.util.concurrent.CompletableFuture<String> future = new java.util.concurrent.CompletableFuture<>();
-        pendingFutures.put(asyncTaskId, future);
-        return future;
-    }
-
-    private void completeFuture(Long asyncTaskId, String result) {
-        java.util.concurrent.CompletableFuture<String> future = pendingFutures.remove(asyncTaskId);
-        if (future != null) {
-            future.complete(result);
-        }
-    }
 
     public AsyncTaskPollingScheduler(
             AsyncTaskPollingService pollingService,
@@ -66,10 +62,17 @@ public class AsyncTaskPollingScheduler {
             List<AsyncTask> tasks = pollingService.findPendingOrPollingTasks(50);
             if (tasks.isEmpty()) return;
 
-            log.debug("Polling scheduler picked up {} tasks", tasks.size());
+            log.info("Polling scheduler picked up {} tasks: {}", tasks.size(),
+                    tasks.stream().map(t -> String.format("id=%d/strategy=%s/status=%s",
+                            t.getId(), t.getPollStrategy(), t.getStatus())).collect(Collectors.toList()));
 
             for (AsyncTask task : tasks) {
-                executor.submit(() -> pollSingleTask(task));
+                // 按 pollStrategy 分发到不同线程池
+                if ("SINGLE_CALL".equals(task.getPollStrategy())) {
+                    singleCallExecutor.submit(() -> pollSingleTask(task));
+                } else {
+                    periodicExecutor.submit(() -> pollSingleTask(task));
+                }
             }
         } catch (Exception e) {
             log.error("Polling scheduler scan failed", e);
@@ -77,8 +80,13 @@ public class AsyncTaskPollingScheduler {
     }
 
     private void pollSingleTask(AsyncTask task) {
+        boolean singleCallMode = "SINGLE_CALL".equals(task.getPollStrategy());
+
         AsyncPollingAuditLog startLog = auditService.buildBaseLog(task, "GATEWAY_POLL_START");
-        startLog.setExtraJson(auditService.safeJson(Collections.singletonMap("retryCount", task.getPollRetryCount() != null ? task.getPollRetryCount() : 0)));
+        Map<String, Object> extra = new HashMap<>();
+        extra.put("retryCount", task.getPollRetryCount() != null ? task.getPollRetryCount() : 0);
+        extra.put("pollStrategy", task.getPollStrategy() != null ? task.getPollStrategy() : "PERIODIC");
+        startLog.setExtraJson(auditService.safeJson(extra));
         auditService.log(startLog);
 
         try {
@@ -88,14 +96,22 @@ public class AsyncTaskPollingScheduler {
             }
 
             String status = task.getStatus();
-            if (!"PENDING".equals(status) && !"POLLING".equals(status)) {
+            if (!"PENDING".equals(status) && !"POLLING".equals(status) && !"SINGLE_CALLED".equals(status)) {
                 return;
             }
 
-            if ("PENDING".equals(status)) {
-                pollingService.updateStatusAndLastPolled(task.getId(), "POLLING");
+            if (singleCallMode) {
+                // ★ 修竞态：SINGLE_CALL 跳过 PENDING→POLLING 转换，直接走 PENDING→SINGLE_CALLED
+                if ("PENDING".equals(status)) {
+                    pollingService.updateStatus(task.getId(), "SINGLE_CALLED", null);
+                }
+            } else {
+                if ("PENDING".equals(status)) {
+                    pollingService.updateStatusAndLastPolled(task.getId(), "POLLING");
+                }
             }
 
+            // ============== 构造请求 ==============
             Map<String, Object> pollHeaders = null;
             if (task.getPollHeaders() != null && !StringUtils.isBlank(task.getPollHeaders())) {
                 try {
@@ -105,15 +121,65 @@ public class AsyncTaskPollingScheduler {
                 }
             }
 
+            int readTimeoutSeconds;
+            String requestUrl;
+            if (singleCallMode) {
+                // SINGLE_CALL 没有 pollEndpoint —— 直接使用 initial_response 路径里的原 URL。
+                // 实际场景下，第三方 SDK 把 initial call 的 URL + body 缓存在 initial_response，
+                // 这里我们**重用 initialResponse 时调用的同一个 URL**。
+                // 因为 v2.2 没有改 ApiProxyService 的签名，我们用 maxWaitSeconds 作为 readTimeout。
+                readTimeoutSeconds = task.getSingleCallReadTimeoutSeconds() != null
+                        ? task.getSingleCallReadTimeoutSeconds()
+                        : (task.getMaxWaitSeconds() != null ? task.getMaxWaitSeconds() : DEFAULT_SINGLE_CALL_READ_TIMEOUT_SECONDS);
+                // 仍然需要发个请求去拿"最终结果"。
+                // SINGLE_CALL 的设计：发请求 → 第三方长返回 → readTimeout 内拿到结果。
+                // 这里复用 task.getPollEndpoint()：要求上游 Skill 创建任务时
+                // 把"要发请求的 URL"放在 pollEndpoint（即使没有轮询），这样 SINGLE_CALL
+                // 也能用同一个 ApiProxyService.callApi 路径。
+                requestUrl = task.getPollEndpoint();
+                if (requestUrl == null || requestUrl.trim().isEmpty()) {
+                    String err = "SINGLE_CALL task must have pollEndpoint (reused as long-call URL)";
+                    pollingService.updatePollResult(task.getId(), "FAILED", null, err);
+                    auditService.log(buildCompleteLog(task, "FAILED", err));
+                    return;
+                }
+            } else {
+                readTimeoutSeconds = 30; // PERIODIC 模式用默认 30s（ApiProxyService 的常规重载）
+                requestUrl = task.getPollEndpoint();
+            }
+
             Object pollResponse;
             long networkStart = System.currentTimeMillis();
             try {
-                pollResponse = apiProxyService.callApi(
-                        task.getPollEndpoint(),
-                        task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET",
-                        pollHeaders,
-                        null
-                );
+                if (singleCallMode) {
+                    // SINGLE_CALL：反序列化 requestBody（JSON 字符串 → Object），带长 readTimeout 调一次
+                    Object requestBody = null;
+                    if (task.getRequestBody() != null && !task.getRequestBody().trim().isEmpty()) {
+                        try {
+                            requestBody = objectMapper.readValue(task.getRequestBody(), Object.class);
+                        } catch (Exception bodyParseEx) {
+                            log.warn("Failed to deserialize requestBody for SINGLE_CALL task {}: {}",
+                                    task.getId(), bodyParseEx.getMessage());
+                            // 用原 JSON 字符串作为 body 兜底
+                            requestBody = task.getRequestBody();
+                        }
+                    }
+                    pollResponse = apiProxyService.callApi(
+                            requestUrl,
+                            task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET",
+                            pollHeaders,
+                            requestBody,
+                            readTimeoutSeconds
+                    );
+                } else {
+                    // PERIODIC 走原 4 参数重载（行为零变化）
+                    pollResponse = apiProxyService.callApi(
+                            requestUrl,
+                            task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET",
+                            pollHeaders,
+                            null
+                    );
+                }
                 long durationMs = System.currentTimeMillis() - networkStart;
 
                 String responseStr = pollResponse instanceof String
@@ -121,7 +187,7 @@ public class AsyncTaskPollingScheduler {
                         : objectMapper.writeValueAsString(pollResponse);
 
                 AsyncPollingAuditLog netLog = auditService.buildBaseLog(task, "NETWORK_REQUEST");
-                netLog.setHttpUrl(task.getPollEndpoint());
+                netLog.setHttpUrl(requestUrl);
                 netLog.setHttpMethod(task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET");
                 netLog.setDurationMs((int) durationMs);
                 netLog.setResponseBody(auditService.truncate(responseStr, RESPONSE_TRUNCATE_LENGTH));
@@ -139,13 +205,26 @@ public class AsyncTaskPollingScheduler {
 
                 log.debug("Polled async task {} (external={}) endpoint={} response={}",
                         task.getId(), task.getExternalTaskId(),
-                        task.getPollEndpoint(),
+                        requestUrl,
                         responseStr.substring(0, Math.min(200, responseStr.length())));
+
+                // ============== SINGLE_CALL 模式：拿到响应即 COMPLETED ==============
+                if (singleCallMode) {
+                    String result = pollingService.extractResult(responseStr, task.getResultJsonPath());
+                    pollingService.updatePollResult(task.getId(), "COMPLETED", result, null);
+                    log.info("Async task {} (SINGLE_CALL) completed after {}ms", task.getId(), durationMs);
+
+                    AsyncPollingAuditLog completeLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                    completeLog.setStatus("COMPLETED");
+                    completeLog.setDurationMs((int) durationMs);
+                    auditService.log(completeLog);
+                    return;
+                }
             } catch (Exception netEx) {
                 long durationMs = System.currentTimeMillis() - networkStart;
 
                 AsyncPollingAuditLog netErrLog = auditService.buildBaseLog(task, "NETWORK_ERROR");
-                netErrLog.setHttpUrl(task.getPollEndpoint());
+                netErrLog.setHttpUrl(requestUrl);
                 netErrLog.setHttpMethod(task.getPollMethod() != null ? task.getPollMethod().toUpperCase() : "GET");
                 netErrLog.setDurationMs((int) durationMs);
                 netErrLog.setErrorMessage(netEx.getMessage());
@@ -154,9 +233,31 @@ public class AsyncTaskPollingScheduler {
                 netErrLog.setErrorStack(sw.toString());
                 auditService.log(netErrLog);
 
+                if (singleCallMode) {
+                    if (netEx instanceof SocketTimeoutException) {
+                        // SINGLE_CALL 模式 read timeout 到期 → 标 TIMEOUT
+                        String err = "SINGLE_CALL read timeout after " + readTimeoutSeconds + "s";
+                        pollingService.updatePollResult(task.getId(), "TIMEOUT", null, err);
+                        log.info("Async task {} (SINGLE_CALL) timed out after {}ms", task.getId(), durationMs);
+                        AsyncPollingAuditLog timeoutLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+                        timeoutLog.setStatus("TIMEOUT");
+                        timeoutLog.setErrorMessage(err);
+                        timeoutLog.setDurationMs((int) durationMs);
+                        auditService.log(timeoutLog);
+                    } else {
+                        // SINGLE_CALL 模式其他 HTTP 异常 → 标 FAILED
+                        String err = "SINGLE_CALL network error: " + netEx.getMessage();
+                        pollingService.updatePollResult(task.getId(), "FAILED", null, err);
+                        log.warn("Async task {} (SINGLE_CALL) failed: {}", task.getId(), netEx.getMessage());
+                        auditService.log(buildCompleteLog(task, "FAILED", err));
+                    }
+                    return;
+                }
+                // PERIODIC：转抛给外层 catch 走 retry 逻辑
                 throw netEx;
             }
 
+            // ============== PERIODIC 模式：原有的 completion / failed / expired 评估 ==============
             String pollResponseStr = pollResponse instanceof String
                     ? (String) pollResponse
                     : objectMapper.writeValueAsString(pollResponse);
@@ -206,7 +307,6 @@ public class AsyncTaskPollingScheduler {
             if (completed) {
                 String result = pollingService.extractResult(pollResponseStr, task.getResultJsonPath());
                 pollingService.updatePollResult(task.getId(), "COMPLETED", result, null);
-                completeFuture(task.getId(), result != null ? result : pollResponseStr);
                 log.info("Async task {} completed", task.getId());
 
                 AsyncPollingAuditLog completeLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -218,7 +318,6 @@ public class AsyncTaskPollingScheduler {
             if (isFailed) {
                 String errMsg = "Task failed: status matched failed values";
                 pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
-                completeFuture(task.getId(), "{\"status\":\"FAILED\",\"errorMessage\":\"" + errMsg + "\"}");
                 log.info("Async task {} failed", task.getId());
 
                 AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -231,7 +330,6 @@ public class AsyncTaskPollingScheduler {
             if (expired) {
                 String errMsg = "Task timed out after " + task.getMaxWaitSeconds() + " seconds";
                 pollingService.updatePollResult(task.getId(), "TIMEOUT", null, errMsg);
-                completeFuture(task.getId(), "{\"status\":\"TIMEOUT\",\"errorMessage\":\"" + errMsg + "\"}");
                 log.info("Async task {} timed out", task.getId());
 
                 AsyncPollingAuditLog timeoutLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
@@ -248,7 +346,6 @@ public class AsyncTaskPollingScheduler {
                 String errMsg = "Poll failed after " + retryCount + " retries: " + e.getMessage();
                 log.warn("Async task {} failed {} consecutive times, marking FAILED", task.getId(), retryCount);
                 pollingService.updatePollResult(task.getId(), "FAILED", null, errMsg);
-                completeFuture(task.getId(), "{\"status\":\"FAILED\",\"errorMessage\":\"" + errMsg + "\"}");
 
                 AsyncPollingAuditLog failLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
                 failLog.setStatus("FAILED");
@@ -258,6 +355,34 @@ public class AsyncTaskPollingScheduler {
             }
             log.error("Polling task {} failed (retry {}/{}): {}", task.getId(), retryCount, MAX_CONSECUTIVE_FAILURES, e.getMessage());
             pollingService.updateStatus(task.getId(), "POLLING", "Poll error: " + e.getMessage());
+        }
+    }
+
+    private AsyncPollingAuditLog buildCompleteLog(AsyncTask task, String status, String errMsg) {
+        AsyncPollingAuditLog log = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
+        log.setStatus(status);
+        if (errMsg != null) log.setErrorMessage(errMsg);
+        return log;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        log.info("AsyncTaskPollingScheduler shutting down thread pools");
+        shutdownExecutor(periodicExecutor, "periodic");
+        shutdownExecutor(singleCallExecutor, "singleCall");
+    }
+
+    private void shutdownExecutor(ExecutorService executor, String name) {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                log.warn("{} executor did not terminate in 30s, forcing shutdown", name);
+                executor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            log.warn("{} executor shutdown interrupted, forcing", name);
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 }

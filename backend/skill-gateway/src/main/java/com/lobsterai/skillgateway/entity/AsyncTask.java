@@ -82,6 +82,29 @@ public class AsyncTask {
     @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
 
+    @TableField("notified_at")
+    private LocalDateTime notifiedAt;
+
+    /** 'PERIODIC' = 周期轮询；'SINGLE_CALL' = 单次长调用（无 pollEndpoint，靠 HTTP 长 readTimeout 等结果）。 */
+    @TableField("poll_strategy")
+    private String pollStrategy;
+
+    /** SINGLE_CALL 模式专用 read timeout（秒）；NULL 时回退到 maxWaitSeconds。 */
+    @TableField("single_call_read_timeout_seconds")
+    private Integer singleCallReadTimeoutSeconds;
+
+    /** 请求签名 SHA-256 hex（去重用）。 */
+    @TableField("request_signature")
+    private String requestSignature;
+
+    /**
+     * SINGLE_CALL 模式专用：原始请求体（JSON 字符串）。
+     * Scheduler 跑长调用时需要这份 body 去调第三方。
+     * PERIODIC 模式为 NULL（PERIODIC 模式下，初始响应 body 存 initial_response）。
+     */
+    @TableField("request_body")
+    private String requestBody;
+
     public AsyncTask() {}
 
     public Long getId() { return id; }
@@ -155,4 +178,19 @@ public class AsyncTask {
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    public LocalDateTime getNotifiedAt() { return notifiedAt; }
+    public void setNotifiedAt(LocalDateTime notifiedAt) { this.notifiedAt = notifiedAt; }
+
+    public String getPollStrategy() { return pollStrategy; }
+    public void setPollStrategy(String pollStrategy) { this.pollStrategy = pollStrategy; }
+
+    public Integer getSingleCallReadTimeoutSeconds() { return singleCallReadTimeoutSeconds; }
+    public void setSingleCallReadTimeoutSeconds(Integer singleCallReadTimeoutSeconds) { this.singleCallReadTimeoutSeconds = singleCallReadTimeoutSeconds; }
+
+    public String getRequestSignature() { return requestSignature; }
+    public void setRequestSignature(String requestSignature) { this.requestSignature = requestSignature; }
+
+    public String getRequestBody() { return requestBody; }
+    public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
 }
