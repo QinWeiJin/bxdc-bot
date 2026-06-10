@@ -10,7 +10,7 @@
     ${user.home} 在 settings.xml 里是用户家目录，不展开为项目内路径，
     所以这里用相对路径而不是 ${user.home}。
   -->
-  <localRepository>./.m2/repository</localRepository>
+  <localRepository>.m2/repository</localRepository>
 
   <mirrors>
     <mirror>

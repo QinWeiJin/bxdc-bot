@@ -54,6 +54,3 @@ backend/skill-gateway/apache-maven-*/
 # One-click scripts
 start-services.bat
 stop-services.bat
-
-# Maven local repo (offline build cache, ignore)
-backend/skill-gateway/.m2/**
