@@ -2,6 +2,16 @@
   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
                       http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <!--
+    本地仓库：项目内 .m2/repository（gitignored，117MB）。
+    mvn 必须从 backend/skill-gateway/ 目录启动（AGENTS.md 启动命令），
+    ./ 解析为 mvn 进程的工作目录，指向 backend/skill-gateway/。
+    内网部署时把 m2-offline-bundle.tar.* 解压到 backend/skill-gateway/.m2/。
+    ${user.home} 在 settings.xml 里是用户家目录，不展开为项目内路径，
+    所以这里用相对路径而不是 ${user.home}。
+  -->
+  <localRepository>.m2/repository</localRepository>
+
   <mirrors>
     <mirror>
       <id>aliyunmaven</id>
