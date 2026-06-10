@@ -53,19 +53,50 @@ async function onFileChange(e: Event) {
   if (!target.files || target.files.length === 0) return
 
   const files = Array.from(target.files)
-  await fileUpload.addFiles(files)
+  const added = await fileUpload.addFiles(files)
 
-  // 自动触发解析（任务 4-5 完成后会真正工作）
-  const fresh = allFiles.value.slice(-files.length)
-  await Promise.all(fresh.map((f) => fileUpload.parseFileContent(f)))
+  // 统一走批量解析（MAX_CONCURRENT_PARSES=3），避免无界并发
+  if (added.length > 0) {
+    await fileUpload.parseFiles(added)
+  }
 
   // 重置 input 以便下次能选同名文件
   target.value = ''
 }
 
-/** 移除文件 */
+/** 拖拽上传：调用 composable 的 onDrop，自动 addFiles + 解析 */
+async function onDrop(e: DragEvent) {
+  await fileUpload.onDrop(e)
+}
+
+/** 粘贴上传（Ctrl+V）：调用 composable 的 onPaste */
+async function onPaste(e: ClipboardEvent) {
+  await fileUpload.onPaste(e)
+}
+
+/** 拖拽视觉反馈 */
+const isDragOver = ref(false)
+function onDragEnter(e: DragEvent) {
+  e.preventDefault()
+  isDragOver.value = true
+}
+function onDragLeave(e: DragEvent) {
+  e.preventDefault()
+  // 仅在离开最外层时清掉
+  const related = e.relatedTarget as Node | null
+  const current = e.currentTarget as Node
+  if (!related || !current.contains(related)) {
+    isDragOver.value = false
+  }
+}
+function onDragOver(e: DragEvent) {
+  e.preventDefault()
+}
+
+/** 移除文件（点击 × 取消按钮） */
 function onRemoveFile(id: string) {
-  fileUpload.removeFile(id)
+  // 解析中或解析前都走 cancel（cancel 会 abort + 移除）
+  fileUpload.cancel(id)
 }
 
 /** 格式化文件大小 */
@@ -76,7 +107,14 @@ function formatSize(bytes: number): string {
 }
 
 /** 获取文件类型展示名 */
-function getFileLabel(type: FileType): string {
+function getFileLabel(type: FileType, fileName?: string): string {
+  // .txt / .md / .py 共用 fileType='txt'，但要按扩展名区分 label
+  if (type === 'txt' && fileName) {
+    const ext = fileName.toLowerCase().slice(fileName.lastIndexOf('.'))
+    if (ext === '.md') return 'Markdown'
+    if (ext === '.py') return 'Python'
+    if (ext === '.txt') return 'TXT 文本'
+  }
   return FILE_TYPE_LABELS[type]
 }
 
@@ -183,7 +221,15 @@ async function handleSend(value: string) {
 </script>
 
 <template>
-  <div class="input-container">
+  <div
+    class="input-container"
+    :class="{ 'input-container--drag-over': isDragOver }"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+    @paste="onPaste"
+  >
     <!-- 隐藏的文件 input -->
     <input
       ref="fileInputRef"
@@ -210,7 +256,7 @@ async function handleSend(value: string) {
             <div class="file-info">
               <div class="file-name" :title="f.fileName">{{ f.fileName }}</div>
               <div class="file-meta">
-                <span>{{ getFileLabel(f.fileType) }}</span>
+                <span>{{ getFileLabel(f.fileType, f.fileName) }}</span>
                 <span class="dot">·</span>
                 <span>{{ formatSize(f.size) }}</span>
                 <span v-if="f.status === 'parsing'" class="status status-parsing">解析中...</span>
@@ -321,6 +367,15 @@ async function handleSend(value: string) {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  border: 2px dashed transparent;
+  border-radius: 12px;
+  padding: 4px;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.input-container--drag-over {
+  border-color: var(--td-brand-color);
+  background-color: var(--td-brand-color-light, rgba(0, 96, 175, 0.05));
 }
 
 /* ---------- 文件列表 ---------- */

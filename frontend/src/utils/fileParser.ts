@@ -112,9 +112,16 @@ export async function parseDocument(
         async () => { const { parseExcel } = await import('./gatewayExcelParser'); return parseExcel(file, signal) },
       )
     }
-    // .xls → Java gateway
-    const { parseExcel } = await import('./gatewayExcelParser')
-    return parseExcel(file, signal)
+    if (ext === '.xls') {
+      // .xls → Java gateway
+      const { parseExcel } = await import('./gatewayExcelParser')
+      return parseExcel(file, signal)
+    }
+    if (ext === '.csv') {
+      // .csv 暂走 FileReader（纯文本），完整 CSV 解析由启雷模块实现（需求方案 A1 模块三）
+      const { parseTxt } = await import('./txtParser')
+      return parseTxt(file, signal)
+    }
   }
 
   // ── PPT ──
@@ -123,8 +130,9 @@ export async function parseDocument(
     return parsePpt(file, signal)
   }
 
-  // ── TXT / MD ──
+  // ── TXT / MD / PY ──
   if (fileType === 'txt') {
+    // .txt / .md / .py 都用 FileReader 读取纯文本
     const { parseTxt } = await import('./txtParser')
     return parseTxt(file, signal)
   }
