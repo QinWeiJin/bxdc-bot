@@ -127,8 +127,12 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 ## 5. 提交与分支约定
 
 - **集成分支：`low-version`**（不是 main，所有改动先到这里）
-- **远端：`myfork`** = `lijianlong1/bxdc-bot.git`（用 token 推送）
-  - token 写在 git 命令里：`git push https://<token>@github.com/lijianlong1/bxdc-bot.git low-version`
+- **迭代开发分支：`iter-v2-基于temp`**（基于同事 `origin/temp` 拉出，**push 到 `myfork/temp`**，不是 `myfork/iter-v2`）
+  - 工作流：本地 `iter-v2-基于temp` 提交 → `git push myfork HEAD:temp --force`
+  - **不要**新开 `iter-v2` 远端分支（之前误开过，已删）
+  - 同事 `git fetch myfork && git checkout temp` 拿最新代码（force push 后本地的 `temp` 需要 reset）
+- **远端：`myfork`** = `lijianlong1/bxdc-bot.git`（用 token 推送，token 配在 `myfork` remote URL 里）
+  - 推荐 `git push myfork <branch>` 直接用 remote 配置的 token，不要把 token 写在命令行
 - **Conventional Commits 风格**：
   - `feat(scope): 新功能`
   - `fix(scope): bug 修复`
