@@ -452,7 +452,7 @@ public class SkillExecutionService {
         if (singleCallMode) {
             Integer singleCallReadTimeoutSeconds = asyncPoll.get("singleCallReadTimeoutSeconds") instanceof Number
                     ? ((Number) asyncPoll.get("singleCallReadTimeoutSeconds")).intValue() : null;
-            if (singleCallReadTimeoutSeconds == null || singleCallReadTimeoutSeconds < 60) {
+            if (singleCallReadTimeoutSeconds == null || singleCallReadTimeoutSeconds < 10) {
                 singleCallReadTimeoutSeconds = 600;
             }
 
