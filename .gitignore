@@ -51,7 +51,11 @@ skills/
 # Maven
 backend/skill-gateway/apache-maven-*/
 
-# One-click scripts
+# One-click scripts（Windows 一键启停，本地用，不进 git）
+start-all.bat
+start-all.ps1
+stop-all.bat
+stop-all.ps1
 start-services.bat
 stop-services.bat
 start-all.bat
