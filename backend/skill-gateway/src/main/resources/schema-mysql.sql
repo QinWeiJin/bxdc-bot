@@ -236,3 +236,20 @@ CREATE TABLE IF NOT EXISTS tool_call_logs (
     INDEX idx_tool_status (status),
     INDEX idx_tool_start_time (start_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工具调用日志表';
+
+-- user_files（智能文件中心 - 用户文件元数据表）
+CREATE TABLE IF NOT EXISTS user_files (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id VARCHAR(128) NOT NULL COMMENT 'AAM 统一认证用户 ID',
+    original_file_name VARCHAR(255) NOT NULL COMMENT '用户上传的原始文件名（显示用）',
+    file_name VARCHAR(255) NOT NULL COMMENT 'FTP 存储用的 UUID 文件名',
+    file_size BIGINT NOT NULL DEFAULT 0 COMMENT '文件大小（字节）',
+    file_type VARCHAR(16) NOT NULL COMMENT '文件类型（扩展名小写），如 docx, xlsx, csv',
+    ftp_path VARCHAR(512) NOT NULL COMMENT 'FTP 存储路径',
+    download_url VARCHAR(512) COMMENT '文件下载 URL',
+    parsed_summary LONGTEXT COMMENT '文件解析后的 JSON 摘要',
+    upload_time DATETIME NOT NULL COMMENT '上传时间',
+    INDEX idx_user_files_user_id (user_id),
+    INDEX idx_user_files_user_orig_name (user_id, original_file_name),
+    INDEX idx_user_files_upload_time (upload_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户文件元数据表';
