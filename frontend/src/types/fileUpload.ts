@@ -147,7 +147,7 @@ export const ImageParsedStatus = {
 // ============================================================
 
 /**
- * 限额配置结构。4 个字段都是 `Record<FileType, ...>`，便于 IDE 自动补全与穷尽性检查。
+ * 限额配置结构。5 个字段都是 `Record<FileType, ...>`，便于 IDE 自动补全与穷尽性检查。
  *
  * 数字单位：
  * - MAX_SIZE_PER_FILE / MAX_TOTAL_SIZE 单位为**字节**（byte）
@@ -158,6 +158,17 @@ export interface FileUploadConfig {
   MAX_SIZE_PER_FILE: Record<FileType, number>;
   MAX_TOTAL_SIZE: Record<FileType, number>;
   ACCEPTED_EXTENSIONS: Record<FileType, string[]>;
+  /** 单会话最多文件数（与需求方案 A1 模块二 §2.2.3 对齐） */
+  MAX_FILES_PER_SESSION: number;
+  /** 解析并发上限 */
+  MAX_CONCURRENT_PARSES: number;
+  /** 错误弹窗文案（来自需求方案 A1 模块二） */
+  MESSAGES: {
+    UNSUPPORTED_TYPE: string;
+    FILE_TOO_LARGE: string;
+    TOO_MANY_FILES: string;
+    DUPLICATE_FILE: (name: string, time: string) => string;
+  };
 }
 
 /** MiB → bytes 转换（1 MiB = 1024 * 1024） */
@@ -166,44 +177,55 @@ const MIB = 1024 * 1024;
 /**
  * 限额常量。修改此处即可调整所有上传入口的限额，**不要在业务代码中硬编码数字**。
  *
- * 限额表（与 `specs/file-upload/spec.md` 中表格逐项对齐）：
+ * 限额表（与需求方案 A1 模块二 §2.2 严格对齐）：
  *
  * | FileType | MAX_COUNT | MAX_SIZE_PER_FILE | MAX_TOTAL_SIZE | ACCEPTED_EXTENSIONS |
  * |----------|-----------|-------------------|----------------|---------------------|
- * | word     | 3         | 5 MiB             | 15 MiB         | .doc, .docx         |
- * | excel    | 2         | 1 MiB             | 2 MiB          | .xls, .xlsx         |
- * | ppt      | 3         | 10 MiB            | 30 MiB         | .ppt, .pptx         |
- * | txt      | Infinity  | 0.3 MiB           | Infinity       | .txt, .md           |
- * | image    | 10        | 5 MiB             | 30 MiB         | .png, .jpg, .jpeg, .webp |
+ * | word     | 5         | 10 MiB            | 50 MiB         | .doc, .docx         |
+ * | excel    | 5         | 10 MiB            | 50 MiB         | .xls, .xlsx, .csv   |
+ * | ppt      | 5         | 10 MiB            | 50 MiB         | .ppt, .pptx         |
+ * | txt      | 5         | 10 MiB            | 50 MiB         | .txt, .md, .py      |
+ * | image    | 5         | 10 MiB            | 50 MiB         | .png, .jpg, .jpeg, .webp |
+ *
+ * 单会话总文件数：5（与 §2.2.3 对齐）
  */
 export const FILE_UPLOAD_CONFIG: FileUploadConfig = {
   MAX_COUNT: {
-    word: 3,
-    excel: 2,
-    ppt: 3,
-    txt: Number.POSITIVE_INFINITY,
-    image: 10,
+    word: 5,
+    excel: 5,
+    ppt: 5,
+    txt: 5,
+    image: 5,
   },
   MAX_SIZE_PER_FILE: {
-    word: 5 * MIB,
-    excel: 1 * MIB,
+    word: 10 * MIB,
+    excel: 10 * MIB,
     ppt: 10 * MIB,
-    txt: 0.3 * MIB,
-    image: 5 * MIB,
+    txt: 10 * MIB,
+    image: 10 * MIB,
   },
   MAX_TOTAL_SIZE: {
-    word: 15 * MIB,
-    excel: 2 * MIB,
-    ppt: 30 * MIB,
-    txt: Number.POSITIVE_INFINITY,
-    image: 30 * MIB,
+    word: 50 * MIB,
+    excel: 50 * MIB,
+    ppt: 50 * MIB,
+    txt: 50 * MIB,
+    image: 50 * MIB,
   },
   ACCEPTED_EXTENSIONS: {
     word: ['.doc', '.docx'],
-    excel: ['.xls', '.xlsx'],
+    excel: ['.xls', '.xlsx', '.csv'],
     ppt: ['.ppt', '.pptx'],
-    txt: ['.txt', '.md'],
+    txt: ['.txt', '.md', '.py'],
     image: ['.png', '.jpg', '.jpeg', '.webp'],
+  },
+  MAX_FILES_PER_SESSION: 5,
+  MAX_CONCURRENT_PARSES: 3,
+  MESSAGES: {
+    UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlsx、csv、txt、md、py文件的上传',
+    FILE_TOO_LARGE: '文件大小超过10Mb，请修改后重试。',
+    TOO_MANY_FILES: '单次最多上传5个文件，请减少选择。',
+    DUPLICATE_FILE: (_name: string, time: string) =>
+      `该文件已于${time}上传，是否进行替换？`,
   },
 };
 

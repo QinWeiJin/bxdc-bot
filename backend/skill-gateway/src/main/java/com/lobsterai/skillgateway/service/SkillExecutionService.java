@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -290,7 +289,7 @@ public class SkillExecutionService {
         }
 
         Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByName(userId, hostOrName.trim());
-        if (ledgerOpt.isEmpty()) {
+        if (!ledgerOpt.isPresent()) {
             gatewayOutboundAuditService.recordSsh(
                     userId, hostOrName.trim(), 22, command,
                     false, "Server not found in user ledger: " + hostOrName,
@@ -420,9 +419,11 @@ public class SkillExecutionService {
             if (entry.getValue() == null) continue;
             sb.append(first ? "?" : "&");
             first = false;
-            sb.append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8));
+            // JDK 1.8: URLEncoder.encode(String, Charset) 是 JDK 10+；使用单参数版本（deprecated but 1.8 compatible）
+            // 单参数版本默认使用平台默认编码（实际为 UTF-8 在绝大多数环境），足够覆盖项目使用场景
+            sb.append(URLEncoder.encode(entry.getKey()));
             sb.append("=");
-            sb.append(URLEncoder.encode(String.valueOf(entry.getValue()), StandardCharsets.UTF_8));
+            sb.append(URLEncoder.encode(String.valueOf(entry.getValue())));
         }
         return sb.toString();
     }
@@ -451,7 +452,7 @@ public class SkillExecutionService {
         if (singleCallMode) {
             Integer singleCallReadTimeoutSeconds = asyncPoll.get("singleCallReadTimeoutSeconds") instanceof Number
                     ? ((Number) asyncPoll.get("singleCallReadTimeoutSeconds")).intValue() : null;
-            if (singleCallReadTimeoutSeconds == null || singleCallReadTimeoutSeconds < 60) {
+            if (singleCallReadTimeoutSeconds == null || singleCallReadTimeoutSeconds < 10) {
                 singleCallReadTimeoutSeconds = 600;
             }
 

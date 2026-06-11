@@ -234,7 +234,9 @@ public class AsyncTaskPollingScheduler {
                 auditService.log(netErrLog);
 
                 if (singleCallMode) {
-                    if (netEx instanceof SocketTimeoutException) {
+                    // RestTemplate 把 SocketTimeoutException 包成 ResourceAccessException，
+                    // 必须沿 cause 链找真正的 SocketTimeoutException
+                    if (isSocketTimeout(netEx)) {
                         // SINGLE_CALL 模式 read timeout 到期 → 标 TIMEOUT
                         String err = "SINGLE_CALL read timeout after " + readTimeoutSeconds + "s";
                         pollingService.updatePollResult(task.getId(), "TIMEOUT", null, err);
@@ -363,6 +365,24 @@ public class AsyncTaskPollingScheduler {
         log.setStatus(status);
         if (errMsg != null) log.setErrorMessage(errMsg);
         return log;
+    }
+
+    /**
+     * 沿 cause 链找 SocketTimeoutException。
+     * RestTemplate 把 SocketTimeoutException 包成 ResourceAccessException，
+     * 直接 instanceof 判断会漏掉。
+     */
+    private boolean isSocketTimeout(Throwable t) {
+        Throwable cur = t;
+        int depth = 0;
+        while (cur != null && depth < 10) {
+            if (cur instanceof SocketTimeoutException) {
+                return true;
+            }
+            cur = cur.getCause();
+            depth++;
+        }
+        return false;
     }
 
     @PreDestroy
