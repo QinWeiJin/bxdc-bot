@@ -19,19 +19,23 @@ public class SystemSkillService {
     public static final String KIND_API_PROXY = "API_PROXY";
     public static final String KIND_COMPUTE = "COMPUTE";
     public static final String KIND_SSH_EXECUTOR = "SSH_EXECUTOR";
+    public static final String KIND_FILE_TOOL = "FILE_TOOL";
 
     private final SystemSkillMapper systemSkillMapper;
     private final BuiltinToolExecutionService builtinToolExecutionService;
     private final ObjectMapper objectMapper;
+    private final FileToolService fileToolService;
 
     public SystemSkillService(
             SystemSkillMapper systemSkillMapper,
             BuiltinToolExecutionService builtinToolExecutionService,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            FileToolService fileToolService
     ) {
         this.systemSkillMapper = systemSkillMapper;
         this.builtinToolExecutionService = builtinToolExecutionService;
         this.objectMapper = objectMapper;
+        this.fileToolService = fileToolService;
     }
 
     public List<SystemSkill> listAgentSkills() {
@@ -62,6 +66,8 @@ public class SystemSkillService {
                 }
                 return res.getBody();
             }
+            case KIND_FILE_TOOL:
+                return fileToolService.execute(userId, toolName, args);
             default:
                 throw new IllegalArgumentException("Unsupported system skill kind: " + skill.getKind());
         }

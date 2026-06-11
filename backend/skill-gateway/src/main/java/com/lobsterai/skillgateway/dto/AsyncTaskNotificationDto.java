@@ -11,7 +11,7 @@ import java.util.List;
  * 异步任务通知 DTO。
  * 用于通知中心列表展示，合并了 AsyncTask + skill.name + 进度统计。
  *
- * 时间字段一律按 UTC 序列化（pattern 末尾带 'Z' + timezone="UTC"），
+ * 时间字段一律按 Asia/Shanghai 序列化（pattern 带偏移 + timezone="Asia/Shanghai"），
  * 由前端 utils/datetime.ts 的 parseBackendTimeAsUtc 反序列化为本地时间显示。
  */
 public class AsyncTaskNotificationDto {
@@ -30,16 +30,16 @@ public class AsyncTaskNotificationDto {
 
     private String errorMessage;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
     private LocalDateTime startedAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
     private LocalDateTime completedAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
     private LocalDateTime createdAt;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'", timezone = "UTC")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
     private LocalDateTime notifiedAt;
 
     private boolean unread;

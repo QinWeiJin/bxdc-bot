@@ -11,6 +11,11 @@ import java.util.Optional;
 @Mapper
 public interface SystemSkillMapper extends BaseMapper<SystemSkill> {
 
+    default Optional<SystemSkill> findByToolName(String toolName) {
+        return Optional.ofNullable(selectOne(new LambdaQueryWrapper<SystemSkill>()
+                .eq(SystemSkill::getToolName, toolName)));
+    }
+
     default Optional<SystemSkill> findByToolNameAndEnabledIsTrue(String toolName) {
         return Optional.ofNullable(selectOne(new LambdaQueryWrapper<SystemSkill>()
                 .eq(SystemSkill::getToolName, toolName)
