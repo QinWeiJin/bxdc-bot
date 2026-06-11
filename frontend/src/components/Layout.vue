@@ -10,6 +10,7 @@ import ProfileEditModal from './ProfileEditModal.vue';
 import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import TaskNotificationBell from './TaskNotificationBell.vue';
+import ConversationSidebar from './ConversationSidebar.vue';
 import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
 const router = useRouter();
@@ -66,11 +67,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </t-header>
-    <t-content class="layout-content">
-      <div class="layout-content-inner">
-        <slot />
-      </div>
-    </t-content>
+    <div class="layout-body">
+      <ConversationSidebar />
+      <t-content class="layout-content">
+        <div class="layout-content-inner">
+          <slot />
+        </div>
+      </t-content>
+    </div>
     <SkillHub />
     <ServerLedger />
     <ProfileEditModal v-model:visible="profileEditVisible" />
@@ -149,21 +153,17 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
-.layout-content :deep(.t-content) {
+.layout-body {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
   display: flex;
-  flex-direction: column;
+  overflow: hidden;
 }
 
 .layout-content-inner {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  max-width: 960px;
-  width: 100%;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
 }

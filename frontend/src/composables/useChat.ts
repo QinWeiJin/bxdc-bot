@@ -3,6 +3,7 @@ import { confirmAction, getAgentStreamUrl } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
 import { useFileUpload } from './useFileUpload'
+import { useConversations } from './useConversations'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
 import {
   extractArgumentsFromToolCallPayload,
@@ -125,6 +126,8 @@ export interface ChatState {
   fetchGreeting: () => Promise<void>
   confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
   updateConfirmationArguments: (toolCallId: string, adjustedParams: Record<string, unknown>) => void
+  /** Callback invoked after SSE stream completes; ChatView sets this to persist conversation messages */
+  saveMessageCallback: ReturnType<typeof ref<((messages: Message[]) => void) | null>>
 }
 
 const ChatKey: InjectionKey<ChatState> = Symbol('chat')
@@ -134,6 +137,7 @@ export function provideChat() {
   const isThinking = ref(false)
   const error = ref<string | null>(null)
   const activeSessionId = ref<string | null>(null)
+  const saveMessageCallback = ref<((messages: Message[]) => void) | null>(null)
   const { currentUser } = useUser()
   const { createSession, processStreamEvent, completeSession } = useThinkingMode()
   const fileUpload = useFileUpload()
@@ -701,6 +705,24 @@ export function provideChat() {
   async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[]) {
     if (isThinking.value) return
 
+    const conversationEnabledSkillIds = (() => {
+      try {
+        const conversations = useConversations()
+        return conversations.getEnabledSkillIds(conversations.currentConversationId.value ?? '')
+      } catch {
+        return []
+      }
+    })()
+    const conversationId = (() => {
+      try {
+        return useConversations().currentConversationId.value ?? ''
+      } catch {
+        return ''
+      }
+    })()
+
+    const messageCountBeforeSend = messages.value.length
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -763,6 +785,8 @@ export function provideChat() {
             sessionId,
           },
           history,
+          enabledSkillIds: conversationEnabledSkillIds,
+          conversationId,
         }),
       })
 
@@ -795,6 +819,23 @@ export function provideChat() {
             completeSession(activeSessionId.value)
           }
           activeSessionId.value = null
+
+          // Persist messages to conversation (Phase 2)
+          if (saveMessageCallback.value) {
+            try {
+              saveMessageCallback.value(messages.value.slice(messageCountBeforeSend))
+            } catch (e) {
+              console.error('[chat] Failed to save messages:', e)
+            }
+          }
+
+          // Refresh conversation cache (sync enabled_skills after Agent creates skills)
+          try {
+            const uid = userId ?? ''
+            if (uid) await useConversations().refreshConversations(uid)
+          } catch (e) {
+            console.error('[chat] Failed to refresh conversations:', e)
+          }
 
           // 上报本次对话涉及的文件名（任务 8.3）
           if (attachedFiles && attachedFiles.length > 0 && userId) {
@@ -980,6 +1021,7 @@ export function provideChat() {
     fetchGreeting,
     confirmSkillAction,
     updateConfirmationArguments,
+    saveMessageCallback,
   }
   provide(ChatKey, state)
   return state

@@ -103,9 +103,10 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string },
+    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string },
     skillManager?: SkillManager,
-    userId?: string
+    userId?: string,
+    enabledSkillIds?: number[]
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
     plannerModel: ChatOpenAI;
@@ -146,16 +147,17 @@ export class AgentFactory {
     // 构建基础工具数组
     // SSH 操作统一通过 SSH Extension Skill（kind: "ssh"）执行，不再注册 ssh_executor / linux_script_executor
     const baseTools: BindableAgentTool[] = [
-      new JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
+      new JavaSkillGeneratorTool(gatewayUrl, apiToken, config?.conversationId, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
     ];
     
-    // 从 Gateway 加载扩展工具（动态技能）
+    // 从 Gateway 加载扩展工具（动态技能），按对话配置过滤
     const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
       plannerModel: model,
       availableTools: baseTools,
       sessionId: config?.sessionId,
+      enabledSkillIds,
     });
     
     // 合并所有工具
