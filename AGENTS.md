@@ -76,8 +76,8 @@ cd frontend && npm run dev
 ```
 
 ### 2.4 Maven 离线仓库 .m2/（gitignore 内 + 内网部署规范）
-- `backend/skill-gateway/.m2/` 目录**不进 git**（`.gitignore` 规则 `backend/skill-gateway/.m2/`）
-- `backend/skill-gateway/settings.xml` **进 git**（项目自带，配置 localRepository 指向 `./.m2/repository`）
+- `backend/skill-gateway/.m2/` 目录**不进 git**（`.gitignore` 规则 `backend/skill-gateway/.m2/`)
+- `backend/skill-gateway/settings.xml` **进 git**（项目自带，配置 localRepository 指向 `./.m2/repository`)
   - **不要**用 `${user.home}/.m2/repository`（用户家目录）—— 那意味着不同开发者共享用户家目录的 .m2，污染环境
   - 用相对路径 `./.m2/repository` 是因为 mvn 必须从 `backend/skill-gateway/` 启动（与上面启动命令约定一致），`./` 解析为 mvn 进程的工作目录
 - settings.xml 同时配 aliyun maven mirror 作为兜底——`.m2/` 里**缺包**时 mvn 会自动从 aliyun 下载到 `.m2/repository/`
@@ -87,6 +87,44 @@ cd frontend && npm run dev
   2. 解压到 `backend/skill-gateway/.m2/`
   3. 启动 mvn 时**不要**加 `-o`（offline）—— `-o` 模式下缺包会 BUILD FAILURE，让 aliyun mirror 兜底更安全
 - 启动 mvn 必须用 `apache-maven-3.8.5`（与内网版本对齐）—— 3.9.x 的项目内 .m2 兼容，但内网只有 3.8.5
+
+#### ⚠️ 启动 mvn 前必须 `cd backend/skill-gateway`（强警告）
+
+`settings.xml` 的 `<localRepository>.m2/repository</localRepository>` 是**相对路径**，解析为 mvn 进程的工作目录（cwd）。**cwd 一旦跑偏，就会在其他位置创建出错的 .m2 目录**：
+
+| 启动时的 cwd | localRepository 实际解析到 | 结果 |
+|---|---|---|
+| `bxdc-bot/backend/skill-gateway/` ✓ 正确 | `bxdc-bot/backend/skill-gateway/.m2/repository` | 正常 |
+| `bxdc-bot/` ❌ | `bxdc-bot/.m2/repository` | **错**（在项目根多出一个 .m2）|
+| `/Users/dccb/` ❌ | `/Users/dccb/.m2/repository` | **错**（污染用户家目录）|
+| 任何其他 cwd ❌ | `<cwd>/.m2/repository` | **错**（mvn 自动创建新 .m2 位置）|
+
+**因此启动 mvn 之前必须先 `cd backend/skill-gateway`**。**不要**用以下方式启动：
+- ❌ `cd bxdc-bot && mvn -s backend/skill-gateway/settings.xml -f backend/skill-gateway/pom.xml ...`
+- ❌ `mvn -s /abs/path/to/settings.xml ...` （在错误 cwd 下用绝对路径 settings.xml 但 relative path localRepository 仍然错）
+- ❌ 任何 cwd 不是 `backend/skill-gateway/` 的 mvn 命令
+
+**正确启动**（用 `cd` 进入 skill-gateway 目录）：
+```bash
+cd backend/skill-gateway
+./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run
+# 或者一行：
+(cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run)
+```
+
+**如果发现项目根或家目录多出了 .m2**，立即删掉（里面是错的重复缓存）：
+```bash
+rm -rf /Users/dccb/.m2              # 用户家
+rm -rf bxdc-bot/.m2                 # 项目根
+# skill-gateway/.m2 保留（117MB，是 mvn 真正在用的）
+```
+
+**为什么不改 settings.xml 用绝对路径**：
+- 项目用相对路径是**有意为之**（AGENTS.md 2.4 顶部）—— 保证每个开发者有自己的项目内 .m2，不与系统其他 maven 项目共享
+- 改成 `${user.home}` 会跟系统其他项目共享 jar，可能被覆盖
+- 改成本机绝对路径（如 `/Users/dccb/...`）写死对同事不通用
+
+**所以约束"启动 mvn 前必须 cd 到 skill-gateway"是项目内部约定**，跟 settings.xml 的相对路径配合使用。
 
 ---
 
