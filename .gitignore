@@ -54,3 +54,7 @@ backend/skill-gateway/apache-maven-*/
 # One-click scripts
 start-services.bat
 stop-services.bat
+start-all.bat
+start-all.ps1
+stop-all.bat
+stop-all.ps1
