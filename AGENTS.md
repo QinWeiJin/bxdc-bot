@@ -28,8 +28,8 @@ cd frontend && npm run dev                    # Vite 实时编译
 # 1. 拉源码
 git pull <origin-url> low-version
 
-# 2. cp 配置模板
-cp backend/skill-gateway/src/main/resources/application.properties.example \
+# 2. cp 配置模板（注意：实际模板名是 application-prod.example.properties）
+cp backend/skill-gateway/src/main/resources/application-prod.example.properties \
    backend/skill-gateway/src/main/resources/application.properties
 # 改 password= 为内网 MySQL 密码
 
@@ -52,13 +52,14 @@ cd backend/agent-core && npm run build
 ## 2. 本地开发配置
 
 ### 数据库配置
-- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**
+- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**（不进 git）
 - 每个开发者自己 cp `.example` 模板 → 填入本机 MySQL 密码：
   ```bash
-  cp backend/skill-gateway/src/main/resources/application.properties.example \
+  # 模板文件名是 application-prod.example.properties
+  cp backend/skill-gateway/src/main/resources/application-prod.example.properties \
      backend/skill-gateway/src/main/resources/application.properties
   # 改 password= 为本机 MySQL root 密码
-  ```
+```
 - MySQL 跑在 Docker 容器 `bxdc-mysql`（已开 8 天，端口 3306）
 
 ### 服务端口
@@ -94,9 +95,9 @@ cd frontend && npm run dev
 
 | 启动时的 cwd | localRepository 实际解析到 | 结果 |
 |---|---|---|
-| `bxdc-bot/backend/skill-gateway/` ✓ 正确 | `bxdc-bot/backend/skill-gateway/.m2/repository` | 正常 |
-| `bxdc-bot/` ❌ | `bxdc-bot/.m2/repository` | **错**（在项目根多出一个 .m2）|
-| `/Users/dccb/` ❌ | `/Users/dccb/.m2/repository` | **错**（污染用户家目录）|
+| `<project_root>/backend/skill-gateway/` ✓ 正确 | `<project_root>/backend/skill-gateway/.m2/repository` | 正常 |
+| `<project_root>/` ❌ | `<project_root>/.m2/repository` | **错**（在项目根多出一个 .m2）|
+| `${HOME}/` ❌ | `${HOME}/.m2/repository` | **错**（污染用户家目录）|
 | 任何其他 cwd ❌ | `<cwd>/.m2/repository` | **错**（mvn 自动创建新 .m2 位置）|
 
 **因此启动 mvn 之前必须先 `cd backend/skill-gateway`**。**不要**用以下方式启动：
@@ -114,17 +115,42 @@ cd backend/skill-gateway
 
 **如果发现项目根或家目录多出了 .m2**，立即删掉（里面是错的重复缓存）：
 ```bash
-rm -rf /Users/dccb/.m2              # 用户家
-rm -rf bxdc-bot/.m2                 # 项目根
-# skill-gateway/.m2 保留（117MB，是 mvn 真正在用的）
+# 删错位置的 .m2（位置根据你的 cwd 而定）
+rm -rf <project_root>/.m2              # 项目根
+rm -rf ~/.m2                           # 用户家
+# <project_root>/backend/skill-gateway/.m2 保留（mvn 真正在用的）
 ```
 
 **为什么不改 settings.xml 用绝对路径**：
 - 项目用相对路径是**有意为之**（AGENTS.md 2.4 顶部）—— 保证每个开发者有自己的项目内 .m2，不与系统其他 maven 项目共享
 - 改成 `${user.home}` 会跟系统其他项目共享 jar，可能被覆盖
-- 改成本机绝对路径（如 `/Users/dccb/...`）写死对同事不通用
+- 改成本机绝对路径（不可移植）写死对同事不通用
 
 **所以约束"启动 mvn 前必须 cd 到 skill-gateway"是项目内部约定**，跟 settings.xml 的相对路径配合使用。
+
+#### ⚠️ AI agent 启动 mvn 必须用 `bash -c 'cd ... && mvn ...'` 模式
+
+**坑**：`nohup mvn -s ./settings.xml ...` 或 `mvn ...` **mvn 进程继承父 shell 的 cwd**，即使 `-s` 用绝对路径指向 settings.xml，**settings.xml 里的相对路径 `<localRepository>.m2/repository</localRepository>` 仍然按 mvn 进程的 cwd 解析**，所以 cwd 错了仍会在错误位置生成 .m2。
+
+**唯一可靠的启动方式**（用 `bash -c` 或 subshell 把 `cd` 一起带上）：
+```bash
+# 方式 1：bash -c
+nohup bash -c 'cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run' > /tmp/gw.log 2>&1 &
+
+# 方式 2：subshell
+(cd backend/skill-gateway && nohup ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run > /tmp/gw.log 2>&1 &)
+```
+
+**错误方式**（cwd 在项目根或别处）：
+```bash
+# ❌ 错误：mvn 进程 cwd 仍是项目根
+cd /Users/me/myproject
+nohup mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
+
+# ❌ 错误：cwd 是用户家
+cd ~
+mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
+```
 
 ---
 
