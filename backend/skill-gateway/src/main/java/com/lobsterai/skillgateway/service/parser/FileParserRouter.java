@@ -23,7 +23,7 @@ public class FileParserRouter {
 
     private final Map<String, FileParser> parserMap = new ConcurrentHashMap<String, FileParser>();
 
-    public FileParserRouter(WordParser wordParser, TxtMdParser txtMdParser, PyParser pyParser) {
+    public FileParserRouter(WordParser wordParser, TxtMdParser txtMdParser, PyParser pyParser, ExcelParser excelParser) {
         // Word
         parserMap.put("doc", wordParser);
         parserMap.put("docx", wordParser);
@@ -32,10 +32,10 @@ public class FileParserRouter {
         parserMap.put("md", txtMdParser);
         // Python
         parserMap.put("py", pyParser);
-        // Excel 占位（启雷实现后注入）
-        // parserMap.put("xls", excelParser);
-        // parserMap.put("xlsx", excelParser);
-        // parserMap.put("csv", excelParser);
+        // Excel
+        parserMap.put("xls", excelParser);
+        parserMap.put("xlsx", excelParser);
+        parserMap.put("csv", excelParser);
     }
 
     /**

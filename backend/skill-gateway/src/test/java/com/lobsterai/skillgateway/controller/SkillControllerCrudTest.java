@@ -58,7 +58,7 @@ class SkillControllerCrudTest {
     @Test
     void createUpdateDeleteSkill_roundTrip() throws Exception {
         String skillName = TEST_SKILL_PREFIX + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Created by CRUD integration test\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Created by CRUD integration test\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -74,7 +74,7 @@ class SkillControllerCrudTest {
         Skill createdSkill = skillMapper.selectOne(new LambdaQueryWrapper<Skill>().eq(Skill::getName, skillName));
         if (createdSkill == null) throw new IllegalStateException("Created skill not found");
 
-        String updateBody = "                {                  \"name\": \"%s\",                  \"description\": \"Updated by CRUD integration test\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"openclaw\\\\\",\\\\\"systemPrompt\\\\\":\\\\\"## Planner: use tools carefully\\\\\",\\\\\"allowedTools\\\\\":[\\\\\"compute\\\\\",\\\\\"获取时间\\\\\"],\\\\\"orchestration\\\\\":{\\\\\"mode\\\\\":\\\\\"serial\\\\\"}}\",                  \"enabled\": false,                  \"requiresConfirmation\": true                }".formatted(skillName);
+        String updateBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Updated by CRUD integration test\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"openclaw\\\\\",\\\\\"systemPrompt\\\\\":\\\\\"## Planner: use tools carefully\\\\\",\\\\\"allowedTools\\\\\":[\\\\\"compute\\\\\",\\\\\"获取时间\\\\\"],\\\\\"orchestration\\\\\":{\\\\\"mode\\\\\":\\\\\"serial\\\\\"}}\",                  \"enabled\": false,                  \"requiresConfirmation\": true                }", skillName);
 
         mockMvc.perform(put("/api/skills/{id}", createdSkill.getId())
                         .header("X-Agent-Token", TOKEN)
@@ -99,7 +99,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_defaultsExecutionModeToConfigWhenMissing() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "default-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Defaults execution mode\",                  \"type\": \"EXTENSION\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Defaults execution mode\",                  \"type\": \"EXTENSION\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -113,7 +113,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_rejectsExecutionModeAndConfigurationMismatch() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "invalid-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Invalid openclaw payload\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"monitor\\\\\",\\\\\"operation\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"lookup\\\\\":\\\\\"server_lookup\\\\\",\\\\\"executor\\\\\":\\\\\"ssh_executor\\\\\",\\\\\"command\\\\\":\\\\\"uptime\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Invalid openclaw payload\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"monitor\\\\\",\\\\\"operation\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"lookup\\\\\":\\\\\"server_lookup\\\\\",\\\\\"executor\\\\\":\\\\\"ssh_executor\\\\\",\\\\\"command\\\\\":\\\\\"uptime\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -127,7 +127,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_allowsOpenclawWithoutAllowedTools() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "prompt-only-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Prompt only openclaw\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"openclaw\\\\\",\\\\\"systemPrompt\\\\\":\\\\\"# Prompt only\\\\\",\\\\\"allowedTools\\\\\":[],\\\\\"orchestration\\\\\":{\\\\\"mode\\\\\":\\\\\"serial\\\\\"}}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Prompt only openclaw\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"OPENCLAW\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"openclaw\\\\\",\\\\\"systemPrompt\\\\\":\\\\\"# Prompt only\\\\\",\\\\\"allowedTools\\\\\":[],\\\\\"orchestration\\\\\":{\\\\\"mode\\\\\":\\\\\"serial\\\\\"}}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -142,7 +142,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_legacyTimeKindIsNormalizedToCanonicalApiKind() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "legacy-time-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Legacy time config\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Legacy time config\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -156,7 +156,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_acceptsCanonicalSshPresetConfig() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "canonical-ssh-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Canonical ssh config\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"ssh\\\\\",\\\\\"preset\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"operation\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"lookup\\\\\":\\\\\"server_lookup\\\\\",\\\\\"executor\\\\\":\\\\\"ssh_executor\\\\\",\\\\\"command\\\\\":\\\\\"uptime\\\\\",\\\\\"readOnly\\\\\":true}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Canonical ssh config\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"ssh\\\\\",\\\\\"preset\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"operation\\\\\":\\\\\"server-resource-status\\\\\",\\\\\"lookup\\\\\":\\\\\"server_lookup\\\\\",\\\\\"executor\\\\\":\\\\\"ssh_executor\\\\\",\\\\\"command\\\\\":\\\\\"uptime\\\\\",\\\\\"readOnly\\\\\":true}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -170,7 +170,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_acceptsTemplateConfig() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "template-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"A reusable prompt template\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"template\\\\\",\\\\\"prompt\\\\\":\\\\\"你是一位专业的翻译助手。请将用户输入翻译为英文。\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"A reusable prompt template\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"template\\\\\",\\\\\"prompt\\\\\":\\\\\"你是一位专业的翻译助手。请将用户输入翻译为英文。\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -185,7 +185,7 @@ class SkillControllerCrudTest {
     @Test
     void publicSkill_otherUserCannotUpdateOrDelete() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "pub-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"public skill\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"public skill\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -197,7 +197,7 @@ class SkillControllerCrudTest {
         Skill created = skillMapper.selectOne(new LambdaQueryWrapper<Skill>().eq(Skill::getName, skillName));
         if (created == null) throw new IllegalStateException("Created skill not found");
 
-        String updateBody = "                {                  \"name\": \"%s\",                  \"description\": \"hijack\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String updateBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"hijack\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(put("/api/skills/{id}", created.getId())
                         .header("X-Agent-Token", TOKEN)
@@ -231,7 +231,7 @@ class SkillControllerCrudTest {
         skillMapper.insert(platform);
         Skill saved = platform;
 
-        String updateBody = "                {                  \"name\": \"%s\",                  \"description\": \"updated by admin\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String updateBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"updated by admin\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(put("/api/skills/{id}", saved.getId())
                         .header("X-Agent-Token", TOKEN)
@@ -250,7 +250,7 @@ class SkillControllerCrudTest {
     @Test
     void publicSkill_admin890728CannotEditOtherUsersSkill() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "alice-pub-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"alice public\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"alice public\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
@@ -262,7 +262,7 @@ class SkillControllerCrudTest {
         Skill created = skillMapper.selectOne(new LambdaQueryWrapper<Skill>().eq(Skill::getName, skillName));
         if (created == null) throw new IllegalStateException("Created skill not found");
 
-        String updateBody = "                {                  \"name\": \"%s\",                  \"description\": \"admin hijack attempt\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String updateBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"admin hijack attempt\",                  \"type\": \"EXTENSION\",                  \"visibility\": \"PUBLIC\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"api\\\\\",\\\\\"preset\\\\\":\\\\\"current-time\\\\\",\\\\\"operation\\\\\":\\\\\"current-time\\\\\",\\\\\"method\\\\\":\\\\\"GET\\\\\",\\\\\"endpoint\\\\\":\\\\\"https://example.com/time\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(put("/api/skills/{id}", created.getId())
                         .header("X-Agent-Token", TOKEN)
@@ -277,7 +277,7 @@ class SkillControllerCrudTest {
     @Test
     void createSkill_rejectsTemplateWithEmptyPrompt() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "template-empty-" + System.nanoTime();
-        String createBody = "                {                  \"name\": \"%s\",                  \"description\": \"Template with empty prompt\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"template\\\\\",\\\\\"prompt\\\\\":\\\\\"\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }".formatted(skillName);
+        String createBody = String.format("                {                  \"name\": \"%s\",                  \"description\": \"Template with empty prompt\",                  \"type\": \"EXTENSION\",                  \"executionMode\": \"CONFIG\",                  \"configuration\": \"{\\\\\"kind\\\\\":\\\\\"template\\\\\",\\\\\"prompt\\\\\":\\\\\"\\\\\"}\",                  \"enabled\": true,                  \"requiresConfirmation\": false                }", skillName);
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
