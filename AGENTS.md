@@ -159,14 +159,14 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 
 ## 5. 编程约束规范
 
-团队代码规范，遵循这 3 条：
+团队代码规范，遵循这 5 条：
 
-### 7.1 尽量不新增第三方包
+### 5.1 尽量不新增第三方包
 - 新增第三方包意味着 supply chain 风险 + 依赖升级成本 + 团队学习成本
 - 优先用 JDK 17 / NestJS 11 / Vue 3 / Spring Boot 2.7 自带的标准库
 - 必须新增时需要评审：能不能用现有工具实现？有没有轻量级替代？
 
-### 7.2 尽量不要新增环境变量配置
+### 5.2 尽量不要新增环境变量配置
 - 新的 env 变量意味着部署同事多配一项、新同事上手成本高
 - 优先用代码内的合理默认值 + 配置文件覆盖
 - 必须新增时需要用户明确要求，且要有默认值兜底
@@ -176,7 +176,7 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 - **不要**在多个增量 commit 里改 `schema-mysql.sql` 让用户手动 `mysql -e "..."` 跑
 - 复杂 schema 变更（加索引 / 改字段类型 / 数据迁移）走 Java migration 类（参考 `StartupRecoveryRunner` 模式）
 
-### 7.4 Java 版本与 language level 必须保持 JDK 1.8
+### 5.4 Java 版本与 language level 必须保持 JDK 1.8
 - 编译目标统一为 **JDK 1.8**（`pom.xml` 的 `<java.version>1.8</java.version>` 与 `maven-compiler-plugin` 的 `source/target` 同步）
 - IntelliJ Project language level 必须设为 **8 - Lambdas, type annotations etc.**（与 JDK 1.8 严格对应）
   - 不要选 `11 - Local variable syntax for lambda parameters`、`14 - Switch expressions` 等更高 level

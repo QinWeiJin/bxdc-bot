@@ -14,6 +14,7 @@ import {
   canManageGatewaySkill,
 } from '../composables/useSkillHub';
 import { useUser } from '../composables/useUser';
+import { useConversations } from '../composables/useConversations';
 import { apiUrl } from '../services/config';
 import {
   createDefaultSkillDraft,
@@ -352,7 +353,12 @@ async function handleSubmit() {
       await updateSkill(currentId.value, payload);
       MessagePlugin.success('Skill 更新成功');
     } else {
-      await createSkill(payload);
+      const newSkill = await createSkill(payload);
+      // 将新创建的 Skill 自动加入当前对话
+      const cid = useConversations().currentConversationId.value;
+      if (cid && currentUser.value) {
+        await useConversations().addEnabledSkillToConversation(cid, currentUser.value.id, newSkill.id);
+      }
       MessagePlugin.success('Skill 创建成功');
     }
     isFormVisible.value = false;
@@ -378,6 +384,32 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
     MessagePlugin.error(err instanceof Error ? err.message : '状态更新失败');
   }
 }
+
+// ── Search & Filter (Management) ──
+const managementSearchQuery = ref('')
+const managementStatusFilter = ref<'all' | 'active' | 'inactive'>('all')
+
+const managementFilterOptions = [
+  { label: '全量', value: 'all' },
+  { label: '已激活', value: 'active' },
+  { label: '未激活', value: 'inactive' },
+]
+
+const filteredSkills = computed(() => {
+  let result = skills.value
+
+  // 搜索
+  if (managementSearchQuery.value.trim()) {
+    const q = managementSearchQuery.value.trim().toLowerCase()
+    result = result.filter((s) => s.name.toLowerCase().includes(q))
+  }
+
+  // 激活状态筛选
+  if (managementStatusFilter.value === 'active') result = result.filter((s) => s.enabled)
+  else if (managementStatusFilter.value === 'inactive') result = result.filter((s) => !s.enabled)
+
+  return result
+})
 </script>
 
 <template>
@@ -397,19 +429,39 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
         </t-button>
       </div>
 
+      <!-- Search & Filter -->
+      <div class="mgmt-filters-row">
+        <t-input
+          v-model="managementSearchQuery"
+          placeholder="搜索 Skill 名称..."
+          clearable
+          class="mgmt-search-input"
+        >
+          <template #prefix-icon>
+            <span class="mgmt-search-icon">🔍</span>
+          </template>
+        </t-input>
+        <t-select
+          v-model="managementStatusFilter"
+          :options="managementFilterOptions"
+          size="small"
+          class="mgmt-filter-select"
+        />
+      </div>
+
       <div v-if="isLoading" class="loading-state">
         <t-loading text="Loading skills..." />
       </div>
       <div v-else-if="error" class="error-state">
         <t-alert theme="error" :message="error" />
       </div>
-      <div v-else-if="skills.length === 0" class="empty-state">
-        <p>暂无 Extended Skill</p>
+      <div v-else-if="filteredSkills.length === 0" class="empty-state">
+        <p>{{ managementSearchQuery || managementStatusFilter !== 'all' ? '没有匹配的 Skill' : '暂无 Extended Skill' }}</p>
       </div>
 
       <t-table
         v-else
-        :data="skills"
+        :data="filteredSkills"
         row-key="id"
         :columns="[
           { colKey: 'name', title: '名称' },
@@ -592,6 +644,26 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.mgmt-filters-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mgmt-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mgmt-filter-select {
+  width: 100px;
+  flex-shrink: 0;
+}
+
+.mgmt-search-icon {
+  font-size: 14px;
 }
 
 .tool-list-editor {

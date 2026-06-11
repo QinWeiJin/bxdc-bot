@@ -260,3 +260,32 @@ CREATE TABLE IF NOT EXISTS user_files (
     INDEX idx_user_files_session (session_id),
     INDEX idx_user_files_conversation (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户文件元数据表';
+
+-- conversations（对话会话表 - 支持用户多 Session 对话管理）
+-- 注意：本表是业务对话表，不同于 conversation_logs 审计日志表
+CREATE TABLE IF NOT EXISTS conversations (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    conversation_id VARCHAR(64) UNIQUE NOT NULL COMMENT '业务UUID',
+    user_id VARCHAR(64) NOT NULL COMMENT '所属用户ID',
+    name VARCHAR(255) DEFAULT '' COMMENT '对话名称（默认用户输入前18字）',
+    enabled_skills JSON COMMENT '该对话启用的Skill ID列表，如 [1, 3, 5]',
+    status VARCHAR(32) DEFAULT 'active' COMMENT '状态：active/archived/deleted',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_conv_user_id (user_id),
+    INDEX idx_conv_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话会话表';
+
+-- conversation_messages（对话消息表 - 存储每轮对话的完整消息内容）
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    message_id VARCHAR(64) UNIQUE NOT NULL COMMENT '消息UUID',
+    conversation_id VARCHAR(64) NOT NULL COMMENT '所属对话ID',
+    role VARCHAR(32) NOT NULL COMMENT '角色：user/assistant/tool/system',
+    content TEXT COMMENT '消息内容',
+    skill_calls JSON COMMENT '工具调用记录（Tool Calls）',
+    skill_outputs JSON COMMENT '工具返回结果',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_cmsg_conv_id (conversation_id),
+    INDEX idx_cmsg_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话消息表';

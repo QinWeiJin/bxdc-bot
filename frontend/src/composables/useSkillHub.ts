@@ -211,7 +211,7 @@ export function useSkillHub() {
     return await res.json();
   }
 
-  async function createSkill(payload: Omit<Skill, 'id'>) {
+  async function createSkill(payload: Omit<Skill, 'id'>): Promise<Skill> {
     const res = await fetch(agentUrl('/features/skills'), {
       method: 'POST',
       headers: {
@@ -230,6 +230,7 @@ export function useSkillHub() {
     if (i >= 0) {
       skills.value[i] = { ...skills.value[i], ...created };
     }
+    return created;
   }
 
   async function updateSkill(id: number, payload: Omit<Skill, 'id'>) {

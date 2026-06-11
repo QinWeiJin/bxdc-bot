@@ -1,4 +1,11 @@
 import { apiUrl, agentUrl } from './config'
+import type {
+  ConversationListResponse,
+  ConversationDetailResponse,
+  SaveMessagesRequest,
+  SaveMessagesResponse,
+  Conversation,
+} from '../types/conversation'
 
 export async function createTask(content: string, userId?: string, history?: any[], sessionId?: string): Promise<{ id: string }> {
   const response = await fetch(apiUrl('/api/tasks'), {
@@ -43,4 +50,86 @@ export async function confirmAction(
         : `Confirm request failed (${response.status})`
     throw new Error(detail)
   }
+}
+
+function authHeaders(userId: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    'X-User-Id': userId,
+  }
+}
+
+export async function fetchConversations(userId: string): Promise<ConversationListResponse> {
+  const response = await fetch(apiUrl('/api/conversations'), {
+    headers: { 'X-User-Id': userId },
+  })
+  if (!response.ok) throw new Error('Failed to fetch conversations')
+  return response.json()
+}
+
+export async function createConversation(
+  userId: string,
+  name?: string,
+  enabledSkills?: number[],
+): Promise<Conversation> {
+  const response = await fetch(apiUrl('/api/conversations'), {
+    method: 'POST',
+    headers: authHeaders(userId),
+    body: JSON.stringify({ name: name || '', enabled_skills: enabledSkills || [] }),
+  })
+  if (!response.ok) throw new Error('Failed to create conversation')
+  return response.json()
+}
+
+export async function fetchConversation(
+  userId: string,
+  conversationId: string,
+  cursor?: string,
+  limit?: number,
+): Promise<ConversationDetailResponse> {
+  const params = new URLSearchParams()
+  if (cursor) params.set('cursor', cursor)
+  if (limit) params.set('limit', String(limit))
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}${qs}`), {
+    headers: { 'X-User-Id': userId },
+  })
+  if (!response.ok) throw new Error('Failed to fetch conversation')
+  return response.json()
+}
+
+export async function updateConversation(
+  userId: string,
+  conversationId: string,
+  data: { name?: string; enabled_skills?: number[] },
+): Promise<Conversation> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}`), {
+    method: 'PUT',
+    headers: authHeaders(userId),
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error('Failed to update conversation')
+  return response.json()
+}
+
+export async function deleteConversation(userId: string, conversationId: string): Promise<void> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}`), {
+    method: 'DELETE',
+    headers: { 'X-User-Id': userId },
+  })
+  if (!response.ok) throw new Error('Failed to delete conversation')
+}
+
+export async function saveMessages(
+  userId: string,
+  conversationId: string,
+  messages: SaveMessagesRequest['messages'],
+): Promise<SaveMessagesResponse> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/messages`), {
+    method: 'POST',
+    headers: authHeaders(userId),
+    body: JSON.stringify({ messages }),
+  })
+  if (!response.ok) throw new Error('Failed to save messages')
+  return response.json()
 }
