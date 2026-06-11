@@ -367,8 +367,8 @@ public class WordToolService {
                 replaceCount = replacer.count;
             }
 
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+            String originalStorageName = userFile.getFileName();
+            String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
             userFile.setFtpPath(fullPath);
             userFile.setFileSize((long) bytes.length);
             userFile.setFileType(ext);
@@ -379,7 +379,8 @@ public class WordToolService {
             result.put("find", find);
             result.put("replace", replace);
             result.put("replaceCount", replaceCount);
-            result.put("storageName", newStorageName);
+            result.put("storageName", originalStorageName);
+            result.put("writtenBack", true);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("word_replace_text failed for {}", userFile.getOriginalFileName(), e);
@@ -438,8 +439,8 @@ public class WordToolService {
                 }
             }
 
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+            String originalStorageName = userFile.getFileName();
+            String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
             userFile.setFtpPath(fullPath);
             userFile.setFileSize((long) bytes.length);
             userFile.setFileType(ext);
@@ -450,7 +451,8 @@ public class WordToolService {
             result.put("filledCount", filledCount);
             result.put("missingCount", missingCount);
             result.put("missingKeys", missingKeys);
-            result.put("storageName", newStorageName);
+            result.put("storageName", originalStorageName);
+            result.put("writtenBack", true);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("word_template_fill failed for {}", userFile.getOriginalFileName(), e);
@@ -514,6 +516,18 @@ public class WordToolService {
         String tempPath = ftpFileService.uploadFile(userId, storageName, bais);
         // tempPath 的最后一段就是 storageName
         return tempPath;
+    }
+
+    /**
+     * 用原 storageName 覆盖写回文件（保留文件名不生成新 UUID）。
+     * <p>
+     * 用于 word_replace_text / word_template_fill 的"原文件被修改"语义——
+     * fileRef 仍然是同一个，user_files 行的 file_name 不变，DB 与磁盘一致。
+     * </p>
+     */
+    private String overwriteBytes(String userId, String storageName, byte[] bytes) throws IOException {
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        return ftpFileService.uploadFile(userId, storageName, bais);
     }
 
     /**

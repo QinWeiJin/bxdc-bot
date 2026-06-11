@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
 import com.lobsterai.skillgateway.config.DedupConfig;
+import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.entity.Skill;
@@ -41,6 +42,7 @@ public class SkillExecutionService {
     private final AsyncTaskPollingService asyncTaskPollingService;
     private final AsyncTaskPollingScheduler asyncTaskPollingScheduler;
     private final ObjectMapper objectMapper;
+    private final FileToolService fileToolService;
 
     public SkillExecutionService(
             SkillService skillService,
@@ -53,7 +55,8 @@ public class SkillExecutionService {
             PendingConfirmationStore confirmationStore,
             AsyncTaskPollingService asyncTaskPollingService,
             AsyncTaskPollingScheduler asyncTaskPollingScheduler,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            FileToolService fileToolService
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -66,6 +69,7 @@ public class SkillExecutionService {
         this.asyncTaskPollingService = asyncTaskPollingService;
         this.asyncTaskPollingScheduler = asyncTaskPollingScheduler;
         this.objectMapper = objectMapper;
+        this.fileToolService = fileToolService;
     }
 
     public Object execute(ExecuteRequest request) throws Exception {
@@ -126,6 +130,8 @@ public class SkillExecutionService {
                 return executeSshSkill(skill, config, effectiveParameters, request.userId);
             case "template":
                 return executeTemplateSkill(config, effectiveParameters);
+            case "file_tool":
+                return executeFileToolSkill(config, effectiveParameters, request.userId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }
@@ -583,6 +589,37 @@ public class SkillExecutionService {
         result.put("note", "Polling-based async task submitted (id=" + task.getId() + ", external=" + externalTaskId + "). "
                 + "The result will be available in the notification center when the polling completes. "
                 + "Tell the user the operation is being processed in the background.");
+        return result;
+    }
+
+    /**
+     * 分发 file_tool 类技能到 {@link FileToolService} 统一调度。
+     * <p>
+     * config 中必须包含 {@code toolName}（如 file_list/file_delete/word_read 等），
+     * parameters 透传给对应工具处理器。
+     * </p>
+     */
+    @SuppressWarnings("unchecked")
+    private Object executeFileToolSkill(Map<String, Object> config, Object parameters, String userId) {
+        String toolName = (String) config.get("toolName");
+        if (toolName == null || toolName.trim().isEmpty()) {
+            throw new IllegalArgumentException("file_tool skill missing toolName in configuration");
+        }
+        Map<String, Object> params = parameters instanceof Map
+                ? (Map<String, Object>) parameters
+                : new LinkedHashMap<String, Object>();
+        FileToolResponse response = fileToolService.execute(userId, toolName, params);
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        if (response.isSuccess()) {
+            result.put("success", true);
+            result.put("output", response.getOutput());
+        } else {
+            result.put("success", false);
+            result.put("message", response.getMessage());
+        }
+        if (response.getFileRef() != null) {
+            result.put("fileRef", response.getFileRef());
+        }
         return result;
     }
 

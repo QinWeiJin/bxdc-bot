@@ -595,13 +595,15 @@ public class TxtToolService {
             }
             int original = allLines.size();
             int removed = original - dedup.size();
-            if (inPlace && removed > 0) {
+            boolean writtenBack = false;
+            if (inPlace) {
                 String content = joinLines(dedup, "\n");
                 byte[] bytes = content.getBytes(Charset.forName(encoding));
-                String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-                String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+                String originalStorageName = userFile.getFileName();
+                String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
                 userFile.setFtpPath(fullPath);
                 userFile.setFileSize((long) bytes.length);
+                writtenBack = true;
             }
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileName", userFile.getOriginalFileName());
@@ -609,7 +611,7 @@ public class TxtToolService {
             result.put("distinctLines", dedup.size());
             result.put("removed", removed);
             result.put("lines", dedup);
-            result.put("writtenBack", inPlace && removed > 0);
+            result.put("writtenBack", writtenBack);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("txt_distinct_lines failed for {}", userFile.getOriginalFileName(), e);
@@ -663,8 +665,8 @@ public class TxtToolService {
             if (inPlace) {
                 String content = joinLines(sorted, "\n");
                 byte[] bytes = content.getBytes(Charset.forName(encoding));
-                String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-                String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+                String originalStorageName = userFile.getFileName();
+                String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
                 userFile.setFtpPath(fullPath);
                 userFile.setFileSize((long) bytes.length);
             }
@@ -798,6 +800,18 @@ public class TxtToolService {
     }
 
     private String uploadBytes(String userId, String storageName, byte[] bytes) throws IOException {
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        return ftpFileService.uploadFile(userId, storageName, bais);
+    }
+
+    /**
+     * 用原 storageName 覆盖写回文件（保留文件名不生成新 UUID）。
+     * <p>
+     * 用于 inPlace 语义的去重/排序/替换等场景，确保"原文件被修改"——
+     * fileRef 仍然是同一个，user_files 行的 file_name 不变，DB 与磁盘一致。
+     * </p>
+     */
+    private String overwriteBytes(String userId, String storageName, byte[] bytes) throws IOException {
         ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
         return ftpFileService.uploadFile(userId, storageName, bais);
     }
