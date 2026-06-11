@@ -27,8 +27,8 @@ public class JacksonConfig {
     public ObjectMapper objectMapper() {
         ObjectMapper om = new ObjectMapper();
         JavaTimeModule javaTimeModule = new JavaTimeModule();
-        // 用我们项目统一的 Asia/Shanghai 格式，替代默认 timestamp 数组
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+        // LocalDateTime 没有时区信息，必须用纯日期时间格式（不能用 XXX，否则报 Unsupported field: OffsetSeconds）
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS")
                 .withZone(java.time.ZoneId.of("Asia/Shanghai"));
         javaTimeModule.addSerializer(new LocalDateTimeSerializer(formatter));
         om.registerModule(javaTimeModule);

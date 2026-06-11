@@ -1,8 +1,7 @@
 package com.lobsterai.skillgateway.config;
 
-import com.lobsterai.skillgateway.audit.ContentTypeNormalizingInterceptor;
-import com.lobsterai.skillgateway.audit.GatewayHttpClientAuditInterceptor;
-import org.apache.http.HttpHost;
+import java.util.Arrays;
+
 import org.apache.http.conn.routing.HttpRoutePlanner;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.DefaultRoutePlanner;
@@ -14,11 +13,8 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-import java.net.Proxy;
-import java.net.ProxySelector;
-import java.net.URI;
-import java.util.Arrays;
-import java.util.List;
+import com.lobsterai.skillgateway.audit.ContentTypeNormalizingInterceptor;
+import com.lobsterai.skillgateway.audit.GatewayHttpClientAuditInterceptor;
 
 @Configuration
 public class SkillGatewayHttpClientConfig {
