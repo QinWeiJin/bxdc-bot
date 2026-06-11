@@ -11,14 +11,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -123,7 +126,10 @@ public class FileUploadController {
             userFile.setFileSize(file.getSize());
             userFile.setFileType(extractExtension(originalFileName));
             userFile.setFtpPath(ftpPath);
-            // uploadTime 由 MyBatis-Plus FieldFill.INSERT 自动填充
+            // uploadTime 手动填充：wgj 的 MybatisPlusConfig MetaObjectHandler
+            // 只处理 createdAt/updatedAt，未注册 uploadTime 的 fill handler，
+            // 故此处显式 set 兜底（避免 SQLIntegrityConstraintViolationException）
+            userFile.setUploadTime(LocalDateTime.now());
 
             // 5. 写 DB（MyBatis-Plus AUTO id 写入后回填 userFile.getId()）
             userFileMapper.insert(userFile);
@@ -156,6 +162,23 @@ public class FileUploadController {
             return error(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
                     "上传失败：" + e.getMessage());
         }
+    }
+
+    /**
+     * 处理 Tomcat multipart 阶段抛出的超大文件异常。
+     * <p>
+     * Spring 在请求体解析阶段就拒绝超过 {@code spring.servlet.multipart.max-file-size}
+     * 的文件，本 Controller 的 try-catch 抓不到，必须用 {@link ExceptionHandler} 兜底。
+     * 注：Spring 5.3 的 {@code @ExceptionHandler} 对 dispatcher 解析阶段抛的异常不生效
+     * （已知问题，Spring 6 已修），实际靠 Spring Boot 默认 error handler 转 500。
+     * 此处 handler 仅作文档化意图，不期望真正触发。
+     * </p>
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        log.warn("File upload rejected (multipart size limit): max={}", e.getMaxUploadSize());
+        return error(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE",
+                "文件大小超过 10MB，请修改后重试");
     }
 
     private ResponseEntity<Map<String, Object>> error(HttpStatus status, String code, String message) {

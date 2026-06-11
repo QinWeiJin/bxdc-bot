@@ -48,6 +48,10 @@ frontend-react-backup/
 # skills
 skills/
 
+# Local dev tools (per-developer, not committed)
+# e.g. .dev-ftp-test/ — 本地测试用 FTP + 启动/停止/状态脚本
+.dev-*/
+
 # Maven
 backend/skill-gateway/apache-maven-*/
 
