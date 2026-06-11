@@ -19,29 +19,97 @@ import type { FileType, UploadFileInfo } from '../types/fileUpload'
 import {
   PARSED_TEXT_MAX_BYTES,
   INSTRUCTION_FILES_MAX_BYTES,
+  FILE_UPLOAD_CONFIG,
 } from '../types/fileUpload'
 import {
   getFileTypeFromName,
   validateFile,
-  validateTotalSize,
-  validateFileCount,
 } from '../utils/fileValidator'
+
+/** 文件名查重：在所有已上传文件中查找同名（按 fileName 完全匹配） */
+function findDuplicateByName(
+  groups: Record<FileType, UploadFileInfo[]>,
+  fileName: string,
+): UploadFileInfo | undefined {
+  for (const ft of Object.keys(groups) as FileType[]) {
+    for (const f of groups[ft]) {
+      if (f.fileName === fileName) return f
+    }
+  }
+  return undefined
+}
+
+/** 移除指定 ID 的文件（跨分组） */
+function removeFileById(
+  groups: Record<FileType, UploadFileInfo[]>,
+  fileId: string,
+): UploadFileInfo | undefined {
+  for (const ft of Object.keys(groups) as FileType[]) {
+    const list = groups[ft]
+    const idx = list.findIndex((f) => f.id === fileId)
+    if (idx >= 0) {
+      const [removed] = list.splice(idx, 1)
+      return removed
+    }
+  }
+  return undefined
+}
+
+/** 格式化时间戳为 "YYYY-MM-DD HH:mm" */
+function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  )
+}
+
+/** 统计 5 个分组中的文件总数 */
+function countAllFiles(groups: Record<FileType, UploadFileInfo[]>): number {
+  let n = 0
+  for (const ft of Object.keys(groups) as FileType[]) n += groups[ft].length
+  return n
+}
+
+/** 扁平化所有分组的文件列表 */
+function allFilesList(groups: Record<FileType, UploadFileInfo[]>): UploadFileInfo[] {
+  const out: UploadFileInfo[] = []
+  for (const ft of Object.keys(groups) as FileType[]) {
+    for (const f of groups[ft]) out.push(f)
+  }
+  return out
+}
 
 // ============================================================
 // 1. 类型与 InjectionKey
 // ============================================================
+
+/** 校验错误码（与需求方案 A1 模块二 §2.2 严格对齐） */
+export type ValidationErrorCode =
+  | 'UNSUPPORTED_TYPE'
+  | 'FILE_TOO_LARGE'
+  | 'TOO_MANY_FILES'
+  | 'DUPLICATE_FILE'
+  | 'EMPTY_FILE'
+  | 'PARSE_TIMEOUT'
 
 /** 状态结构：5 个 FileType 分组的 UploadFileInfo 列表 */
 export interface FileUploadState {
   uploadedFiles: Ref<Record<FileType, UploadFileInfo[]>>
   isUploading: Ref<boolean>
   uploadError: Ref<string | null>
-  addFiles: (files: File[]) => Promise<void>
+  addFiles: (files: File[]) => Promise<UploadFileInfo[]>
   removeFile: (fileId: string) => void
   clearFiles: () => void
   getAllParsedText: (files?: UploadFileInfo[]) => string
   getFileNamesForMemory: () => string[]
   parseFileContent: (file: UploadFileInfo) => Promise<string>
+  /**
+   * 批量解析文件（带并发限制 MAX_CONCURRENT_PARSES）。
+   * 图标/拖拽/粘贴三个入口统一走此通道，避免无界并发。
+   */
+  parseFiles: (files: UploadFileInfo[]) => Promise<void>
   /**
    * 等待所有处于 `parsing` 状态的文件完成解析，最多等待 `timeoutMs` 毫秒后返回当前状态。
    * 返回三分类：`done`（已 parsed 或 failed）、`pending`（仍 parsing）、`failed`。
@@ -57,6 +125,14 @@ export interface FileUploadState {
    * 任务 pass-parsed-content-to-llm 引入。
    */
   setFileStatus: (fileId: string, status: UploadFileInfo['status']) => void
+  /** 取消正在解析的文件（需求方案 A1 §2.3.2：点击 × 取消未使用的上传文件） */
+  cancel: (fileId: string) => void
+  /** 拖拽事件处理：仅当 e.dataTransfer 含文件时触发 addFiles */
+  onDrop: (e: DragEvent) => Promise<void>
+  /** 粘贴事件处理：仅当 clipboardData.files 非空时触发 addFiles */
+  onPaste: (e: ClipboardEvent) => Promise<void>
+  /** 当前正在解析的文件数（用于 UI 显示并发状态） */
+  parsingCount: Ref<number>
 }
 
 const FileUploadKey: InjectionKey<FileUploadState> = Symbol('FileUploadKey')
@@ -85,48 +161,63 @@ export function provideFileUpload(): FileUploadState {
   const uploadedFiles = ref<Record<FileType, UploadFileInfo[]>>(emptyGroups())
   const isUploading = ref(false)
   const uploadError = ref<string | null>(null)
+  const parsingCount = ref(0)
+  /** 每文件独立的 AbortController，用于 cancel 取消正在进行的解析 */
+  const abortControllers = new Map<string, AbortController>()
 
   // ---- addFiles ----
-  async function addFiles(files: File[]): Promise<void> {
-    if (!files || files.length === 0) return
+  // 4 步校验（需求方案 A1 §2.2）：类型 → 大小 → 数量 → 重复
+  // 返回实际成功添加的文件列表（被校验跳过的不会出现在列表中）
+  async function addFiles(files: File[]): Promise<UploadFileInfo[]> {
+    const added: UploadFileInfo[] = []
+    if (!files || files.length === 0) return added
 
     for (const file of files) {
-      // 1. 通过扩展名识别 FileType（找不到则视为不支持）
+      // 1. 类型校验：通过扩展名识别 FileType
       const fileType = getFileTypeFromName(file.name)
       if (!fileType) {
-        MessagePlugin.error(`不支持的文件格式：${file.name}`)
+        MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.UNSUPPORTED_TYPE)
         continue
       }
 
-      // 2. 累计大小校验（基于同类型已有文件 + 当前文件）
-      const existingOfType = uploadedFiles.value[fileType]
-      const totalResult = validateTotalSize(existingOfType, file, fileType)
-      if (!totalResult.valid) {
-        for (const err of totalResult.errors) {
-          MessagePlugin.error(err)
+      // 2. 大小校验：单文件 ≤ MAX_SIZE_PER_FILE[fileType]
+      if (file.size > FILE_UPLOAD_CONFIG.MAX_SIZE_PER_FILE[fileType]) {
+        MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.FILE_TOO_LARGE)
+        continue
+      }
+
+      // 3. 数量校验：累计总数（含本次） ≤ MAX_FILES_PER_SESSION
+      const currentTotal = countAllFiles(uploadedFiles.value)
+      if (currentTotal + 1 > FILE_UPLOAD_CONFIG.MAX_FILES_PER_SESSION) {
+        MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.TOO_MANY_FILES)
+        continue
+      }
+
+      // 4. 重复校验：全量查重，存在同名则弹窗让用户选择"替换 / 取消"
+      const existing = findDuplicateByName(uploadedFiles.value, file.name)
+      if (existing) {
+        const message = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
+          file.name,
+          formatTime(existing.uploadedAt),
+        )
+        // 使用同步 confirm：UI 端可替换为 ElMessageBox.confirm
+        // 这里为不引入额外 UI 依赖，使用 window.confirm（简化实现）
+        const replace = window.confirm(message)
+        if (!replace) {
+          // 取消：跳过该文件
+          continue
         }
-        continue
-      }
-
-      // 3. 数量校验
-      const countResult = validateFileCount(existingOfType, fileType)
-      if (!countResult.valid) {
-        for (const err of countResult.errors) {
-          MessagePlugin.error(err)
+        // 替换：移除旧的（保留 previewUrl 释放 + abort 可能的解析中 controller），添加新的
+        const removed = removeFileById(uploadedFiles.value, existing.id)
+        if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+        const oldCtrl = abortControllers.get(existing.id)
+        if (oldCtrl) {
+          oldCtrl.abort()
+          abortControllers.delete(existing.id)
         }
-        continue
       }
 
-      // 4. 组合校验（格式 / 大小 / 加密）
-      const validation = await validateFile(file, existingOfType)
-      if (!validation.valid) {
-        for (const err of validation.errors) {
-          MessagePlugin.error(err)
-        }
-        continue
-      }
-
-      // 5. 通过校验，构建 UploadFileInfo
+      // 通过所有校验，构建 UploadFileInfo
       const info: UploadFileInfo = {
         id: genId(),
         file,
@@ -137,27 +228,86 @@ export function provideFileUpload(): FileUploadState {
         uploadedAt: Date.now(),
       }
 
-      // image 类型额外生成预览 URL
       if (fileType === 'image') {
         info.previewUrl = URL.createObjectURL(file)
       }
 
       uploadedFiles.value[fileType].push(info)
+      added.push(info)
     }
+
+    return added
   }
 
   // ---- removeFile ----
   function removeFile(fileId: string): void {
-    for (const fileType of Object.keys(uploadedFiles.value) as FileType[]) {
-      const list = uploadedFiles.value[fileType]
-      const removed = list.find((f) => f.id === fileId)
-      if (removed) {
-        if (removed.previewUrl) {
-          URL.revokeObjectURL(removed.previewUrl)
+    const removed = removeFileById(uploadedFiles.value, fileId)
+    if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+    // 取消可能正在进行的解析
+    const ctrl = abortControllers.get(fileId)
+    if (ctrl) {
+      ctrl.abort()
+      abortControllers.delete(fileId)
+    }
+  }
+
+  // ---- cancel (需求 §2.3.2：点击 × 取消未使用的上传文件) ----
+  function cancel(fileId: string): void {
+    const removed = removeFileById(uploadedFiles.value, fileId)
+    if (!removed) return
+    if (removed.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+    // 状态置为 skipped（保持可追溯）后立即从 UI 移除
+    removed.status = 'skipped'
+    const ctrl = abortControllers.get(fileId)
+    if (ctrl) {
+      ctrl.abort()
+      abortControllers.delete(fileId)
+    }
+  }
+
+  // ---- onDrop（拖拽上传）----
+  async function onDrop(e: DragEvent): Promise<void> {
+    e.preventDefault()
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    await addFiles(Array.from(files))
+    // 自动解析新加入的文件
+    const newest = allFilesList(uploadedFiles.value).slice(-files.length)
+    await parseAllNew(newest)
+  }
+
+  // ---- onPaste（Ctrl+V 粘贴）----
+  async function onPaste(e: ClipboardEvent): Promise<void> {
+    const files = e.clipboardData?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    await addFiles(Array.from(files))
+    const newest = allFilesList(uploadedFiles.value).slice(-files.length)
+    await parseAllNew(newest)
+  }
+
+  // ---- 并发解析控制 ----
+  async function parseAllNew(files: UploadFileInfo[]): Promise<void> {
+    const max = FILE_UPLOAD_CONFIG.MAX_CONCURRENT_PARSES
+    const queue = [...files]
+    const runners: Promise<void>[] = []
+    for (let i = 0; i < Math.min(max, queue.length); i++) {
+      runners.push(worker(queue))
+    }
+    await Promise.all(runners)
+
+    async function worker(q: UploadFileInfo[]): Promise<void> {
+      while (q.length > 0) {
+        const next = q.shift()
+        if (!next) break
+        parsingCount.value++
+        try {
+          await parseFileContent(next)
+        } catch {
+          /* parseFileContent 已设置 status=failed */
+        } finally {
+          parsingCount.value--
         }
-        const idx = list.indexOf(removed)
-        list.splice(idx, 1)
-        return
       }
     }
   }
@@ -249,22 +399,35 @@ export function provideFileUpload(): FileUploadState {
 
   // ---- parseFileContent ----
   // 任务 4-5 接入 fileParser.parseDocument（docx/xlsx/txt 已实做；ppt/image 走 agent-core 兜底）
+  // 模块二：注册 AbortController 用于 cancel 取消
   async function parseFileContent(file: UploadFileInfo): Promise<string> {
     if (file.status === 'parsed') {
       return file.parsedText ?? ''
     }
 
+    const controller = new AbortController()
+    abortControllers.set(file.id, controller)
     file.status = 'parsing'
     try {
       const { parseDocument } = await import('../utils/fileParser')
-      const text = await parseDocument(file.file, file.fileType)
+      const text = await parseDocument(file.file, file.fileType, controller.signal)
+      if (controller.signal.aborted) {
+        file.status = 'skipped'
+        throw new DOMException('已取消', 'AbortError')
+      }
       file.parsedText = text
       file.status = 'parsed'
       return text
     } catch (err) {
-      file.status = 'failed'
-      file.errorMessage = err instanceof Error ? err.message : '解析失败'
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        if (file.status !== 'skipped') file.status = 'skipped'
+      } else {
+        file.status = 'failed'
+        file.errorMessage = err instanceof Error ? err.message : '解析失败'
+      }
       throw err
+    } finally {
+      abortControllers.delete(file.id)
     }
   }
 
@@ -335,8 +498,13 @@ export function provideFileUpload(): FileUploadState {
     getAllParsedText: getAllParsedText,
     getFileNamesForMemory: getFileNamesForMemory,
     parseFileContent: parseFileContent,
+    parseFiles: parseAllNew,
     waitForAllParsing: waitForAllParsing,
     setFileStatus: setFileStatus,
+    cancel: cancel,
+    onDrop: onDrop,
+    onPaste: onPaste,
+    parsingCount: parsingCount,
   }
   provide(FileUploadKey, state)
   return state
@@ -351,8 +519,9 @@ export function useFileUpload(): FileUploadState {
   const isUploading = ref(false)
   const uploadError = ref<string | null>(null)
 
-  async function addFiles(files: File[]): Promise<void> {
-    if (!files || files.length === 0) return
+  async function addFiles(files: File[]): Promise<UploadFileInfo[]> {
+    const added: UploadFileInfo[] = []
+    if (!files || files.length === 0) return added
     for (const file of files) {
       const fileType = getFileTypeFromName(file.name)
       if (!fileType) {
@@ -375,7 +544,9 @@ export function useFileUpload(): FileUploadState {
         previewUrl: fileType === 'image' ? URL.createObjectURL(file) : undefined,
       }
       uploadedFiles.value[fileType].push(info)
+      added.push(info)
     }
+    return added
   }
 
   function removeFile(fileId: string): void {
@@ -527,6 +698,43 @@ export function useFileUpload(): FileUploadState {
     }
   }
 
+  // ---- 独立使用分支（无 provide）的简化实现 ----
+  const parsingCountStub = ref(0)
+  function cancelStub(fileId: string): void {
+    removeFile(fileId)
+  }
+  async function onDropStub(e: DragEvent): Promise<void> {
+    e.preventDefault()
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    const added = await addFiles(Array.from(files))
+    await parseFilesStub(added)
+  }
+  async function onPasteStub(e: ClipboardEvent): Promise<void> {
+    const files = e.clipboardData?.files
+    if (!files || files.length === 0) return
+    e.preventDefault()
+    const added = await addFiles(Array.from(files))
+    await parseFilesStub(added)
+  }
+  // 独立分支的并发解析（与 provideFileUpload 的 parseAllNew 功能等价，但简单实现）
+  async function parseFilesStub(files: UploadFileInfo[]): Promise<void> {
+    const max = FILE_UPLOAD_CONFIG.MAX_CONCURRENT_PARSES
+    const queue = [...files]
+    const runners: Promise<void>[] = []
+    for (let i = 0; i < Math.min(max, queue.length); i++) {
+      runners.push((async () => {
+        while (queue.length > 0) {
+          const next = queue.shift()!
+          parsingCountStub.value++
+          try { await parseFileContent(next) } catch { /* 已在 parseFileContent 设 status=failed */ }
+          finally { parsingCountStub.value-- }
+        }
+      })())
+    }
+    await Promise.all(runners)
+  }
+
   const state: FileUploadState = {
     uploadedFiles: uploadedFiles,
     isUploading: isUploading,
@@ -537,8 +745,13 @@ export function useFileUpload(): FileUploadState {
     getAllParsedText: getAllParsedText,
     getFileNamesForMemory: getFileNamesForMemory,
     parseFileContent: parseFileContent,
+    parseFiles: parseFilesStub,
     waitForAllParsing: waitForAllParsing,
     setFileStatus: setFileStatus,
+    cancel: cancelStub,
+    onDrop: onDropStub,
+    onPaste: onPasteStub,
+    parsingCount: parsingCountStub,
   }
   return state
 }
