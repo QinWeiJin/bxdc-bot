@@ -747,6 +747,8 @@ export async function loadGatewayExtendedTools(
     /** Base agent tools (including structured tools such as compute). */
     availableTools?: BindableAgentTool[];
     sessionId?: string;
+    /** 对话级别 Skill 过滤：有值时仅加载匹配 ID 的 Extension Skill，undefined 或 [] 时全量加载 */
+    enabledSkillIds?: number[];
   },
 ): Promise<StructuredTool[]> {
   try {
@@ -759,13 +761,21 @@ export async function loadGatewayExtendedTools(
     const extensionSkills = skills.filter(
       (skill) => skill.enabled && (skill.type || "").toUpperCase() === "EXTENSION"
     );
+
+    // 按对话配置过滤 Extension Skill
+    // undefined = 不传该字段（旧客户端）→ 全量加载
+    // [] = 明确空数组 → 无 Extension Skill
+    const filteredSkills = options?.enabledSkillIds !== undefined
+      ? extensionSkills.filter((s) => options.enabledSkillIds!.includes(s.id))
+      : extensionSkills;
+
     const toolLookup = new Map<string, BindableAgentTool>();
     (options?.availableTools || []).forEach((tool) => {
       toolLookup.set(tool.name, tool);
     });
 
     const resolvedTools: StructuredTool[] = [];
-    for (const skill of extensionSkills) {
+    for (const skill of filteredSkills) {
       console.log(`[DEBUG] skill ${skill.id} configuration:`, skill.configuration);
       let workingSkill = skill;
       let config = skill.configuration ? parseSkillConfig(skill) : {} as ExtendedSkillConfig;

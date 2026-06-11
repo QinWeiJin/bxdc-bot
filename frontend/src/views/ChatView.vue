@@ -1,16 +1,141 @@
 <script setup lang="ts">
-import { onMounted, onErrorCaptured, nextTick } from 'vue'
+import { onMounted, onErrorCaptured, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { provideChat } from '../composables/useChat'
+import { provideChat, type Message, type ToolInvocation } from '../composables/useChat'
+import { provideConversations, useConversations } from '../composables/useConversations'
+import { useUser } from '../composables/useUser'
+import type { ConversationMessage } from '../types/conversation'
+
 import Layout from '../components/Layout.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 
-const { error, fetchGreeting } = provideChat()
+const { error, messages, addMessage, fetchGreeting, saveMessageCallback } = provideChat()
+// provideConversations must be called before useConversations (parent proviides to Layout child)
+provideConversations()
+const conversations = useConversations()
+const { currentUser } = useUser()
+
+// Wire up message persistence: after SSE stream completes, save to conversation
+saveMessageCallback.value = (chatMessages) => {
+  if (!currentUser.value || !conversations.currentConversationId.value) return
+  const msgs = chatMessages.map((m) => ({
+    role: m.role,
+    content: m.content,
+    skill_calls: undefined,
+    skill_outputs: undefined,
+  }))
+  conversations.persistMessages(currentUser.value.id, msgs)
+}
 const route = useRoute()
 
-onMounted(() => {
-  fetchGreeting()
+function convertHistoryMessages(msgs: ConversationMessage[]): Message[] {
+  const result: Message[] = []
+  let pendingToolInvocations: ToolInvocation[] = []
+
+  for (const msg of msgs) {
+    if (msg.role === 'user') {
+      result.push({
+        id: msg.message_id,
+        role: 'user',
+        content: msg.content,
+        timestamp: new Date(msg.created_at).getTime(),
+        toolInvocations: [],
+        llmLogs: [],
+        logTimeline: [],
+      })
+    } else if (msg.role === 'assistant') {
+      const skillCalls = parseSkillCalls(msg.skill_calls)
+      result.push({
+        id: msg.message_id,
+        role: 'assistant',
+        content: msg.content,
+        timestamp: new Date(msg.created_at).getTime(),
+        toolInvocations: skillCalls,
+        llmLogs: [],
+        logTimeline: skillCalls.map((t) => ({ kind: 'tool' as const, id: t.id })),
+      })
+      pendingToolInvocations = skillCalls
+    } else if (msg.role === 'tool') {
+      // Attach tool output to the last assistant message's matching tool invocation
+      if (result.length > 0 && pendingToolInvocations.length > 0) {
+        const lastMsg = result[result.length - 1]!
+        if (lastMsg.role === 'assistant' && lastMsg.toolInvocations) {
+          const target = lastMsg.toolInvocations.find(
+            (t) => t.status === 'running' || t.status === 'completed',
+          )
+          if (target) {
+            target.status = 'completed'
+            target.result = msg.content
+          } else if (lastMsg.toolInvocations.length > 0) {
+            const lastTool = lastMsg.toolInvocations[lastMsg.toolInvocations.length - 1]!
+            lastTool.result = lastTool.result
+              ? lastTool.result + '\n' + msg.content
+              : msg.content
+          }
+        }
+      }
+    }
+  }
+
+  return result
+}
+
+function parseSkillCalls(raw: string | null): ToolInvocation[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return parsed.map((tc: any, i: number) => ({
+        id: tc.id || tc.tool_call_id || `history-${i}-${Date.now()}`,
+        name: tc.name || tc.function?.name || 'unknown',
+        displayName: (tc.name || tc.function?.name || 'unknown').replace(/^skill_/, '').replace(/_/g, '-'),
+        kind: ((tc.name || '').startsWith('skill_') ? 'skill' : 'tool') as 'skill' | 'tool',
+        status: 'completed' as const,
+        arguments: tc.args || tc.arguments || undefined,
+        result: undefined,
+        children: [],
+      }))
+    }
+    // Single object
+    return [{
+      id: parsed.id || parsed.tool_call_id || `history-0-${Date.now()}`,
+      name: parsed.name || parsed.function?.name || 'unknown',
+      displayName: (parsed.name || parsed.function?.name || 'unknown').replace(/^skill_/, '').replace(/_/g, '-'),
+      kind: ((parsed.name || '').startsWith('skill_') ? 'skill' : 'tool') as 'skill' | 'tool',
+      status: 'completed' as const,
+      arguments: parsed.args || parsed.arguments || undefined,
+      result: undefined,
+      children: [],
+    }]
+  } catch {
+    return []
+  }
+}
+
+// Initialize conversations and load first conversation's history
+onMounted(async () => {
+  if (!currentUser.value) return
+
+  await conversations.init(currentUser.value.id)
+
+  // Load first conversation's messages
+  if (conversations.currentConversationId.value) {
+    const historyMessages = await conversations.switchConversation(
+      conversations.currentConversationId.value,
+      currentUser.value.id,
+    )
+    // Convert API messages to chat messages format
+    if (historyMessages.length > 0) {
+      messages.value = convertHistoryMessages(historyMessages)
+    } else {
+      // Empty conversation: show greeting
+      fetchGreeting()
+    }
+  } else {
+    fetchGreeting()
+  }
+
   const taskId = route.query.taskId
   if (typeof taskId === 'string' && taskId) {
     try {
@@ -19,44 +144,22 @@ onMounted(() => {
       // ignore
     }
   }
-  // 调试：抓 TCard 内部结构
-  nextTick(() => {
-    setTimeout(() => {
-      const shell = document.querySelector('.chat-shell')
-      if (shell) {
-        console.log('=== .chat-shell 子节点 ===')
-        Array.from(shell.children).forEach((c, i) => {
-          const r = c.getBoundingClientRect()
-          const cs = getComputedStyle(c)
-          console.log(`  child[${i}]: <${c.tagName.toLowerCase()}> class="${c.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)} display=${cs.display}`)
-          Array.from(c.children).forEach((cc, j) => {
-            const rr = cc.getBoundingClientRect()
-            const ccs = getComputedStyle(cc)
-            console.log(`    grandchild[${j}]: <${cc.tagName.toLowerCase()}> class="${cc.className}" ${rr.width.toFixed(0)}x${rr.height.toFixed(0)} display=${ccs.display}`)
-          })
-        })
-      }
-      // 查 TCard 全部 children
-      const tc = document.querySelector('.t-card')
-      if (tc) {
-        console.log('=== .t-card 内部（不通过 .chat-shell .t-card 链） ===')
-        Array.from(tc.children).forEach((c, i) => {
-          const r = c.getBoundingClientRect()
-          console.log(`  tcc[${i}]: <${c.tagName.toLowerCase()}> class="${c.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)}`)
-        })
-      } else {
-        console.log('=== .t-card not found, 直接查 chat-shell 内层 ===')
-      }
-      // 打印 .t-card__body 上一层（直接父级）
-      const body = document.querySelector('.chat-shell .t-card__body')
-      if (body && body.parentElement) {
-        const pe = body.parentElement
-        const r = pe.getBoundingClientRect()
-        console.log(`t-card__body parent: <${pe.tagName.toLowerCase()}> class="${pe.className}" ${r.width.toFixed(0)}x${r.height.toFixed(0)}`)
-      }
-    }, 1000)
-  })
 })
+
+// Watch for history loads triggered by sidebar
+watch(
+  () => conversations.historyMessages.value,
+  (msgs) => {
+    if (!msgs) return
+    if (msgs.length === 0) {
+      // Empty conversation: clear old messages and show greeting
+      messages.value = []
+      fetchGreeting()
+      return
+    }
+    messages.value = convertHistoryMessages(msgs)
+  },
+)
 
 onErrorCaptured((err) => {
   console.error('[ChatView captured error]:', err)

@@ -527,8 +527,8 @@ export class AgentController {
    */
   @Post('run')
   @Sse()
-  runTask(@Body() body: { instruction: string; context: any; history?: any[] }): Observable<MessageEvent> {
-    const { instruction, context, history } = body;
+  runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string }): Observable<MessageEvent> {
+    const { instruction, context, history, enabledSkillIds, conversationId } = body;
     const safeHistory = Array.isArray(history) ? history : [];
     const sanitizedHistory = sanitizeHistoryForAgent(safeHistory as Array<{ role?: string; content?: unknown }>);
     console.log('[DEBUG] Sanitized history roles:', sanitizedHistory.map(m => m?.role));
@@ -570,14 +570,14 @@ export class AgentController {
               llmApiKey: llmConfig.llmApiKey,
             };
           }
-          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
         })
         .catch((e) => {
           console.error('[agent] Error fetching LLM config:', e);
-          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
         });
     } else {
-      this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken);
+      this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
     }
 
     return subject.asObservable();
@@ -591,6 +591,8 @@ export class AgentController {
     subject: Subject<MessageEvent>,
     gatewayUrl: string,
     apiToken: string,
+    enabledSkillIds?: number[],
+    conversationId?: string,
   ) {
     const llm = pickMergedLlm(llmContext);
     const openAiApiKey = llm.apiKey;
@@ -628,9 +630,10 @@ export class AgentController {
             gatewayUrl,
             apiToken,
             openAiApiKey,
-            { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId },
+            { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId, conversationId },
             this.skillManager,
             userId,
+            enabledSkillIds,
           );
 
           const memories = await this.memoryService.searchMemories(instruction, userId, 10);

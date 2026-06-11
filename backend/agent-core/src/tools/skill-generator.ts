@@ -534,6 +534,7 @@ export class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof skillGe
   constructor(
     private readonly gatewayUrl: string,
     private readonly apiToken: string,
+    private readonly conversationId?: string,
     private readonly userId?: string
   ) {
     super({
@@ -575,6 +576,35 @@ export class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof skillGe
               configuration: JSON.stringify(sanitizeConfigForDisplay(generated.config)),
             },
           });
+        }
+
+        // 新创建的 Skill 自动加入当前对话
+        if (saveResult.mode === "created" && this.conversationId && this.userId && saveResult.skill.id) {
+          try {
+            const convHeaders = gatewaySkillMutationHeaders(this.apiToken, this.userId);
+            const convResp = await axios.get(
+              `${this.gatewayUrl}/api/conversations/${this.conversationId}`,
+              { headers: convHeaders },
+            );
+            const conv = (convResp.data as any)?.conversation || convResp.data || {};
+            const raw = conv.enabled_skills;
+            let currentIds: number[] = [];
+            if (typeof raw === "string") {
+              try { currentIds = JSON.parse(raw); } catch { currentIds = []; }
+            } else if (Array.isArray(raw)) {
+              currentIds = raw.map((v: any) => typeof v === "number" ? v : Number(v)).filter((v: number) => !isNaN(v));
+            }
+            if (!currentIds.includes(saveResult.skill.id)) {
+              currentIds.push(saveResult.skill.id);
+              await axios.put(
+                `${this.gatewayUrl}/api/conversations/${this.conversationId}`,
+                { enabled_skills: currentIds },
+                { headers: convHeaders },
+              );
+            }
+          } catch (convErr: any) {
+            console.warn("[skill_generator] Failed to auto-add skill to conversation:", convErr.message);
+          }
         }
 
         let validation: ReturnType<typeof buildValidationSummary> | {
