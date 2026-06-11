@@ -1,9 +1,10 @@
 package com.lobsterai.skillgateway.dto;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.List;
 
@@ -11,10 +12,25 @@ import java.util.List;
  * 异步任务通知 DTO。
  * 用于通知中心列表展示，合并了 AsyncTask + skill.name + 进度统计。
  *
- * 时间字段一律按 Asia/Shanghai 序列化（pattern 带偏移 + timezone="Asia/Shanghai"），
+ * 时间字段一律按 Asia/Shanghai 序列化为 ISO 8601 字符串
+ * （"yyyy-MM-dd'T'HH:mm:ssXXX"，例：2024-01-15T10:30:00+08:00），
  * 由前端 utils/datetime.ts 的 parseBackendTimeAsUtc 反序列化为本地时间显示。
+ *
+ * 注：字段类型故意用 String 而不是 LocalDateTime，
+ * 因为 Jackson 2.13.3 + JavaTimeModule + @JsonFormat(pattern="...XXX")
+ * 在 LocalDateTime 上有兼容性问题（会触发 "Unsupported field: OffsetSeconds"），
+ * 改用 String 后序列化稳定。
  */
 public class AsyncTaskNotificationDto {
+
+    private static final DateTimeFormatter SHANGHAI_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX")
+                    .withZone(ZoneId.of("Asia/Shanghai"));
+
+    private static String formatShanghai(LocalDateTime ldt) {
+        if (ldt == null) return null;
+        return ldt.atZone(ZoneId.of("Asia/Shanghai")).format(SHANGHAI_FMT);
+    }
 
     private Long id;
     private Long skillId;
@@ -30,17 +46,10 @@ public class AsyncTaskNotificationDto {
 
     private String errorMessage;
 
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
-    private LocalDateTime startedAt;
-
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
-    private LocalDateTime completedAt;
-
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
-    private LocalDateTime createdAt;
-
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ssXXX", timezone = "Asia/Shanghai")
-    private LocalDateTime notifiedAt;
+    private String startedAt;
+    private String completedAt;
+    private String createdAt;
+    private String notifiedAt;
 
     private boolean unread;
     private String previewResult;
@@ -59,10 +68,10 @@ public class AsyncTaskNotificationDto {
         d.elapsedSeconds = elapsedSeconds;
         d.pollResponseCount = pollResponseCount;
         d.errorMessage = t.getErrorMessage();
-        d.startedAt = t.getStartedAt();
-        d.completedAt = t.getCompletedAt();
-        d.createdAt = t.getCreatedAt();
-        d.notifiedAt = t.getNotifiedAt();
+        d.startedAt = formatShanghai(t.getStartedAt());
+        d.completedAt = formatShanghai(t.getCompletedAt());
+        d.createdAt = formatShanghai(t.getCreatedAt());
+        d.notifiedAt = formatShanghai(t.getNotifiedAt());
         d.unread = t.getNotifiedAt() == null
                 && Arrays.asList("COMPLETED", "FAILED", "TIMEOUT").contains(t.getStatus());
         d.previewResult = previewResult;
@@ -91,14 +100,14 @@ public class AsyncTaskNotificationDto {
     public void setPollResponseCount(Integer pollResponseCount) { this.pollResponseCount = pollResponseCount; }
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
-    public LocalDateTime getStartedAt() { return startedAt; }
-    public void setStartedAt(LocalDateTime startedAt) { this.startedAt = startedAt; }
-    public LocalDateTime getCompletedAt() { return completedAt; }
-    public void setCompletedAt(LocalDateTime completedAt) { this.completedAt = completedAt; }
-    public LocalDateTime getCreatedAt() { return createdAt; }
-    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
-    public LocalDateTime getNotifiedAt() { return notifiedAt; }
-    public void setNotifiedAt(LocalDateTime notifiedAt) { this.notifiedAt = notifiedAt; }
+    public String getStartedAt() { return startedAt; }
+    public void setStartedAt(String startedAt) { this.startedAt = startedAt; }
+    public String getCompletedAt() { return completedAt; }
+    public void setCompletedAt(String completedAt) { this.completedAt = completedAt; }
+    public String getCreatedAt() { return createdAt; }
+    public void setCreatedAt(String createdAt) { this.createdAt = createdAt; }
+    public String getNotifiedAt() { return notifiedAt; }
+    public void setNotifiedAt(String notifiedAt) { this.notifiedAt = notifiedAt; }
     public boolean isUnread() { return unread; }
     public void setUnread(boolean unread) { this.unread = unread; }
     public String getPreviewResult() { return previewResult; }

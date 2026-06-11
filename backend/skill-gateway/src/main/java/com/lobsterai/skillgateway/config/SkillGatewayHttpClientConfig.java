@@ -31,13 +31,6 @@ public class SkillGatewayHttpClientConfig {
         PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
         connectionManager.setMaxTotal(50);
         connectionManager.setDefaultMaxPerRoute(20);
-        // Explicitly disable proxy to avoid SOCKS proxy connection errors
-        HttpRoutePlanner noProxyRoutePlanner = new SystemDefaultRoutePlanner(new java.net.ProxySelector() {
-            public java.util.List<java.net.Proxy> select(java.net.URI uri) {
-                return java.util.Collections.singletonList(java.net.Proxy.NO_PROXY);
-            }
-            public void connectFailed(java.net.URI uri, java.net.SocketAddress sa, java.io.IOException ioe) {}
-        });
         // 显式禁用系统代理（避免 SOCKS 代理连接错误）。
         // JDK 1.8 没有 ProxySelector.of(null)（JDK 9+），使用 DefaultRoutePlanner + null HttpHost
         // 等价于"不通过任何代理直连"。
