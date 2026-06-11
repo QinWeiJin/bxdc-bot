@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS skills (
     description TEXT,
     type VARCHAR(255) NOT NULL,
     configuration TEXT,
+    schema_properties TEXT,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
     enabled TINYINT(1) DEFAULT 1,
     requires_confirmation TINYINT(1) NOT NULL DEFAULT 0,
@@ -249,7 +250,13 @@ CREATE TABLE IF NOT EXISTS user_files (
     download_url VARCHAR(512) COMMENT '文件下载 URL',
     parsed_summary LONGTEXT COMMENT '文件解析后的 JSON 摘要',
     upload_time DATETIME NOT NULL COMMENT '上传时间',
+    -- 预留：会话/对话 ID（关联 agent-core 调工具时的 session 和 conversation）
+    -- 可空，老数据不填；未来按 session / conversation 维度查询附件
+    session_id VARCHAR(128) NULL COMMENT '预留：关联会话 ID',
+    conversation_id VARCHAR(128) NULL COMMENT '预留：关联对话 ID',
     INDEX idx_user_files_user_id (user_id),
     INDEX idx_user_files_user_orig_name (user_id, original_file_name),
-    INDEX idx_user_files_upload_time (upload_time)
+    INDEX idx_user_files_upload_time (upload_time),
+    INDEX idx_user_files_session (session_id),
+    INDEX idx_user_files_conversation (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户文件元数据表';
