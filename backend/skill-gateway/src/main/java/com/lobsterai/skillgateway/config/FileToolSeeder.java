@@ -38,6 +38,14 @@ public class FileToolSeeder implements ApplicationRunner {
         seed("file_delete", "删除指定文件。需要用户确认文件名后才会执行删除");
         seed("file_clear_all", "清空当前用户的所有已上传文件。需要用户确认后才会执行");
         seed("file_detail", "查看指定文件的详细信息（名称、大小、类型、上传时间、解析摘要）");
+
+        // ===== Word 操作（5.3）=====
+        seed("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
+        seed("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容）");
+        seed("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
+        seed("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果");
+        seed("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）");
+        seed("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符");
     }
 
     private void seed(String toolName, String description) {
