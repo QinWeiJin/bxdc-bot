@@ -23,25 +23,6 @@ cd backend/agent-core && npm run start:dev   # nest start --watch 走 ts-node
 cd frontend && npm run dev                    # Vite 实时编译
 ```
 
-**内网生产部署（自己 build dist）：**
-```bash
-# 1. 拉源码
-git pull <origin-url> low-version
-
-# 2. cp 配置模板
-cp backend/skill-gateway/src/main/resources/application.properties.example \
-   backend/skill-gateway/src/main/resources/application.properties
-# 改 password= 为内网 MySQL 密码
-
-# 3. 部署环境 build dist
-# 部署环境已经预装好 node_modules/（基础镜像 / 容器复用），
-# 所以不需要 npm install，直接 build 即可
-cd frontend && npm run build
-cd backend/agent-core && npm run build
-
-# 4. 拿 dist/ + jar + config 部署到 nginx / jvm
-```
-
 ### 提交源码时
 - **只 commit 源码**（`frontend/src/`、`backend/agent-core/src/`、`backend/skill-gateway/src/main/java/`、OpenSpec、`.md`、`.gitignore` 等）
 - **不 commit dist 产物**
@@ -52,13 +33,14 @@ cd backend/agent-core && npm run build
 ## 2. 本地开发配置
 
 ### 数据库配置
-- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**
+- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**（不进 git）
 - 每个开发者自己 cp `.example` 模板 → 填入本机 MySQL 密码：
   ```bash
-  cp backend/skill-gateway/src/main/resources/application.properties.example \
+  # 模板文件名是 application-prod.example.properties
+  cp backend/skill-gateway/src/main/resources/application-prod.example.properties \
      backend/skill-gateway/src/main/resources/application.properties
   # 改 password= 为本机 MySQL root 密码
-  ```
+```
 - MySQL 跑在 Docker 容器 `bxdc-mysql`（已开 8 天，端口 3306）
 
 ### 服务端口
@@ -94,9 +76,9 @@ cd frontend && npm run dev
 
 | 启动时的 cwd | localRepository 实际解析到 | 结果 |
 |---|---|---|
-| `bxdc-bot/backend/skill-gateway/` ✓ 正确 | `bxdc-bot/backend/skill-gateway/.m2/repository` | 正常 |
-| `bxdc-bot/` ❌ | `bxdc-bot/.m2/repository` | **错**（在项目根多出一个 .m2）|
-| `/Users/dccb/` ❌ | `/Users/dccb/.m2/repository` | **错**（污染用户家目录）|
+| `<project_root>/backend/skill-gateway/` ✓ 正确 | `<project_root>/backend/skill-gateway/.m2/repository` | 正常 |
+| `<project_root>/` ❌ | `<project_root>/.m2/repository` | **错**（在项目根多出一个 .m2）|
+| `${HOME}/` ❌ | `${HOME}/.m2/repository` | **错**（污染用户家目录）|
 | 任何其他 cwd ❌ | `<cwd>/.m2/repository` | **错**（mvn 自动创建新 .m2 位置）|
 
 **因此启动 mvn 之前必须先 `cd backend/skill-gateway`**。**不要**用以下方式启动：
@@ -112,29 +94,42 @@ cd backend/skill-gateway
 (cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run)
 ```
 
-**如果发现项目根或家目录多出了 .m2**，立即删掉（里面是错的重复缓存）：
-```bash
-rm -rf /Users/dccb/.m2              # 用户家
-rm -rf bxdc-bot/.m2                 # 项目根
-# skill-gateway/.m2 保留（117MB，是 mvn 真正在用的）
-```
-
 **为什么不改 settings.xml 用绝对路径**：
 - 项目用相对路径是**有意为之**（AGENTS.md 2.4 顶部）—— 保证每个开发者有自己的项目内 .m2，不与系统其他 maven 项目共享
 - 改成 `${user.home}` 会跟系统其他项目共享 jar，可能被覆盖
-- 改成本机绝对路径（如 `/Users/dccb/...`）写死对同事不通用
+- 改成本机绝对路径（不可移植）写死对同事不通用
 
 **所以约束"启动 mvn 前必须 cd 到 skill-gateway"是项目内部约定**，跟 settings.xml 的相对路径配合使用。
+
+#### ⚠️ AI agent 启动 mvn 必须用 `bash -c 'cd ... && mvn ...'` 模式
+
+**坑**：`nohup mvn -s ./settings.xml ...` 或 `mvn ...` **mvn 进程继承父 shell 的 cwd**，即使 `-s` 用绝对路径指向 settings.xml，**settings.xml 里的相对路径 `<localRepository>.m2/repository</localRepository>` 仍然按 mvn 进程的 cwd 解析**，所以 cwd 错了仍会在错误位置生成 .m2。
+
+**唯一可靠的启动方式**（用 `bash -c` 或 subshell 把 `cd` 一起带上）：
+```bash
+# 方式 1：bash -c
+nohup bash -c 'cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run' > /tmp/gw.log 2>&1 &
+
+# 方式 2：subshell
+(cd backend/skill-gateway && nohup ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run > /tmp/gw.log 2>&1 &)
+```
+
+**错误方式**（cwd 在项目根或别处）：
+```bash
+# ❌ 错误：mvn 进程 cwd 仍是项目根
+cd /Users/me/myproject
+nohup mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
+
+# ❌ 错误：cwd 是用户家
+cd ~
+mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
+```
 
 ---
 
 ## 3. OpenSpec 工作流
 
-每次有"功能/改动/归档"需求，先建 change：
-```bash
-npx openspec new change <name>     # 创建
-npx openspec archive <name> -y     # 归档（-y 跳过交互）
-```
+每次有"功能/改动/归档"需求，遵循 OpenSpec 规约。
 
 - 归档时如果报 `REMOVED failed for header "X" - not found`：原 spec 里没有这条 requirement，不能 REMOVE。删掉 `## REMOVED Requirements` 段，只保留 `## ADDED Requirements`。
 - 归档产物落在 `openspec/changes/archive/YYYY-MM-DD-<name>/`。
@@ -162,57 +157,26 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 
 ---
 
-## 5. 提交与分支约定
+## 5. 编程约束规范
 
-- **集成分支：`low-version`**（不是 main，所有改动先到这里）
-- **迭代开发分支：`iter-v2-基于temp`**（基于同事 `origin/temp` 拉出，**push 到 `myfork/temp`**，不是 `myfork/iter-v2`）
-  - 工作流：本地 `iter-v2-基于temp` 提交 → `git push myfork HEAD:temp --force`
-  - **不要**新开 `iter-v2` 远端分支（之前误开过，已删）
-  - 同事 `git fetch myfork && git checkout temp` 拿最新代码（force push 后本地的 `temp` 需要 reset）
-- **远端：`myfork`** = `lijianlong1/bxdc-bot.git`（用 token 推送，token 配在 `myfork` remote URL 里）
-  - 推荐 `git push myfork <branch>` 直接用 remote 配置的 token，不要把 token 写在命令行
-- **Conventional Commits 风格**：
-  - `feat(scope): 新功能`
-  - `fix(scope): bug 修复`
-  - `chore: 杂项`（配置、cleanup）
-  - `docs: 文档`
-  - `build: 构建产物`
-  - `refactor: 重构`
-  - 归档 OpenSpec change 用 `docs(openspec): ...`
+团队代码规范，遵循这 5 条：
 
----
-
-## 6. 容易踩的坑
-
-- **agent-core 残留进程**：`ps -ef | grep nest` 抓不到 `node` 启动的子进程，kill 时要按 PID 单独杀（grep 模式有 "node" 不一定匹配命令行）。
-- **GitHub 推送限流**：经常 `Operation too slow` 或 `port 443 timeout`，sleep 30-50s 重试基本能过。
-- **HEREDOC 在 zsh 里被破坏**：commit message 写 `/tmp/commit-msg.txt`，用 `git commit -F /tmp/commit-msg.txt`。
-- **TypeScript `erasableSyntaxOnly: true` 禁用 enum**：用 union type + `as const satisfies Record<...>` 对象模式代替。
-- **dist hash 变化**：Vite 会给主入口 css/js 换 hash，commit 时会删一堆旧 hash 文件 + 加新 hash 文件，正常。
-- **应用 `192.168.65.1` client IP**：MySQL 看到的客户端 IP，Docker 桥接网络常见，可忽略。
-
----
-
-## 7. 编程约束规范
-
-团队代码规范，遵循这 3 条：
-
-### 7.1 尽量不新增第三方包
+### 5.1 尽量不新增第三方包
 - 新增第三方包意味着 supply chain 风险 + 依赖升级成本 + 团队学习成本
 - 优先用 JDK 17 / NestJS 11 / Vue 3 / Spring Boot 2.7 自带的标准库
 - 必须新增时需要评审：能不能用现有工具实现？有没有轻量级替代？
 
-### 7.2 尽量不要新增环境变量配置
+### 5.2 尽量不要新增环境变量配置
 - 新的 env 变量意味着部署同事多配一项、新同事上手成本高
 - 优先用代码内的合理默认值 + 配置文件覆盖
 - 必须新增时需要用户明确要求，且要有默认值兜底
 
-### 7.3 涉及数据库表操作可以使用 Java 代码做，尽量不增量运行 SQL 文件
+### 5.3 涉及数据库表操作可以使用 Java 代码做，尽量不增量运行 SQL 文件
 - schema 变更优先用 Flyway / Liquibase 或 Spring Data JPA 自动 ddl，或者 `schema-mysql.sql` 一次性初始化（Spring `spring.sql.init.mode=always` 自动跑）
 - **不要**在多个增量 commit 里改 `schema-mysql.sql` 让用户手动 `mysql -e "..."` 跑
 - 复杂 schema 变更（加索引 / 改字段类型 / 数据迁移）走 Java migration 类（参考 `StartupRecoveryRunner` 模式）
 
-### 7.4 Java 版本与 language level 必须保持 JDK 1.8
+### 5.4 Java 版本与 language level 必须保持 JDK 1.8
 - 编译目标统一为 **JDK 1.8**（`pom.xml` 的 `<java.version>1.8</java.version>` 与 `maven-compiler-plugin` 的 `source/target` 同步）
 - IntelliJ Project language level 必须设为 **8 - Lambdas, type annotations etc.**（与 JDK 1.8 严格对应）
   - 不要选 `11 - Local variable syntax for lambda parameters`、`14 - Switch expressions` 等更高 level
@@ -221,7 +185,7 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 - 如果用到了 JDK 1.8 不支持的新 API（例如 `List.of(...)` 是 Java 9+、`var` 是 Java 10+），需要**降级**到 1.8 兼容写法（如 `Arrays.asList(...)`、显式类型）
 - 升级 JDK 需要团队评审 + 同步修改 IDEA 项目 language level + 更新本规约
 
-### 7.5 新功能架构约束：不改 agent-core，走 Tool 接入 + Schema 动态渲染
+### 5.5 新功能架构约束：不改 agent-core，走 Tool 接入 + Schema 动态渲染
 - **尽量不修改 agent-core（NestJS）代码**：agent-core 作为 LLM 调度层应保持稳定，新增能力优先在 gateway（Java）侧以 Tool 形式接入
 - **新能力 = 新 Skill 类型**：参照 `api`（API 代理）、`ssh`（SSH 执行）的模式，在 `SystemSkillController.buildXxxConfigSchema()` 中定义配置 schema，在 gateway 侧实现执行逻辑
 - **Skill 编辑页用 Schema 驱动动态渲染**：`ConfigFormRenderer` 基于后端 `/api/system-skills/execution-types` 返回的 `configSchema` 动态渲染表单，新增 Skill 类型只需扩展后端 schema + ConfigFormRenderer 的 UI 类型支持（如 checkbox / radio 等），**不要**在 `SkillManagementModal.vue` 中为每种类型硬编码模板
