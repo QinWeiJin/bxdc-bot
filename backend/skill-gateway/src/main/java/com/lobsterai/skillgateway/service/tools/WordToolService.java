@@ -175,8 +175,9 @@ public class WordToolService {
 
         try {
             byte[] bytes = buildDocxBytes(title, content);
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+            // 覆盖原文件：保留 userFile.fileName（storageName）不变，避免产生孤儿文件
+            String originalStorageName = userFile.getFileName();
+            String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
             // 同步更新 UserFile 元数据
             userFile.setFtpPath(fullPath);
             userFile.setFileSize((long) bytes.length);
@@ -185,7 +186,8 @@ public class WordToolService {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Word document written");
             result.put("fileName", userFile.getOriginalFileName());
-            result.put("storageName", newStorageName);
+            result.put("storageName", originalStorageName);
+            result.put("writtenBack", true);
             result.put("size", bytes.length);
             result.put("paragraphs", content.split("\n", -1).length);
             result.put("downloadUrl", userFile.getDownloadUrl());
@@ -340,13 +342,14 @@ public class WordToolService {
      */
     public FileToolResponse wordReplaceText(UserFile userFile, Map<String, Object> params, String userId) {
         ensureWordFile(userFile);
-        String find = readStringParam(params, "find", null);
-        String replace = readStringParam(params, "replace", null);
+        // 字段名与 skills.schema_properties 一致（oldText/newText），让 LLM 传过来的字段直接命中
+        String find = readStringParam(params, "oldText", null);
+        String replace = readStringParam(params, "newText", null);
         if (find == null || find.isEmpty()) {
-            return FileToolResponse.error("params.find is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.oldText is required", userFile.getOriginalFileName());
         }
         if (replace == null) {
-            return FileToolResponse.error("params.replace is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.newText is required", userFile.getOriginalFileName());
         }
         boolean replaceAll = readBoolParam(params, "replaceAll", true);
         boolean caseSensitive = readBoolParam(params, "caseSensitive", false);

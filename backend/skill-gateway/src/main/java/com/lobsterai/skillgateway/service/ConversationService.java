@@ -20,7 +20,7 @@ import java.util.*;
 public class ConversationService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationService.class);
-    private static final Set<String> VALID_ROLES = Set.of("user", "assistant", "tool", "system");
+    private static final Set<String> VALID_ROLES = new java.util.HashSet<String>(java.util.Arrays.asList("user", "assistant", "tool", "system"));
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 100;
 
@@ -135,7 +135,10 @@ public class ConversationService {
         Conversation conv = getById(conversationId, userId);
 
         if (messages == null || messages.isEmpty()) {
-            return Map.of("ok", true, "count", 0);
+            java.util.Map<String, Object> emptyResult = new java.util.LinkedHashMap<String, Object>();
+            emptyResult.put("ok", true);
+            emptyResult.put("count", 0);
+            return emptyResult;
         }
 
         int count = 0;
@@ -162,7 +165,10 @@ public class ConversationService {
         conv.setUpdatedAt(LocalDateTime.now());
         conversationMapper.updateById(conv);
 
-        return Map.of("ok", true, "count", count);
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<String, Object>();
+        result.put("ok", true);
+        result.put("count", count);
+        return result;
     }
 
     // ---- Helper methods ----

@@ -35,7 +35,9 @@ public class ConversationController {
         for (Conversation conv : conversations) {
             result.add(toConversationDto(conv));
         }
-        return ResponseEntity.ok(Map.of("conversations", result));
+        java.util.Map<String, Object> convBody = new java.util.LinkedHashMap<String, Object>();
+        convBody.put("conversations", result);
+        return ResponseEntity.ok(convBody);
     }
 
     @PostMapping
@@ -48,7 +50,7 @@ public class ConversationController {
                 ? ((List<?>) body.get("enabled_skills")).stream()
                     .filter(item -> item instanceof Number)
                     .map(item -> ((Number) item).longValue())
-                    .toList()
+                    .collect(java.util.stream.Collectors.toList())
                 : Collections.emptyList();
 
         Conversation conv = conversationService.create(userId, name, enabledSkills);
@@ -83,7 +85,7 @@ public class ConversationController {
                     ? ((List<?>) body.get("enabled_skills")).stream()
                         .filter(item -> item instanceof Number)
                         .map(item -> ((Number) item).longValue())
-                        .toList()
+                        .collect(java.util.stream.Collectors.toList())
                     : Collections.emptyList())
                 : null;
 
@@ -96,7 +98,9 @@ public class ConversationController {
             @RequestHeader("X-User-Id") String userId,
             @PathVariable("id") String conversationId) {
         conversationService.delete(conversationId, userId);
-        return ResponseEntity.ok(Map.of("ok", true));
+        java.util.Map<String, Object> okBody = new java.util.LinkedHashMap<String, Object>();
+        okBody.put("ok", true);
+        return ResponseEntity.ok(okBody);
     }
 
     // ---- Messages ----

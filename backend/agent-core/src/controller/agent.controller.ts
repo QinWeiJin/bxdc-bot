@@ -673,7 +673,7 @@ export class AgentController {
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
 
-          const graphConfig = { configurable: { thread_id: sessionId } };
+          const graphConfig = { configurable: { thread_id: sessionId }, recursionLimit: 50 };
           let stream: AsyncIterable<any> = await agent.stream({ messages }, graphConfig);
           let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
 
@@ -781,7 +781,7 @@ export class AgentController {
 
                 const resumeStream = await agent.stream(
                   new Command({ resume: { confirmed: true, adjustedParams: confirmedResult.adjustedParams } }),
-                  graphConfig,
+                  { ...graphConfig, recursionLimit: 50 },
                 );
                 iterator = resumeStream[Symbol.asyncIterator]();
                 continue outer;

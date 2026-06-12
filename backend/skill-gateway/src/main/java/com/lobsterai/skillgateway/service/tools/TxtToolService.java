@@ -206,8 +206,9 @@ public class TxtToolService {
             } else {
                 bytes = content.getBytes(Charset.forName(encoding));
             }
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
+            // 覆盖原文件：保留 userFile.fileName（storageName）不变，避免产生孤儿文件
+            String originalStorageName = userFile.getFileName();
+            String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
             userFile.setFtpPath(fullPath);
             userFile.setFileSize((long) bytes.length);
             userFile.setFileType(extractExtension(userFile.getOriginalFileName()));
@@ -215,7 +216,8 @@ public class TxtToolService {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", append ? "Text appended" : "Text written");
             result.put("fileName", userFile.getOriginalFileName());
-            result.put("storageName", newStorageName);
+            result.put("storageName", originalStorageName);
+            result.put("writtenBack", true);
             result.put("encoding", encoding);
             result.put("size", bytes.length);
             result.put("lineCount", content.split("\n", -1).length);

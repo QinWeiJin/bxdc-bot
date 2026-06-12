@@ -62,16 +62,11 @@ public class FileToolSeeder implements ApplicationRunner {
                 fileRefSchema());
 
         // ===== Word 操作（5.3）=====
-        seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）",
-                wordWriteSchema());
-        seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
-        seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
-                keywordSearchSchema());
-        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）",
-                replaceTextSchema());
-        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符",
-                templateFillSchema());
+        // 回退方案 B：恢复 6 个细粒度 word_* 工具，删除 word_ops 整合行。
+        // 启动时：1) 删除 skills 表里的 word_ops 行（如果存在）；
+        //         2) 把 6 个老 word_* 重新 enable（之前 disable 了）；
+        //         3) 重新 seed 6 个 word_*（缺哪个补哪个）。
+        rollbackWordOpsIntegration();
 
         // ===== TXT/MD 操作（5.4）=====
         seedFileOperate("txt_read", "读取 TXT/MD 文本文件（支持指定编码、行范围）", txtReadSchema());
@@ -84,6 +79,172 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("txt_distinct_lines", "去重行（保留首次出现顺序，可选写回）", txtDistinctLinesSchema());
         seedFileOperate("txt_sort_lines", "排序行（字典序或数字序，升序/降序，可选写回）", txtSortLinesSchema());
         seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
+    }
+
+    // ========== 整合方案 B：word_ops 单一入口 ==========
+
+    /** 旧的 6 个 word_* 工具，启动时 disable，避免 LLM 看到重复功能 */
+    private static final java.util.Set<String> LEGACY_WORD_TOOLS;
+    static {
+        // JDK 1.8 兼容：不能使用 Set.of（Java 9+），用 HashSet + Collections.addAll
+        java.util.Set<String> s = new java.util.HashSet<String>();
+        java.util.Collections.addAll(s,
+                "word_read", "word_write", "word_extract_content",
+                "word_search_keyword", "word_replace_text", "word_template_fill");
+        LEGACY_WORD_TOOLS = java.util.Collections.unmodifiableSet(s);
+    }
+
+    /** word_ops 工具的 description（agent-core 透给 LLM） */
+    private static final String WORD_OPS_DESCRIPTION =
+            "Word 文档操作一体化工具（合并 word_read/word_write/word_extract_content/" +
+            "word_search_keyword/word_replace_text/word_template_fill 六个细粒度功能）。\n" +
+            "调用时必须先用 action 指定具体子操作：\n" +
+            "  • action=read              读取 Word 文档全文（段落 + 全文文本）\n" +
+            "  • action=write             创建一个新的 Word 文档（需 title + content）\n" +
+            "  • action=extract_content   提取结构化内容（标题大纲 / 表格 / 图片）\n" +
+            "  • action=search_keyword    搜索关键字（带上下文匹配结果）\n" +
+            "  • action=replace_text      替换文档中的文本（支持全部/首个），需 oldText + newText\n" +
+            "  • action=template_fill     用 values 填充 {{placeholder}} 占位符\n" +
+            "支持的 fileRef 形式：文件名（如 'report.docx'）或文件 ID（数字）。\n" +
+            "写操作（write/replace_text/template_fill）会自动 in-place 覆盖原文件，fileId 不变。\n" +
+            "**严禁**使用 'replace' / 'template' / 'fill' / 'search' / 'extract' 等简写 — 必须是上表的完整字符串。";
+
+    /**
+     * 把一组老的细粒度 skill 行禁用（enabled=0）。
+     * <p>
+     * 为什么 disable 而不是删除：用户可能手工编辑过那些行（description/schema），
+     * 直接 delete 会丢用户数据；disable 让 LLM 看不到，DB 行保留以便回滚/审计。
+     * </p>
+     */
+    private void disableLegacyFileToolSkills(java.util.Set<String> legacyToolNames) {
+        for (String name : legacyToolNames) {
+            Skill existing = skillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                            .eq(Skill::getName, name));
+            if (existing == null) {
+                continue;  // 首次启动还没建过
+            }
+            // Skill.enabled 是 primitive boolean，手写 getter 是 isEnabled() 而非 getEnabled()
+            if (!existing.isEnabled()) {
+                continue;  // 已经是 disabled 状态
+            }
+            existing.setEnabled(false);
+            skillMapper.updateById(existing);
+            log.info("Disabled legacy file tool skill: {} (id={})", name, existing.getId());
+        }
+    }
+
+    /**
+     * 回退 word_ops 整合：删除 word_ops 行 + 恢复 6 个细粒度 word_* 工具。
+     * <p>
+     * 启动时自动执行，可重入。流程：
+     * </p>
+     * <ol>
+     *   <li>删除 skills 表里的 word_ops 行（如果存在）</li>
+     *   <li>6 个老 word_* 工具（如果 skills 表里行存在但 enabled=false）→ 重新 enable</li>
+     *   <li>调用 {@link #seedFileOperate} 重新 seed 6 个老 word_*（缺哪个补哪个）</li>
+     *   <li>对应的 system_skills 行通过 seedSystem 自动 re-seed</li>
+     * </ol>
+     */
+    private void rollbackWordOpsIntegration() {
+        // 1. 删除 word_ops 行
+        Skill wordOps = skillMapper.selectOne(
+                new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                        .eq(Skill::getName, "word_ops"));
+        if (wordOps != null) {
+            skillMapper.deleteById(wordOps.getId());
+            log.info("Deleted integrated word_ops skill (id={})", wordOps.getId());
+        }
+
+        // 2. 6 个老 word_* 重新 enable
+        for (String name : LEGACY_WORD_TOOLS) {
+            Skill existing = skillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                            .eq(Skill::getName, name));
+            if (existing != null && !existing.isEnabled()) {
+                existing.setEnabled(true);
+                skillMapper.updateById(existing);
+                log.info("Re-enabled legacy word skill: {} (id={})", name, existing.getId());
+            }
+        }
+
+        // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
+        seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
+        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）",
+                wordWriteSchema());
+        seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
+        seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
+                keywordSearchSchema());
+        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）",
+                replaceTextSchema());
+        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符",
+                templateFillSchema());
+    }
+
+    /**
+     * 种子 family 整合型 skill：单一对外 name，内部走 family+action 路由。
+     * <p>
+     * 与 {@link #seedSkill} 的区别：configuration 是 {@code {kind: "file_tool", family: "word"}}
+     * 而不是 {@code {kind: "file_tool", toolName: "word_read"}}。
+     * </p>
+     * <p>
+     * 下游由 {@code SkillExecutionService.executeFileToolSkill} 读 configuration.family
+     * 与 parameters.action 拼成内部 toolName（{@code <family>_<action>）委托给现有
+     * {@code FileToolService} 调度。
+     * </p>
+     */
+    private void seedFamily(String familyName, String description,
+                            Map<String, Map<String, Object>> schema) {
+        try {
+            String schemaJson = objectMapper.writeValueAsString(schema);
+
+            Skill existing = skillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                            .eq(Skill::getName, familyName));
+            if (existing != null) {
+                String prev = existing.getSchemaPropertiesJson();
+                if (prev == null || !prev.equals(schemaJson)) {
+                    existing.setSchemaPropertiesJson(schemaJson);
+                    existing.setDescription(description);
+                    skillMapper.updateById(existing);
+                    log.info("Updated family skill schema: {} (id={})", familyName, existing.getId());
+                } else {
+                    log.debug("Family skill already exists with same schema: {}", familyName);
+                }
+                return;
+            }
+
+            // configuration 关键变化：family（不是 toolName）
+            // 决定 SkillExecutionService 走 family+action 路由
+            Map<String, Object> config = new LinkedHashMap<>();
+            config.put("kind", "file_tool");
+            config.put("family", deriveFamily(familyName));  // "word_ops" -> "word"
+            String configJson = objectMapper.writeValueAsString(config);
+
+            Skill skill = new Skill();
+            skill.setName(familyName);
+            skill.setDescription(description);
+            skill.setType(SKILL_TYPE);
+            skill.setConfiguration(configJson);
+            skill.setExecutionMode("CONFIG");
+            skill.setEnabled(true);
+            skill.setRequiresConfirmation(false);
+            skill.setVisibility(SkillVisibility.PUBLIC);
+            skill.setCreatedBy(CREATED_BY);
+            skill.setSchemaPropertiesJson(schemaJson);
+
+            skillMapper.insert(skill);
+            log.info("Seeded family skill: {} (id={}, family={})",
+                    familyName, skill.getId(), deriveFamily(familyName));
+        } catch (Exception e) {
+            log.error("Failed to seed family skill '{}': {}", familyName, e.getMessage());
+        }
+    }
+
+    /** "word_ops" -> "word"，"txt_ops" -> "txt"，"file_ops" -> "file" */
+    private static String deriveFamily(String familySkillName) {
+        int idx = familySkillName.indexOf("_ops");
+        return idx > 0 ? familySkillName.substring(0, idx) : familySkillName;
     }
 
     // ========== 种子方法 ==========
@@ -131,12 +292,23 @@ public class FileToolSeeder implements ApplicationRunner {
     private void seedSkill(String toolName, String description,
                            Map<String, Map<String, Object>> schema) {
         try {
-            // 检查是否已存在同名 skill
+            // 构建 schema_properties JSON（每次启动都用最新版）
+            String schemaJson = objectMapper.writeValueAsString(schema);
+
+            // 检查是否已存在同名 skill — 已存在则更新 schema（description 和 schema 跟随代码升级）
             Skill existing = skillMapper.selectOne(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
                             .eq(Skill::getName, toolName));
             if (existing != null) {
-                log.debug("Skill already exists: {}", toolName);
+                String prev = existing.getSchemaPropertiesJson();
+                if (prev == null || !prev.equals(schemaJson)) {
+                    existing.setSchemaPropertiesJson(schemaJson);
+                    existing.setDescription(description);
+                    skillMapper.updateById(existing);
+                    log.info("Updated existing skill schema: {} (id={})", toolName, existing.getId());
+                } else {
+                    log.debug("Skill already exists with same schema: {}", toolName);
+                }
                 return;
             }
 
@@ -145,9 +317,6 @@ public class FileToolSeeder implements ApplicationRunner {
             config.put("kind", "file_tool");
             config.put("toolName", toolName);
             String configJson = objectMapper.writeValueAsString(config);
-
-            // 构建 schema_properties JSON
-            String schemaJson = objectMapper.writeValueAsString(schema);
 
             Skill skill = new Skill();
             skill.setName(toolName);
@@ -229,11 +398,12 @@ public class FileToolSeeder implements ApplicationRunner {
     private static Map<String, Map<String, Object>> replaceTextSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
         s.put("fileRef", stringProp("文件名或文件 ID", true));
-        s.put("oldText", stringProp("要替换的原文本", true));
-        s.put("newText", stringProp("替换后的新文本", true));
+        // 描述中显式包含字段名，避免 LLM 只看语义忽略 key 时漏传
+        s.put("oldText", stringProp("oldText：要替换的原文本（必填）", true));
+        s.put("newText", stringProp("newText：替换后的新文本（必填）", true));
         Map<String, Object> replaceAll = new LinkedHashMap<>();
         replaceAll.put("type", "boolean");
-        replaceAll.put("description", "是否全部替换（默认仅替换第一个）");
+        replaceAll.put("description", "replaceAll：是否全部替换（默认仅替换第一个）");
         s.put("replaceAll", replaceAll);
         return s;
     }
@@ -301,6 +471,65 @@ public class FileToolSeeder implements ApplicationRunner {
         nested.put("type", "boolean");
         nested.put("description", "是否包含子标题");
         s.put("nested", nested);
+        return s;
+    }
+
+    // ========== 整合方案 B：word_ops 单一 schema ==========
+
+    /**
+     * word_ops 工具的参数 schema。
+     * <p>
+     * 设计要点：
+     * </p>
+     * <ol>
+     *   <li>action 是 string enum —— 严格拼写 6 个允许值（read/write/extract_content/...）</li>
+     *   <li>所有其它参数标记 optional —— 不同 action 用到的参数子集不同，
+     *       gateway 端 executeFileToolSkill 按 action 路由到对应 handler，handler 自己校验必填</li>
+     *   <li>description 写明"哪个 action 需要哪个参数"，LLM 一次看到全图</li>
+     * </ol>
+     * <p>
+     * 为什么不使用 discriminated union / oneOf：
+     * AGENTS.md 5.4 禁止高版本 JS 语法；TypeScript 端用普通 object + zod describe 也行得通。
+     * </p>
+     */
+    private static Map<String, Map<String, Object>> wordOpsSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("type", "string");
+        action.put("description",
+                "**必填**。Word 子操作类型，必须是下列之一：\n" +
+                "  • read              读取文档全文\n" +
+                "  • write             创建一个新文档（需 title + content）\n" +
+                "  • extract_content   提取结构化内容（标题/表格/图片）\n" +
+                "  • search_keyword    搜索关键字（需 keyword）\n" +
+                "  • replace_text      替换文本（需 oldText + newText，可选 replaceAll）\n" +
+                "  • template_fill     填充 {{占位符}}（需 values JSON 字符串）\n" +
+                "**严禁**简写 — 必须严格使用以上 6 个完整字符串。");
+        s.put("action", action);
+
+        s.put("fileRef", stringProp("文件名或文件 ID。除 action=write 外都必填。", false));
+        s.put("title", stringProp("[action=write] 文档标题", false));
+        s.put("content", stringProp("[action=write] 文档正文（多行字符串）", false));
+        s.put("keyword", stringProp("[action=search_keyword] 要搜索的关键字", false));
+        s.put("contextChars",
+                intProp("[action=search_keyword] 匹配关键字前后各取多少字符作为上下文，默认 50", false));
+        s.put("oldText", stringProp("[action=replace_text] 要替换的原文本（**严格 spelling**）", false));
+        s.put("newText", stringProp("[action=replace_text] 替换后的新文本", false));
+
+        Map<String, Object> replaceAll = new LinkedHashMap<>();
+        replaceAll.put("type", "boolean");
+        replaceAll.put("description", "[action=replace_text] 是否替换所有匹配项，默认 true（全部替换）");
+        s.put("replaceAll", replaceAll);
+
+        s.put("values", stringProp(
+                "[action=template_fill] JSON 字符串，key=占位符名（如 {\"name\":\"张三\",\"date\":\"2026-06-11\"}）", false));
+
+        Map<String, Object> confirmed = new LinkedHashMap<>();
+        confirmed.put("type", "boolean");
+        confirmed.put("description", "二次确认标志，写操作类 action 无需手动设置（gateway 自动注入）");
+        s.put("confirmed", confirmed);
+
         return s;
     }
 
