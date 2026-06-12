@@ -20,7 +20,7 @@ import MemoryInitModal from './MemoryInitModal.vue';
 const visible = defineModel<boolean>('visible', { default: false });
 
 const { currentUser, updateProfile } = useUser();
-const { getMemoryStatus, deleteUserMemory, addUserMemory } = useMemory();
+const { deleteUserMemory, addUserMemory } = useMemory();
 
 const nickname = ref('');
 const avatar = ref('👤');
@@ -28,8 +28,6 @@ const saving = ref(false);
 const error = ref('');
 
 // —— 记忆管理子区块状态 ——
-/** MEM0_ENABLED 后端开关（true 才显示入口；false 完全不渲染） */
-const memoryEnabled = ref(false);
 /** 「清除记忆」危险确认弹窗 */
 const showDangerConfirm = ref(false);
 /** 危险确认中正在调 delete 接口 */
@@ -47,10 +45,8 @@ watch(visible, async (v) => {
     avatar.value = currentUser.value.avatar || '👤';
     error.value = '';
     activeUserId.value = currentUser.value.id;
-    await loadMemoryStatus();
   } else if (!v) {
     // 关闭时重置，避免下次打开有残留
-    memoryEnabled.value = false;
     showDangerConfirm.value = false;
     showInitModal.value = false;
     clearingMemory.value = false;
@@ -61,24 +57,12 @@ watch(visible, async (v) => {
 onMounted(() => {
   if (visible.value && currentUser.value) {
     activeUserId.value = currentUser.value.id;
-    loadMemoryStatus();
   }
 });
 
-async function loadMemoryStatus() {
-  const uid = activeUserId.value;
-  if (!uid) {
-    memoryEnabled.value = false;
-    return;
-  }
-  try {
-    const status = await getMemoryStatus(uid);
-    memoryEnabled.value = Boolean(status?.enabled);
-  } catch (e: any) {
-    // 失败时按 spec 锁定：不渲染入口（enabled 视作 false）
-    console.warn('[ProfileEditModal] getMemoryStatus failed:', e?.message);
-    memoryEnabled.value = false;
-  }
+async function handleClearClick() {
+  if (!activeUserId.value) return;
+  showDangerConfirm.value = true;
 }
 
 async function handleSave() {
@@ -100,12 +84,6 @@ async function handleSave() {
 }
 
 // —— 记忆管理子流程 ——
-
-function handleClearClick() {
-  // 不在记忆关闭或没 user 时显示入口，但兜底再校验一次
-  if (!memoryEnabled.value || !activeUserId.value) return;
-  showDangerConfirm.value = true;
-}
 
 function handleDangerCancel() {
   // 取消 / X / Esc / 遮罩都走这里（前提是没在 loading）
@@ -207,7 +185,7 @@ function handleInitLater() {
       </div>
 
       <!-- 记忆管理子区块（spec memory-initialization-flow / user-profile ADDED Requirements） -->
-      <div v-if="memoryEnabled" class="memory-section">
+      <div class="memory-section">
         <div class="memory-section-divider" />
         <t-link
           theme="danger"
