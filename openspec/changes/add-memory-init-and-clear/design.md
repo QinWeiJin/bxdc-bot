@@ -1,10 +1,10 @@
 ## Context
 
-`mem0` 服务（[mem0-integration spec](file:///d:/bothome/bxdc-bot/openspec/specs/mem0-integration/spec.md)）目前提供 `/msearch` 和 `/madd` 两个端点，由 `agent-core` 的 [MemoryService](file:///d:/bothome/bxdc-bot/backend/agent-core/src/mem/memory.service.ts) 包装。前端只能间接触发（通过对话）。`MemoryController`（[memory.controller.ts](file:///d:/bothome/bxdc-bot/backend/agent-core/src/controller/memory.controller.ts)）对外暴露 `/memory/add` 供调试/批量场景手动注入，但没有**删除**和**状态查询**端点。
+`mem0` 服务（[mem0-integration spec](file:///Users/dccb/botproject/bxdc-bot/openspec/specs/mem0-integration/spec.md)）目前提供 `/msearch` 和 `/madd` 两个端点，由 `agent-core` 的 [MemoryService](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/mem/memory.service.ts) 包装。前端只能间接触发（通过对话）。`MemoryController`（[memory.controller.ts](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/controller/memory.controller.ts)）对外暴露 `/memory/add` 供调试/批量场景手动注入，但没有**删除**和**状态查询**端点。
 
-资料编辑页 [ProfileEditModal.vue](file:///d:/bothome/bxdc-bot/frontend/src/components/ProfileEditModal.vue) 当前是「昵称 + emoji 头像选择器」的组合，emoji 网格下方是空白。用户希望在此位置加一个**不显眼但可发现**的「清除记忆」入口，触发「清空 → 重新初始化」两步流程。
+资料编辑页 [ProfileEditModal.vue](file:///Users/dccb/botproject/bxdc-bot/frontend/src/components/ProfileEditModal.vue) 当前是「昵称 + emoji 头像选择器」的组合，emoji 网格下方是空白。用户希望在此位置加一个**不显眼但可发现**的「清除记忆」入口，触发「清空 → 重新初始化」两步流程。
 
-`MEM0_ENABLED`（[.env](file:///d:/bothome/bxdc-bot/backend/agent-core/.env#L20)）作为总开关已经存在（默认 `true`），本次**只读不增**新环境变量。
+`MEM0_ENABLED`（[.env](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/.env#L20)）作为总开关已经存在（默认 `true`），本次**只读不增**新环境变量。
 
 ## Goals / Non-Goals
 
@@ -27,13 +27,13 @@
 
 ### Decision 1: 新接口放在 agent-core，不放 gateway
 
-- **选择**：在 [memory.controller.ts](file:///d:/bothome/bxdc-bot/backend/agent-core/src/controller/memory.controller.ts) 增 `POST /memory/delete` 和 `GET /memory/status`，与现有 `POST /memory/add` 同一前缀。
+- **选择**：在 [memory.controller.ts](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/controller/memory.controller.ts) 增 `POST /memory/delete` 和 `GET /memory/status`，与现有 `POST /memory/add` 同一前缀。
 - **为什么**：mem0 调用本来就在 agent-core 的 `MemoryService` 里（gateway 没有 mem0 客户端），保持调用方内聚。前端统一打到 agent-core 的 `:3000` 端口（现有 `MEMORY_BASE_URL` 配置）。
 - **替代方案**：在 gateway 加 `MemoryController` 做透传 — 增加一次 HTTP 跳转 + 重复 token 校验，无收益。
 
 ### Decision 2: 入口放在 ProfileEditModal 内部、emoji 网格下方
 
-- **选择**：在 [ProfileEditModal.vue](file:///d:/bothome/bxdc-bot/frontend/src/components/ProfileEditModal.vue) 的 `.emoji-section` 之后插入一个 `<MemoryManagementSection/>` 子组件。
+- **选择**：在 [ProfileEditModal.vue](file:///Users/dccb/botproject/bxdc-bot/frontend/src/components/ProfileEditModal.vue) 的 `.emoji-section` 之后插入一个 `<MemoryManagementSection/>` 子组件。
 - **为什么**：用户明确指定「头像选择下面」。不抽到 ProfileEditModal 之外（避免在 settings 页等其他位置同时出现两个入口，导致误操作面扩大）。
 - **替代方案**：放在 SettingsView 的「数据」分类 — 离「用户身份」上下文太远，违反「资料编辑一起管」的产品逻辑。
 
@@ -49,23 +49,26 @@
 - **为什么**：用户语义就是「先清后写」。并发调会留时间窗口，旧的记忆可能在初始化写入之前被 agent 检索到。
 - **替代方案**：并发 — 失败时记忆状态不确定，不接受。
 
-### Decision 5: 删除用 mem0 `/deletemem` 端点，参数与 `/msearch` 对齐
+### Decision 5: 删除用 mem0 `/deletemem` 端点，参数与 `/madd` 对齐
 
-- **选择**：`{ userid: string, sentence?: string }`（sentence 留空表示全量清除 mem0 该 user 的所有记忆）。
-- **为什么**：用户明确要求「传入数据格式跟检索记忆一样，按用户 ID 操作」。`/msearch` 是 `{ sentence, userid, topk }`，新接口去掉 `sentence`（删除不需要语义匹配）+ `topk`，保留 `userid` 必填。
-- **替代方案**：用 `filter: { user_id: userId }` 这种 mem0 高级 filter — 需要 mem0 服务升级，不在本仓库控制范围。
+- **选择**：POST `${MEM0_URL}/deletemem`，request body `{ sentencein?: string, sentenceout?: string, userid: string }`（**userid 必填**，sentencein / sentenceout 可省略/空字符串）。
+- **成功响应**：`{ code: 200, message: '提示信息', userid: xxx, time: xxx }`
+- **失败响应**：`{ code: 400, message: '用户记忆删除失败' }`
+- **为什么**：用户明确「/deletemem 的参数结构跟 add 一样」（最初说的是 /msearch，但修正为跟 `/madd` 一致）。`/madd` 是 `{ sentencein, sentenceout, userid }`，新端点复用同样字段，sentencein / sentenceout 留空等价于"全量删除"。
+- **替代方案**：用 mem0 高级 filter `filter: { user_id: userId }` — 需要 mem0 服务升级，不在本仓库控制范围。
 
-### Decision 6: 初始化记忆合并为单条写入
+### Decision 6: 初始化记忆合并为单条写入，拼接在 frontend 完成
 
-- **选择**：把「我是谁」+ 「我的兴趣」拼接成一条 `sentencein`，调一次 `/memory/add`（→ mem0 `/madd`），`sentenceout` 用固定引导语 `"已记录用户初始化的个人信息"`。
-- **为什么**：跟现有 `addMemory()` 复用同一条路径（[memory.service.ts:198-203](file:///d:/bothome/bxdc-bot/backend/agent-core/src/mem/memory.service.ts#L198-L203)），零改造。
-- **替代方案**：拆成「我是谁」+「我的兴趣」两条独立记忆 — 业务无收益，反而增加后续检索碎片。
+- **选择**：frontend 把「我是谁」+「我的兴趣」按 `text = hobbies.trim() ? \`${who}。${hobbies}\` : who` 拼成单条文本，调 `POST /memory/add` 携带 `{ userId, text, role: 'user' }`。
+- **为什么**：用户明确「尽量不改 agent-core 代码」（AGENTS.md 5.5 规约）。拼接逻辑下放到前端，backend 直接收 `text`，零改造。`role: 'user'` 表明这是用户主动写入的初始化记忆（保留前端当前语义）。
+- **替代方案**：backend 拼接 — 违反"尽量不改 agent-core"原则。
 
-### Decision 7: 状态查询走 `GET /memory/status`
+### Decision 7: 状态查询走 `GET /memory/status`，**只**返回 enabled，**不**返回 hasMemory
 
-- **选择**：新增 `GET /memory/status?userId=xxx`，返回 `{ enabled: boolean, hasMemory: boolean }`。
-- **为什么**：让前端按 `enabled` 决定是否渲染入口（不是 disabled），按 `hasMemory` 决定按钮文案（「清除记忆」vs「重新初始化」）。`MEM0_ENABLED` 是后端配置，前端不能直接读 .env。
-- **替代方案**：build-time `VITE_MEMORY_ENABLED` 环境变量 — 每次改 .env 都要重新 `npm run build` 不可接受；与「记忆开关还在配置文件」的规约冲突。
+- **选择**：新增 `GET /memory/status?userId=xxx`，返回 `{ enabled: boolean }`（**去掉 hasMemory 字段**）。
+- **为什么**：用户明确「g1 就没有 hasmemory，默认都有」。入口渲染**只**由 `MEM0_ENABLED` 决定，不查 mem0 是否有记忆。简化 spec，省一次 mem0 调用。
+- **mem0 不可达时的处理**：`/memory/status` 内部 try/catch 包 mem0 调用（虽然只查 enabled 几乎不调 mem0，但为对称性），mem0 不可达时返回 `{ enabled: false }`，前端不渲染入口（`enabled === false`）。
+- **替代方案**：返回 `{ enabled, hasMemory }` 调 mem0 实际查 — 用户决议：不要 hasMemory，spec 简化。
 
 ### Decision 8: 错误处理分级
 
@@ -78,7 +81,7 @@
 
 ## Risks / Trade-offs
 
-- **Risk**: mem0 `/deletemem` 端点可能尚未在生产 mem0 服务部署 → Mitigation: tasks.md 第一步先联调确认，没部署就走 `madd` 之外的另一种 mem0 删除机制（例如直接 filter 删除的 mock 实现）
+- **Risk**: mem0 `/deletemem` 端点可能尚未在生产 mem0 服务部署 → Mitigation: tasks.md 第一步先联调确认；**没部署就 block 等运维部署**（**不**走其他 mem0 删除方式 — 与 Decision 5 一致：只新增 `/deletemem`，不引入 fallback 机制）
 - **Risk**: 误点「清除」导致真实用户记忆丢失（不可恢复） → Mitigation: 二次确认弹窗 + 按钮文案「确认清除，不可恢复」+ 不放主色避免误点
 - **Risk**: 删除和初始化之间被 agent 检索到「空记忆」产生幻觉回复 → Mitigation: 用户语境下是手动流程，操作期间不会触发 agent 对话（前端不做并发）；且 delete 接口语义上同步生效
 - **Risk**: 初始化内容被 mem0 拒收（敏感词 / 超长） → Mitigation: 前端 textarea 限制 500 字；后端把 mem0 错误原文回传前端
@@ -89,15 +92,17 @@
 不需要数据迁移（mem0 无 schema 改动）。上线步骤：
 
 1. 部署 mem0 服务的 `/deletemem` 端点（运维侧，仓库外）
-2. 部署 agent-core 新版本（含 `MemoryController.delete` 和 `status`）
+2. 部署 agent-core 新版本（含 `POST /memory/delete` / `GET /memory/status` 端点 + `POST /memory/add` 跨用户守卫补强）
 3. 部署 frontend 新版本（ProfileEditModal 增加入口）
 4. 灰度：先开 `MEM0_ENABLED=true` 内部账号验证「清除 → 重新初始化」全链路
 5. 全量
 
 回滚：移除 ProfileEditModal 入口即可（`MEM0_ENABLED=false` 不影响 — 因为前端走 `/memory/status` 动态判断，直接 disabled 入口）。
 
-## Open Questions
+## Resolved Decisions（原 Open Questions 已并入上方 Decisions）
 
-- mem0 `/deletemem` 的返回结构（`{ code: 200, message: ... }`）需运维确认是否与 `/madd` 同 schema
-- 「重新初始化」按钮在已存在记忆时是否要切换文案（见 Decision 7）— 当前设计为统一「清除记忆」，不区分首/末次
-- 初始化表单的「我的兴趣」字段是否要拆为多个 tag 输入 — 当前是单 textarea，便于回写 mem0 为一条 sentence
+| 原 Open Question | 决议 | 位置 |
+|---|---|---|
+| mem0 `/deletemem` 响应 schema | **与 `/madd` 对齐**：`{ code, message, userid, time }`，失败 code=400 message='用户记忆删除失败' | Decision 5 |
+| 「重新初始化」按钮是否分首/末次 | **不分**，统一「清除记忆」（hasMemory 概念移除）| Decision 7 |
+| 「我的兴趣」是否拆 tag | **不拆**，单 textarea，前端按 `text = who + (hobbies ? '。' + hobbies : '')` 拼接 | Decision 6 |

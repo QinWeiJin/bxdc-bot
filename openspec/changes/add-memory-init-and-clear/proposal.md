@@ -5,7 +5,7 @@
 - 用户的兴趣/职业变化（毕业、换岗、搬家），旧记忆成为噪声
 - LLM 误把对话上下文沉淀成了「事实」，需要一键清空
 
-当前 `user-profile` 流程（[user-profile spec](file:///d:/bothome/bxdc-bot/openspec/specs/user-profile/spec.md)）只能改昵称和头像，但头像下面是空白的——正是放「记忆管理」控件的合适位置。
+当前 `user-profile` 流程（[user-profile spec](file:///Users/dccb/botproject/bxdc-bot/openspec/specs/user-profile/spec.md)）只能改昵称和头像，但头像下面是空白的——正是放「记忆管理」控件的合适位置。
 
 本次改动提供一个**两步流程**（先清空 → 再初始化）放在资料编辑页头像选择区下面，记忆开关关闭时整个功能隐藏。
 
@@ -30,15 +30,18 @@
 
 ### Modified Capabilities
 
-- `mem0-integration`: 增加 `/deletemem` 接口的 requirement 段（参数格式与 `/msearch` 对齐：`userid` 必填，校验与现有检索/存储保持一致）。这是 spec-level 行为变更（多了接口），不是单纯实现细节。
+- `mem0-integration`: 增加 `/deletemem` 接口的 requirement 段（**参数格式与 `/madd` 完全对齐**：`{ sentencein?, sentenceout?, userid }`，userid 必填；其他两个 sentence 字段可省略/为空）。这是 spec-level 行为变更（多了接口），不是单纯实现细节。
 - `user-profile`: 增加「资料编辑页提供记忆清空与重新初始化入口」requirement，明确受 `MEM0_ENABLED` 配置开关控制；明确入口放在头像选择器下方，且视觉上足够低调以避免误操作。
 
 ## Impact
 
 - 前端 `frontend/src/views/Profile/` / `frontend/src/components/Profile/` — 新增入口按钮、危险确认弹窗、初始化表单弹窗；受 `MEM0_ENABLED` 配置门控
-- 前端 store / api 客户端 — 新增 `deleteUserMemory` 调用，对应后端网关新接口
-- 后端网关 `backend/skill-gateway/` — 新增代理 `/deletemem` 的 controller（与 `/msearch` `/madd` 同样模式：path prefix + token 校验 + 透传 `userid`）
-- `agent-core` — 不直接修改（AGENTS.md 5.5 规约：记忆操作走 Tool 接入 / 网关转发；agent-core 已有 mem0 client，新增删除方法在网关侧）
+- 前端 store / api 客户端 — 新增 `deleteUserMemory` / `addUserMemory` / `getMemoryStatus` 调用，对应后端 `agent-core` 新接口
+- `agent-core`（**主要改动**）：
+  - `MemoryService` 新增 `deleteAllMemories(userId)` / `getMemoryStatus(userId)` 两个方法
+  - `MemoryController` 新增 `POST /memory/delete` / `GET /memory/status` 两个端点
+  - **顺手修复**：`POST /memory/add` 加跨用户 userId 守卫（之前没守卫，是已知安全 bug）
+- `backend/skill-gateway/` — **不**修改（按 AGENTS.md 5.5 规约：记忆操作走 agent-core，不走 gateway 透传）
 - 配置文件 `agent-core/.env` — 已存在 `MEM0_ENABLED` 开关，本次只读不增（AGENTS.md 5.2 规约：尽量不增环境变量）
 - 受影响能力：`mem0-integration`（加 endpoint）、`user-profile`（加 UI 入口 requirement）
-- 依赖：纯前端 + 网关透传，无新增第三方包（AGENTS.md 5.1 规约）
+- 依赖：纯前端 + agent-core，无新增第三方包（AGENTS.md 5.1 规约）

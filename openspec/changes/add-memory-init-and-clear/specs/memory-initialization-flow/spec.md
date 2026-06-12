@@ -91,10 +91,17 @@ mem0 删除接口返回成功（HTTP 200 且 `code === 200`）后，系统 MUST 
 
 「清除记忆」入口的可见性 MUST 由后端配置文件 `agent-core/.env` 的 `MEM0_ENABLED` 控制，**不**允许前端通过构建时环境变量、localStorage 或其它方式绕过此开关。
 
+入口渲染**只**由 `MEM0_ENABLED` 决定，**不**查询 mem0 服务是否有记忆（即没有 `hasMemory` 概念，默认都认为有记忆、入口始终按 enabled 渲染）。
+
 #### Scenario: 后端通过 status 接口暴露开关
 - **WHEN** 前端调用 `GET /memory/status?userId=<currentUserId>`
-- **THEN** 后端 MUST 读取 `process.env.MEM0_ENABLED` 并返回 `{ enabled: <boolean>, hasMemory: <boolean> }`
+- **THEN** 后端 MUST 读取 `process.env.MEM0_ENABLED` 并返回 `{ enabled: <boolean> }`（**只**有 enabled，**没有** hasMemory 字段）
 - **AND** `enabled` MUST 与 `MEM0_ENABLED` 同步；`MEM0_ENABLED` 为 false/0/off/no/disabled 时 `enabled` MUST 为 false
+
+#### Scenario: mem0 不可达时入口不显示
+- **WHEN** `/memory/status` 内部判断 mem0 服务不可达（任何异常）
+- **THEN** 后端 MUST 返回 `{ enabled: false }`（不抛错）
+- **AND** 前端 MUST 不渲染「清除记忆」入口
 
 #### Scenario: 前端按 status 渲染入口
 - **WHEN** 前端打开资料编辑弹窗
@@ -106,6 +113,8 @@ mem0 删除接口返回成功（HTTP 200 且 `code === 200`）后，系统 MUST 
 
 `POST /memory/delete` 与 `POST /memory/add` MUST 仅作用于**当前已登录用户的 `userid`**，不允许通过请求体 / 查询参数指定其他用户；后端 MUST 校验请求中的 `userId` 与当前 session 的用户一致。
 
+**注**：现有 `POST /memory/add` 端点**没有**这个守卫，是已知安全 bug。本次 change 顺手修复（与 delete 端点同时加固），在 spec 里一并锁定。
+
 #### Scenario: 不允许跨用户删除
 - **WHEN** 请求体中 `userId` 与当前 session 用户不一致
 - **THEN** 后端 MUST 返回 403 或 400
@@ -115,3 +124,9 @@ mem0 删除接口返回成功（HTTP 200 且 `code === 200`）后，系统 MUST 
 - **WHEN** 请求体中 `userId` 与当前 session 用户不一致
 - **THEN** 后端 MUST 返回 403 或 400
 - **AND** MUST NOT 调用 mem0 `/madd`
+
+#### Scenario: 现有 add 端点守卫补强
+- **WHEN** 本次 change 部署
+- **THEN** `POST /memory/add` MUST 加上与 `POST /memory/delete` 同样的 userId 守卫
+- **AND** 守卫失败 MUST 返回 403
+- **AND** MUST 不影响前端已有调用（前端当前传的是当前用户 userId，守卫通过）
