@@ -17,7 +17,20 @@ export interface ConversationMessage {
   content: string
   skill_calls: string | null // JSON string
   skill_outputs: string | null // JSON string
-  source?: 'web' | 'api'
+  /**
+   * 消息来源。async-task-result-echo-to-chat change:
+   * - 'web' / 'api' 老值
+   * - 'ASYNC_TASK_RESULT' 新增：异步任务完成后回灌到对话的消息
+   */
+  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT'
+  /** 异步任务结果消息关联的 async_tasks.id（NULL=普通消息） */
+  async_task_id?: string | null
+  /** LLM 续答是否尚未生成（1=pending，0=done） */
+  summary_pending?: number | null
+  /** LLM 续答生成的自然语言总结 */
+  summary_text?: string | null
+  /** LLM 续答完成时间（ISO 字符串） */
+  summary_generated_at?: string | null
   created_at: string
 }
 

@@ -7,6 +7,7 @@ import { useSkillHub } from '../composables/useSkillHub'
 import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
 import ThinkingMode from './ThinkingMode.vue'
+import AsyncTaskResultMessage from './AsyncTaskResultMessage.vue'
 import { ChevronUpIcon, ChevronDownIcon, DownloadIcon, RefreshIcon, CopyIcon, ThumbUpIcon, ThumbDownIcon, Share1Icon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
 import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
@@ -495,6 +496,12 @@ const chatItems = computed(() =>
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
     avatarEmoji: message.role === 'assistant' ? '🤖' : (currentUser.value?.avatar || '👤'),
+    // async-task-result-echo-to-chat: 透传异步任务结果专用字段
+    source: message.source,
+    asyncTaskId: message.asyncTaskId,
+    summaryPending: message.summaryPending,
+    summaryText: message.summaryText,
+    summaryGeneratedAt: message.summaryGeneratedAt,
   } as any)),
 )
 
@@ -592,7 +599,17 @@ async function copyContent(text: string) {
           />
 
           <div class="content-wrapper">
+            <!-- async-task-result-echo-to-chat: 异步任务结果消息走专用 UI（独立于普通 markdown 气泡） -->
+            <AsyncTaskResultMessage
+              v-if="item.role === 'assistant' && item.source === 'ASYNC_TASK_RESULT'"
+              :status="(item.rawContent || '').match(/状态：([A-Z_]+)/)?.[1] || 'FAILED'"
+              :content="item.rawContent || ''"
+              :async-task-id="item.asyncTaskId"
+              :summary-pending="item.summaryPending"
+              :summary-text="item.summaryText"
+            />
             <TChatContent
+              v-else
               :role="item.role"
               :content="
                 item.role === 'assistant'
@@ -601,7 +618,7 @@ async function copyContent(text: string) {
               "
             />
             <span
-              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent"
+              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent && item.source !== 'ASYNC_TASK_RESULT'"
               class="typewriter-cursor"
             />
           </div>

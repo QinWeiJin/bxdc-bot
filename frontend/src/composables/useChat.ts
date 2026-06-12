@@ -82,6 +82,19 @@ export interface Message {
   logTimeline?: LogTimelineEntry[]
   /** Pending skill confirmation cards attached to this message */
   confirmations?: ConfirmationRequest[]
+  /**
+   * 消息来源（async-task-result-echo-to-chat change）。
+   * 未设置或 'web'/'api' 走普通渲染；'ASYNC_TASK_RESULT' 走专用 UI。
+   */
+  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT'
+  /** 异步任务结果消息：关联的 async_tasks.id */
+  asyncTaskId?: string | null
+  /** 异步任务结果消息：LLM 续答是否尚未生成（1=pending，0=done） */
+  summaryPending?: number | null
+  /** 异步任务结果消息：LLM 续答总结（Markdown 文本） */
+  summaryText?: string | null
+  /** 异步任务结果消息：LLM 续答完成时间（毫秒时间戳） */
+  summaryGeneratedAt?: number | null
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {

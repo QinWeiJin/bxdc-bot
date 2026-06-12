@@ -1,10 +1,14 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Conversation;
+import com.lobsterai.skillgateway.event.ConversationEventBus;
 import com.lobsterai.skillgateway.service.ConversationService;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
 
@@ -20,9 +24,12 @@ import java.util.*;
 public class ConversationController {
 
     private final ConversationService conversationService;
+    private final ConversationEventBus eventBus;
 
-    public ConversationController(ConversationService conversationService) {
+    public ConversationController(ConversationService conversationService,
+                                  ConversationEventBus eventBus) {
         this.conversationService = conversationService;
+        this.eventBus = eventBus;
     }
 
     // ---- Conversation CRUD ----
@@ -97,6 +104,35 @@ public class ConversationController {
             @PathVariable("id") String conversationId) {
         conversationService.delete(conversationId, userId);
         return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    // ---- SSE: 对话级别实时事件订阅 ----
+
+    /**
+     * 订阅对话实时事件。当前主要发两类：
+     * <ul>
+     *   <li>{@code message_inserted} —— 新消息写入（payload 包含完整 message DTO）</li>
+     *   <li>{@code message_updated} —— 消息字段更新（payload 包含完整 message DTO）</li>
+     * </ul>
+     * <p>
+     * open spec: async-task-result-echo-to-chat —— 让异步任务完成时新消息自动出现在聊天流。
+     * <p>
+     * 注：EventSource 浏览器 API 不支持自定义 header，所以 userId 通过 {@code X-User-Id}
+     * 请求头（fetch 客户端）或 {@code ?userId=} query 参数（EventSource）传入。query 路径下
+     * 服务端仍按 X-User-Id 同样的方式做归属校验（{@link ConversationService#getById} 会抛 404）。
+     */
+    @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamConversationEvents(
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
+            @RequestParam(value = "userId", required = false) String userIdParam,
+            @PathVariable("id") String conversationId) {
+        String userId = userIdHeader != null ? userIdHeader : userIdParam;
+        if (userId == null || userId.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing user identity");
+        }
+        // 校验对话归属（不在自己的对话上订阅会抛 404）
+        conversationService.getById(conversationId, userId);
+        return eventBus.register(conversationId);
     }
 
     // ---- Messages ----

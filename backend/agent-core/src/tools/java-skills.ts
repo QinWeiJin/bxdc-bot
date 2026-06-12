@@ -747,6 +747,13 @@ export async function loadGatewayExtendedTools(
     /** Base agent tools (including structured tools such as compute). */
     availableTools?: BindableAgentTool[];
     sessionId?: string;
+    /**
+     * 对话级别持久 ID（gateway 的 conversations.conversation_id）。
+     * 调 gateway 时 X-Session-Id 优先用这个，而不是 sessionId（sessionId 是前端给每条消息
+     * 临时生成的 timestamp+random，用作 SSE 取消/思考状态隔离；不应该作为 async_tasks.session_id
+     * 持久化——否则 AsyncTaskChatReplyService 回灌消息时 conversation_id 不匹配 conversations 表）。
+     */
+    conversationId?: string;
     /** 对话级别 Skill 过滤：有值时仅加载匹配 ID 的 Extension Skill，undefined 或 [] 时全量加载 */
     enabledSkillIds?: number[];
   },
@@ -842,9 +849,13 @@ export async function loadGatewayExtendedTools(
 
             // All CONFIG skills → unified Gateway execute endpoint
             const executeUrl = `${gatewayUrl}/api/skills/execute`;
-            const executeSessionId = options?.sessionId ?? runConfig?.configurable?.thread_id
-              ? String(options?.sessionId ?? runConfig?.configurable?.thread_id)
-              : undefined;
+            // 优先用 conversationId（gateway 的持久对话 ID），避免 sessionId（per-turn 时间戳）
+            // 被存到 async_tasks.session_id 导致 AsyncTaskChatReplyService 回灌消息时找不到 conversations 行
+            const sessionIdCandidate = options?.conversationId
+              ?? (options?.sessionId ?? runConfig?.configurable?.thread_id
+                ? String(options?.sessionId ?? runConfig?.configurable?.thread_id)
+                : undefined);
+            const executeSessionId = sessionIdCandidate;
             const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId);
             const parameters = execInput && typeof execInput === "object" && !Array.isArray(execInput)
               ? execInput

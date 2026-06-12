@@ -37,6 +37,34 @@ public class ConversationMessage {
     @TableField("source")
     private String source;
 
+    /**
+     * 关联 async_tasks.id（NULL=普通对话消息；非空=异步任务结果消息）。
+     * 加于 async-task-result-echo-to-chat change。
+     */
+    @TableField("async_task_id")
+    private String asyncTaskId;
+
+    /**
+     * LLM 续答总结是否尚未生成。1=pending（占位），0=done（已生成 summary_text）。
+     * 加于 async-task-result-echo-to-chat change。
+     */
+    @TableField("summary_pending")
+    private Integer summaryPending;
+
+    /**
+     * LLM 续答生成的自然语言总结（Markdown 文本）。
+     * 加于 async-task-result-echo-to-chat change。
+     */
+    @TableField("summary_text")
+    private String summaryText;
+
+    /**
+     * LLM 续答完成时间。
+     * 加于 async-task-result-echo-to-chat change。
+     */
+    @TableField("summary_generated_at")
+    private LocalDateTime summaryGeneratedAt;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -101,9 +129,32 @@ public class ConversationMessage {
     public String getSource() {
         return source;
     }
-
     public void setSource(String source) {
         this.source = source;
+    }
+    public String getAsyncTaskId() {
+        return asyncTaskId;
+    }
+    public void setAsyncTaskId(String asyncTaskId) {
+        this.asyncTaskId = asyncTaskId;
+    }
+    public Integer getSummaryPending() {
+        return summaryPending;
+    }
+    public void setSummaryPending(Integer summaryPending) {
+        this.summaryPending = summaryPending;
+    }
+    public String getSummaryText() {
+        return summaryText;
+    }
+    public void setSummaryText(String summaryText) {
+        this.summaryText = summaryText;
+    }
+    public LocalDateTime getSummaryGeneratedAt() {
+        return summaryGeneratedAt;
+    }
+    public void setSummaryGeneratedAt(LocalDateTime summaryGeneratedAt) {
+        this.summaryGeneratedAt = summaryGeneratedAt;
     }
 
     public LocalDateTime getCreatedAt() {

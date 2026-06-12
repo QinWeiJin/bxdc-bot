@@ -258,3 +258,84 @@ agent-core 调 gateway 内部 API 用 HTTP 异步（不 await Response），失�
 | 续答字数怎么定 | **根据问题+结果动态调整，无硬上限** | 决策 4 |
 | 大 result 怎么截断 | **截到 20000 token**（保留头尾 + "..."，这是用户的任务结果最大字符）| 决策 5 |
 | 前端要不要优化 | **要**（专用 UI + 折叠 + 骨架屏 + Markdown + 复制 + 链接）| 决策 9 |
+
+---
+
+## 实施变更说明（落地时与原 proposal / design 决策的偏差）
+
+实施过程中根据"最小化变更面 + 实测可跑"的原则，对部分设计做了简化，事后补记：
+
+### 偏差 1：架构从"agent-core → 内部 API"改成"gateway 侧轮询直调 service"（重大）
+
+**原 design 决策 1 / 6 计划**：agent-core 在 `AsyncTaskPollingScheduler.terminalState()` 末尾调 `POST /api/internal/async-task/echo-to-chat`（fire-and-forget），gateway 收请求后写消息 + 调 LLM。需要新建：
+- `AsyncTaskEchoController`（task 4.x）
+- `/api/internal/*` Spring Security + IP 白名单 + `X-Internal-Token` 校验（task 5.x）
+- agent-core `GatewayClient` + 终态处理加一行（task 6.x）
+
+**实际落地**：gateway 已经有 `AsyncTaskPollingScheduler` 定期查 `async_tasks` 表终态。直接在终态分支里调 `chatReplyService.onTaskTerminal(task)` 即可。agent-core 不再持有"任务终态 → 写对话消息"的职责。
+
+**理由**：
+1. **链路更短**：少一层 HTTP + 鉴权 + 反向代理穿透问题
+2. **跟 agent-core 现有 SSE 推送通知中心"agent-core 自有 polling → gateway 推送"的对称性**——这条新路径也用同样模式（gateway 侧 polling）
+3. **AGENTS.md 5.5 精神**：agent-core 改动越小越好，能在 gateway 内闭环就不出网
+4. **实测更稳**：避免了 fire-and-forget 内部 API 在内网不可达时的沉默失败
+
+**对原决策 1 的影响**：AGENTS.md 5.5 精神"agent-core 不持有对话持久化逻辑"被本 change 强化——agent-core 完全不参与异步任务 → 对话消息的链路，gateway 独立负责。
+
+### 偏差 2：LLM prompt 字数从"动态无硬上限"收紧到"80~180 字"
+
+**原 design 决策 4**：根据问题+结果动态调整，**无硬上限**。
+
+**实测问题**：LLM 经常写 400~600 字的"分析报告"，前端 > 500 字折叠；用户看到的是"折叠起来看不到内容"，体验差。
+
+**改为**：prompt 明确"80~180 字、3~6 句、不超过 250 字、直奔结论"。超了前端再折叠（200 字阈值，3.4em ≈ 2 行高度）。
+
+**取舍**：原意是"对长分析需求友好"，但实测 90% 的场景用户要的是短答。少数需要长答的，用户可以点"展开"或者点"下载助手总结"看 .md 文件。
+
+### 偏差 3：决策 7 推翻——加上实时 SSE 推送
+
+**原 design 决策 7**："**不**做实时推送。用户刷新对话流（前端 polling 或路由切换）时自然拉到新消息。"
+
+**实测问题**：用户期望"消息自动出现"，刷新体验差（实测反馈）。
+
+**实施变更**：新增对话级别 SSE 推送，agent 写对话消息/更新总结时，gateway 通过 `ConversationEventBus` 推到所有订阅该 conv 的 EventSource，前端 `ChatView` 在 EventSource 收到事件时直接 push 到 messages 数组。
+
+**新组件**：
+- `ConversationEventBus` Spring 组件（按 conversationId 聚合 SseEmitter）
+- `ConversationController` 新增 `GET /api/conversations/{id}/events` SSE 端点
+- `ChatMessageService.insertAsyncTaskResult` / `updateLlmSummary` 写库成功后 publish 事件
+- `ChatView.vue` EventSource 订阅，watch `currentConvId` 切对话时重连
+- 事件 payload 与 `ConversationService.getMessages` 的 message DTO 同型，前端无需 adapter
+
+### 偏差 4：发现 + 修复了一个跨栈 bug（task 12.9）
+
+实施时发现 agent-core 把 `context.sessionId`（前端给每条消息临时生成的 timestamp+random）当 `X-Session-Id` 转发给 gateway，导致 `async_tasks.session_id` 是 timestamp 而非 UUID，进而 `chat_messages.conversation_id` 不匹配 `conversations.conversation_id`（UUID），前端 GET 拿到 0 条消息。
+
+**修复**：agent-core `loadGatewayExtendedTools` 优先用 `body.conversationId`（UUID，gateway 持久化身份）作为 `X-Session-Id` header，而 `context.sessionId` 仍用作 LangChain thread_id（per-turn SSE 取消用）。
+
+### 偏差 5：前端组件纯逻辑抽出 + UI 交互迭代
+
+落地时把 `AsyncTaskResultMessage.vue` 里的纯函数（状态类名、折叠判断、文本解析）抽到 `utils/asyncTaskMessage.ts`，由 vitest 覆盖 23 个 case。组件只保模板 + DOM 逻辑（复制、下载、跳转）。
+
+UI 交互经过几轮迭代（基于用户反馈）：
+- 第一版：总结内容直接展示，> 500 字折成 240px
+- 第二版：> 200 字折成 3.4em（≈ 2 行）
+- 第三版：总结内容**默认完全隐藏**，只显示"📝 助手总结 + 复制 + 下载助手总结"一栏，点头部 chevron 展开
+- "查看完整任务"按钮在第三版后被替换为"下载助手总结"（直接 .md 下载，不再跳转通知中心）
+
+### 偏差 6：fallback 文案调整
+
+LLM 续答失败的降级文本从"可点击下方"查看完整任务"了解结果"改为"可在下方"任务原始结果"展开"。原因：第三版起不再有"查看完整任务"按钮。
+
+---
+
+## 决策表（更新版）
+
+| 项 | 落地决策 | 决策编号 |
+|---|---|---|
+| 终态消息由谁写 | **gateway 直接调 service**（无 HTTP 边界）| 偏差 1 |
+| LLM 续答 prompt 字数 | **80~180 字、3~6 句、不超过 250 字** | 偏差 2 |
+| 前端要不要实时推送 | **要**（对话级 SSE）| 偏差 3 |
+| agent-core 改动 | **1 处**（`loadGatewayExtendedTools` 优先 conversationId）| 偏差 4 |
+| 折叠策略 | **默认完全隐藏总结，点头部展开** | 偏差 5 |
+| 原始结果如何展示 | **`<details>` 默认折叠**（独立于总结） | 原 决策 9 |
