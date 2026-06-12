@@ -21,4 +21,9 @@ public interface ConversationMapper extends BaseMapper<Conversation> {
         return selectOne(new LambdaQueryWrapper<Conversation>()
                 .eq(Conversation::getConversationId, conversationId));
     }
+
+    default List<Conversation> selectByApiKeyHash(String apiKeyHash) {
+        return selectList(new LambdaQueryWrapper<Conversation>()
+                .eq(Conversation::getApiKeyHash, apiKeyHash));
+    }
 }

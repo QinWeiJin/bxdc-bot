@@ -124,6 +124,8 @@ public class ConversationController {
         dto.put("name", conv.getName());
         dto.put("enabled_skills", conv.getEnabledSkills());
         dto.put("status", conv.getStatus());
+        dto.put("is_published", conv.getIsPublished());
+        dto.put("api_description", conv.getApiDescription());
         dto.put("created_at", conv.getCreatedAt() != null ? conv.getCreatedAt().toString() : null);
         dto.put("updated_at", conv.getUpdatedAt() != null ? conv.getUpdatedAt().toString() : null);
         return dto;

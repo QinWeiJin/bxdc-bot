@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onErrorCaptured, nextTick, watch } from 'vue'
+import { onMounted, onErrorCaptured, nextTick, watch, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { provideChat, type Message, type ToolInvocation } from '../composables/useChat'
 import { provideConversations, useConversations } from '../composables/useConversations'
@@ -9,12 +9,27 @@ import type { ConversationMessage } from '../types/conversation'
 import Layout from '../components/Layout.vue'
 import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
+import ApiDetailView from '../components/ApiDetailView.vue'
 
 const { error, messages, addMessage, fetchGreeting, saveMessageCallback } = provideChat()
 // provideConversations must be called before useConversations (parent proviides to Layout child)
 provideConversations()
 const conversations = useConversations()
 const { currentUser } = useUser()
+
+const showApiDetail = ref(false)
+
+// Destructure for template (auto-unwrapping only works on top-level refs)
+const currentConvId = conversations.currentConversationId
+
+// Watch for conversation switch: auto-detect if published
+watch(
+  () => conversations.currentConversation.value?.is_published,
+  (isPublished) => {
+    showApiDetail.value = isPublished === true
+  },
+  { immediate: true },
+)
 
 // Wire up message persistence: after SSE stream completes, save to conversation
 saveMessageCallback.value = (chatMessages) => {
@@ -168,79 +183,38 @@ onErrorCaptured((err) => {
 </script>
 
 <template>
-  <Layout>
-    <div class="chat-wrapper">
-      <div class="chat-shell">
-        <div class="chat-container">
-          <div class="chat-main">
-            <MessageList />
-          </div>
-          <t-alert
-            v-if="error"
-            class="chat-error"
-            theme="error"
-            :message="error"
-          />
+  <Layout @conversation-published="showApiDetail = true">
+    <ApiDetailView
+      v-if="showApiDetail && currentConvId"
+      :key="currentConvId"
+      :conversation-id="currentConvId"
+    />
+    <template v-else>
+      <div class="chat-card">
+        <div class="chat-main">
+          <MessageList />
+        </div>
+        <t-alert
+          v-if="error"
+          class="chat-error"
+          theme="error"
+          :message="error"
+        />
+        <div class="chat-input-area">
+          <MessageInput />
         </div>
       </div>
-
-      <div class="input-box">
-        <MessageInput />
-      </div>
-    </div>
+    </template>
   </Layout>
 </template>
 
 <style scoped>
-.chat-wrapper {
+.chat-card {
   display: flex;
   flex-direction: column;
-  flex: 1 1 0;
-  min-height: 0;
-  padding: 12px;
-  gap: 16px;
-}
-
-@media (min-width: 768px) {
-  .chat-wrapper {
-    padding: 16px;
-    gap: 20px;
-  }
-}
-
-.chat-shell {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-radius: 16px;
+  height: 100%;
   background: var(--td-bg-color-container);
   overflow: hidden;
-  box-shadow: var(--td-shadow-1);
-  border: 1px solid var(--td-component-border);
-}
-
-.input-box {
-  flex: 0 0 auto;
-  padding: 12px 16px 16px;
-  border-radius: 16px;
-  background: var(--td-bg-color-container);
-}
-
-@media (min-width: 768px) {
-  .input-box {
-    padding: 16px 20px 20px;
-  }
-}
-
-.chat-container {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 0;
-  min-height: 0;
-  width: 100%;
-  overflow: hidden;
-  gap: 12px;
 }
 
 .chat-main {
@@ -253,12 +227,20 @@ onErrorCaptured((err) => {
 
 .chat-error {
   flex: 0 0 auto;
-  margin: 0 12px;
+  margin: 0 16px;
+}
+
+.chat-input-area {
+  flex: 0 0 auto;
+  padding: 8px 12px 10px;
 }
 
 @media (min-width: 768px) {
   .chat-error {
     margin: 0 24px;
+  }
+  .chat-input-area {
+    padding: 8px 16px 10px;
   }
 }
 </style>

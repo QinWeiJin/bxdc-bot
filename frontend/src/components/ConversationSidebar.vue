@@ -8,11 +8,14 @@ import {
   ViewListIcon,
   ChevronLeftIcon,
   SettingIcon,
+  ShareIcon,
 } from 'tdesign-icons-vue-next'
 import { useConversations } from '../composables/useConversations'
 import { useUser } from '../composables/useUser'
+import { MessagePlugin } from 'tdesign-vue-next'
 import type { Conversation } from '../types/conversation'
 import ConversationSkillPanel from './ConversationSkillPanel.vue'
+import PublishApiModal from './PublishApiModal.vue'
 
 const { currentUser } = useUser()
 const {
@@ -22,10 +25,15 @@ const {
   newConversation,
   renameConversation,
   deleteConversation,
+  isProcessing,
 } = useConversations()
 
-const collapsed = ref(false)
+const collapsed = defineModel<boolean>('collapsed', { default: false })
 const editingId = ref<string | null>(null)
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
+}
 const editName = ref('')
 const editInputRef = ref<HTMLInputElement | null>(null)
 
@@ -36,6 +44,7 @@ const skillPanelConvEnabledIds = ref<number[]>([])
 
 const emit = defineEmits<{
   (e: 'select', conversationId: string): void
+  (e: 'published', conversationId: string): void
 }>()
 
 const sortedConversations = computed<Conversation[]>(() => {
@@ -64,12 +73,20 @@ function displayName(conv: Conversation): string {
 }
 
 async function handleSelect(conv: Conversation) {
+  if (isProcessing.value) {
+    MessagePlugin.warning('当前对话正在进行中，请等待完成后切换')
+    return
+  }
   if (!currentUser.value) return
   await switchConversation(conv.conversation_id, currentUser.value.id)
   emit('select', conv.conversation_id)
 }
 
 async function handleNew() {
+  if (isProcessing.value) {
+    MessagePlugin.warning('当前对话正在进行中，请等待完成后再新建')
+    return
+  }
   if (!currentUser.value) return
   const id = await newConversation(currentUser.value.id)
   emit('select', id)
@@ -114,6 +131,20 @@ function openSkillPanel(conv: Conversation) {
   skillPanelVisible.value = true
 }
 
+// Publish modal state
+const publishModalVisible = ref(false)
+const publishTargetConvId = ref('')
+
+function openPublishModal(conv: Conversation) {
+  publishTargetConvId.value = conv.conversation_id
+  publishModalVisible.value = true
+}
+
+function onPublished(apiKey: string) {
+  publishModalVisible.value = false
+  emit('published', publishTargetConvId.value)
+}
+
 function onSkillPanelSaved(ids: number[]) {
   // Update local conversations list
   const conv = (conversations.value || []).find(
@@ -146,7 +177,7 @@ function handleEditKeydown(event: KeyboardEvent) {
 <template>
   <div class="sidebar" :class="{ collapsed }">
     <!-- Collapse toggle button (always visible) -->
-    <div class="sidebar-toggle" @click="collapsed = !collapsed">
+    <div class="sidebar-toggle" @click="toggleCollapsed">
       <ChevronLeftIcon v-if="!collapsed" />
       <ViewListIcon v-else />
     </div>
@@ -195,6 +226,13 @@ function handleEditKeydown(event: KeyboardEvent) {
               class="item-name"
               @dblclick="startEdit(conv, $event)"
             >{{ displayName(conv) }}</span>
+            <t-tag
+              v-if="conv.is_published"
+              theme="success"
+              variant="light"
+              size="small"
+              class="api-badge"
+            >API</t-tag>
             <t-button
               v-if="editingId !== conv.conversation_id"
               class="item-action"
@@ -212,19 +250,31 @@ function handleEditKeydown(event: KeyboardEvent) {
           <div class="item-meta-row">
             <span class="item-time">{{ formatTime(conv.updated_at) }}</span>
             <div class="item-actions">
+              <t-tooltip v-if="!conv.is_published" content="发布为API">
+                <t-button
+                  class="item-icon-btn item-publish"
+                  theme="primary"
+                  variant="text"
+                  size="small"
+                  shape="square"
+                  @click.stop="openPublishModal(conv)"
+                >
+                  <template #icon><ShareIcon /></template>
+                </t-button>
+              </t-tooltip>
               <t-popconfirm
                 content="确定删除？"
                 @confirm="handleDelete(conv)"
               >
                 <t-button
-                  class="item-meta-btn item-delete"
+                  class="item-icon-btn item-delete"
                   theme="danger"
-                  variant="outline"
+                  variant="text"
                   size="small"
+                  shape="square"
                   @click.stop
                 >
                   <template #icon><DeleteIcon /></template>
-                  删除
                 </t-button>
               </t-popconfirm>
               <t-button
@@ -252,15 +302,21 @@ function handleEditKeydown(event: KeyboardEvent) {
     @close="skillPanelVisible = false"
     @saved="onSkillPanelSaved"
   />
+
+  <!-- Publish API modal -->
+  <PublishApiModal
+    :visible="publishModalVisible"
+    :conversation-id="publishTargetConvId"
+    @close="publishModalVisible = false"
+    @published="onPublished"
+  />
 </template>
 
 <style scoped>
 .sidebar {
   width: 260px;
   min-width: 0;
-  height: 100%;
-  background: var(--td-bg-color-container);
-  border-right: 1px solid var(--td-component-stroke);
+  flex: 1;
   display: flex;
   flex-direction: column;
   transition: width 0.25s ease;
@@ -401,23 +457,35 @@ function handleEditKeydown(event: KeyboardEvent) {
   gap: 4px;
 }
 
-.item-meta-btn {
+.item-icon-btn {
+  flex-shrink: 0;
+  color: var(--td-text-color-secondary) !important;
+}
+
+.item-icon-btn.item-publish {
+  color: var(--td-brand-color) !important;
+}
+
+.item-icon-btn.item-delete:hover {
+  color: var(--td-error-color) !important;
+}
+
+.item-meta-btn.item-settings {
+  flex-shrink: 0;
   padding: 0 8px !important;
   height: 24px !important;
   font-size: 11px !important;
   border-radius: 4px !important;
+  color: var(--td-text-color-secondary) !important;
+  border-color: var(--td-component-stroke) !important;
+  background: var(--td-bg-color-container) !important;
+}
+
+.api-badge {
   flex-shrink: 0;
-}
-
-.item-meta-btn.item-delete {
-  color: var(--td-text-color-secondary) !important;
-  border-color: var(--td-component-stroke) !important;
-  background: var(--td-bg-color-container) !important;
-}
-
-.item-meta-btn.item-settings {
-  color: var(--td-text-color-secondary) !important;
-  border-color: var(--td-component-stroke) !important;
-  background: var(--td-bg-color-container) !important;
+  font-size: 10px !important;
+  padding: 0 4px !important;
+  height: 18px !important;
+  line-height: 18px !important;
 }
 </style>
