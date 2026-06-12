@@ -43,6 +43,7 @@ public class SchemaMigrationRunner implements InitializingBean {
     public void afterPropertiesSet() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             migrateAsyncTasks(conn);
+            migrateConversationApiColumns(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -91,6 +92,56 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "request_body", existingColumns,
                 "ALTER TABLE async_tasks ADD COLUMN request_body MEDIUMTEXT DEFAULT NULL " +
                 "COMMENT 'SINGLE_CALL 模式的原始请求体（JSON 字符串）；PERIODIC 模式为 NULL'");
+    }
+
+    private void migrateConversationApiColumns(Connection conn) {
+        // ===== conversations 表 =====
+        String convTable = "conversations";
+        if (!tableExists(conn, convTable)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", convTable);
+            return;
+        }
+
+        Set<String> convColumns = getColumnNames(conn, convTable);
+        Set<String> convIndexes = getIndexNames(conn, convTable);
+
+        // 1. is_published
+        ensureColumn(conn, convTable, "is_published", convColumns,
+                "ALTER TABLE conversations ADD COLUMN is_published TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '是否已发布为API: 0=未发布, 1=已发布'");
+
+        // 2. api_description
+        ensureColumn(conn, convTable, "api_description", convColumns,
+                "ALTER TABLE conversations ADD COLUMN api_description TEXT NULL " +
+                "COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息'");
+
+        // 3. api_key
+        ensureColumn(conn, convTable, "api_key", convColumns,
+                "ALTER TABLE conversations ADD COLUMN api_key VARCHAR(64) NULL " +
+                "COMMENT 'API调用密钥明文'");
+
+        // 4. api_key_hash
+        ensureColumn(conn, convTable, "api_key_hash", convColumns,
+                "ALTER TABLE conversations ADD COLUMN api_key_hash VARCHAR(64) NULL " +
+                "COMMENT 'API调用密钥SHA-256哈希'");
+
+        // 5. idx_api_key_hash 唯一索引
+        ensureIndex(conn, convTable, "idx_api_key_hash", convIndexes,
+                "CREATE UNIQUE INDEX idx_api_key_hash ON conversations(api_key_hash)");
+
+        // ===== conversation_messages 表 =====
+        String msgTable = "conversation_messages";
+        if (!tableExists(conn, msgTable)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet", msgTable);
+            return;
+        }
+
+        Set<String> msgColumns = getColumnNames(conn, msgTable);
+
+        // 6. source 列
+        ensureColumn(conn, msgTable, "source", msgColumns,
+                "ALTER TABLE conversation_messages ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'web' " +
+                "COMMENT '消息来源: web=网页端, api=API调用'");
     }
 
     private boolean tableExists(Connection conn, String table) {
