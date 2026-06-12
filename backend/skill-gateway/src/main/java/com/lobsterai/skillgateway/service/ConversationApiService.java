@@ -366,6 +366,15 @@ public class ConversationApiService {
         return Collections.singletonMap("apiKey", apiKey);
     }
 
+    @Transactional
+    public Map<String, Object> updateApiDescription(String conversationId, String userId, String apiDescription) {
+        Conversation conv = conversationService.getById(conversationId, userId);
+        conv.setApiDescription(apiDescription);
+        conv.setUpdatedAt(LocalDateTime.now());
+        conversationMapper.updateById(conv);
+        return toConversationDto(conv);
+    }
+
     // ---- Helpers ----
 
     static String sha256Hex(String input) {

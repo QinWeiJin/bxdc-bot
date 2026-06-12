@@ -83,4 +83,17 @@ public class ConversationApiController {
         Map<String, Object> result = apiService.regenerateApiKey(conversationId, userId);
         return ResponseEntity.ok(result);
     }
+
+    // ---- API Description ----
+
+    @PutMapping("/api/conversations/{id}/api-description")
+    public ResponseEntity<Map<String, Object>> updateApiDescription(
+            @RequestHeader("X-User-Id") String userId,
+            @PathVariable("id") String conversationId,
+            @RequestBody Map<String, Object> body) {
+        String apiDescription = body.get("apiDescription") instanceof String
+                ? (String) body.get("apiDescription") : "";
+        Map<String, Object> result = apiService.updateApiDescription(conversationId, userId, apiDescription);
+        return ResponseEntity.ok(result);
+    }
 }

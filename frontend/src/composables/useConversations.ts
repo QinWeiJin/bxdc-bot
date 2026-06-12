@@ -227,10 +227,10 @@ function createConversationsState(): ConversationsState {
 
   async function publishConversationMethod(conversationId: string, userId: string, apiDescription: string): Promise<{ apiKey: string }> {
     const res = await apiPublishConversation(userId, conversationId, apiDescription)
-    // Update local cache
+    // Update local cache — use splice for reliable Vue 3 reactivity
     const idx = conversations.value.findIndex((c) => c.conversation_id === conversationId)
     if (idx >= 0 && res.conversation) {
-      conversations.value[idx] = res.conversation
+      conversations.value.splice(idx, 1, res.conversation)
     }
     return { apiKey: res.apiKey }
   }

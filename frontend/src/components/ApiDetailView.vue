@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin, type PaginationProps } from 'tdesign-vue-next'
+import { EditIcon } from 'tdesign-icons-vue-next'
 import { useConversations } from '../composables/useConversations'
 import { useUser } from '../composables/useUser'
-import { fetchCallLogs, fetchApiKey, regenerateApiKey } from '../services/api'
+import { fetchCallLogs, fetchApiKey, regenerateApiKey, updateApiDescription } from '../services/api'
 import type { ApiCallLog } from '../types/conversation'
 
 const props = defineProps<{
@@ -23,6 +24,11 @@ const expandedRowKeys = ref<number[]>([])
 // API Key state
 const maskedApiKey = ref('')
 const regenerating = ref(false)
+
+// Description editing state
+const editingDescription = ref(false)
+const descriptionDraft = ref('')
+const savingDescription = ref(false)
 
 const displayUrl = computed(() => `${window.location.origin}/api/agent-chat`)
 
@@ -86,6 +92,42 @@ async function handleRegenerate() {
   }
 }
 
+function startEditDescription() {
+  descriptionDraft.value = conv.value?.api_description || ''
+  editingDescription.value = true
+}
+
+function cancelEditDescription() {
+  editingDescription.value = false
+}
+
+async function saveDescription() {
+  if (!currentUser.value) return
+  savingDescription.value = true
+  try {
+    const res = await updateApiDescription(
+      currentUser.value.id,
+      props.conversationId,
+      descriptionDraft.value.trim(),
+    )
+    // Update local cache
+    if (res.conversation && conversations.conversations.value) {
+      const idx = conversations.conversations.value.findIndex(
+        (c) => c.conversation_id === props.conversationId,
+      )
+      if (idx >= 0) {
+        conversations.conversations.value.splice(idx, 1, res.conversation)
+      }
+    }
+    editingDescription.value = false
+    MessagePlugin.success('描述已更新')
+  } catch (e) {
+    MessagePlugin.error('更新失败')
+  } finally {
+    savingDescription.value = false
+  }
+}
+
 function onPageChange(pageInfo: PaginationProps) {
   pagination.value = pageInfo
   loadCallLogs()
@@ -121,7 +163,24 @@ watch(() => props.conversationId, () => {
     <div class="api-info-card">
       <div class="api-section">
         <label>API 描述</label>
-        <p class="api-desc">{{ conv?.api_description || '暂无描述' }}</p>
+        <div v-if="!editingDescription" class="api-desc-row">
+          <p class="api-desc">{{ conv?.api_description || '暂无描述' }}</p>
+          <t-button size="small" variant="text" @click="startEditDescription">
+            <template #icon><EditIcon /></template>
+            编辑
+          </t-button>
+        </div>
+        <div v-else class="api-desc-edit">
+          <t-textarea
+            v-model="descriptionDraft"
+            placeholder="描述这个 API 的用途，会注入到对话上下文中"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+          />
+          <div class="api-desc-actions">
+            <t-button size="small" theme="primary" :loading="savingDescription" @click="saveDescription">保存</t-button>
+            <t-button size="small" variant="outline" @click="cancelEditDescription">取消</t-button>
+          </div>
+        </div>
       </div>
 
       <div class="api-section">
@@ -245,6 +304,24 @@ watch(() => props.conversationId, () => {
   font-size: 14px;
   line-height: 1.6;
   margin: 0;
+  flex: 1;
+}
+
+.api-desc-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.api-desc-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.api-desc-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .api-key-row {

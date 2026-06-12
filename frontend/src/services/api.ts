@@ -190,3 +190,17 @@ export async function fetchApiKey(
   if (!response.ok) throw new Error('Failed to fetch API key')
   return response.json()
 }
+
+export async function updateApiDescription(
+  userId: string,
+  conversationId: string,
+  apiDescription: string,
+): Promise<{ conversation: import('../types/conversation').Conversation }> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/api-description`), {
+    method: 'PUT',
+    headers: authHeaders(userId),
+    body: JSON.stringify({ apiDescription }),
+  })
+  if (!response.ok) throw new Error('Failed to update API description')
+  return response.json()
+}

@@ -23,8 +23,14 @@ const showApiDetail = ref(false)
 const currentConvId = conversations.currentConversationId
 
 // Watch for conversation switch: auto-detect if published
+// Track conversations array changes + current conversation is_published
 watch(
-  () => conversations.currentConversation.value?.is_published,
+  () => {
+    const conv = (conversations.conversations.value || []).find(
+      (c) => c.conversation_id === conversations.currentConversationId.value,
+    )
+    return conv?.is_published ?? false
+  },
   (isPublished) => {
     showApiDetail.value = isPublished === true
   },
@@ -214,6 +220,7 @@ onErrorCaptured((err) => {
   flex-direction: column;
   height: 100%;
   background: var(--td-bg-color-container);
+  border-radius: 8px;
   overflow: hidden;
 }
 

@@ -20,6 +20,8 @@ const { toggleSkillHub } = useSkillHub();
 const { toggleServerLedger } = useServerLedger();
 const { startPolling, stopPolling } = useAsyncTaskNotifications();
 
+const sidebarCollapsed = ref(false)
+
 onMounted(() => {
   // 启动异步任务通知 30s 轮询
   startPolling(30_000);
@@ -32,48 +34,49 @@ onBeforeUnmount(() => {
 
 <template>
   <t-layout class="app-layout">
-    <t-header class="layout-header">
-      <div class="layout-header__content">
-        <div class="layout-brand">
-          <div class="layout-title">BXDC.bot</div>
-          <div class="layout-subtitle">AI Chat</div>
-        </div>
-        
-        <div style="flex: 1"></div>
-
-        <div class="layout-actions">
-          <t-button theme="default" variant="text" @click="toggleServerLedger" v-if="currentUser">
-            <template #icon><ServerIcon /></template>
-            Servers
-          </t-button>
-          <t-button theme="default" variant="text" @click="toggleSkillHub">
-            <template #icon><AppIcon /></template>
-            SkillHub
-          </t-button>
-          <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/settings')">
-            大模型设置
-          </t-button>
-          <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
-            编辑资料
-          </t-button>
-
-          <TaskNotificationBell v-if="currentUser" />
-
-          <div class="user-info" v-if="currentUser">
-            <UserAvatar :avatar="currentUser.avatar" :size="32" />
-            <span class="user-name">{{ currentUser.nickname }}</span>
-          </div>
-          <t-button v-if="currentUser" theme="default" variant="text" @click="logout">Switch User</t-button>
-        </div>
-      </div>
-    </t-header>
     <div class="layout-body">
-      <ConversationSidebar />
-      <t-content class="layout-content">
-        <div class="layout-content-inner">
-          <slot />
+      <div class="sidebar-area">
+        <div class="sidebar-brand" :class="{ 'sidebar-brand--collapsed': sidebarCollapsed }">
+          <UserAvatar avatar="🤖" :size="28" rounded variant="skillBuiltin" class="brand-avatar" />
+          <div v-show="!sidebarCollapsed" class="brand-text">
+            <div class="layout-title">BXDC.bot</div>
+            <div class="layout-subtitle">AI Chat</div>
+          </div>
         </div>
-      </t-content>
+        <ConversationSidebar v-model:collapsed="sidebarCollapsed" @published="$emit('conversation-published')" />
+      </div>
+      <div class="main-area">
+        <div class="layout-header">
+          <div class="layout-spacer"></div>
+          <div class="layout-actions">
+            <t-button theme="default" variant="text" @click="toggleServerLedger" v-if="currentUser">
+              <template #icon><ServerIcon /></template>
+              Servers
+            </t-button>
+            <t-button theme="default" variant="text" @click="toggleSkillHub">
+              <template #icon><AppIcon /></template>
+              SkillHub
+            </t-button>
+            <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/settings')">
+              大模型设置
+            </t-button>
+            <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
+              编辑资料
+            </t-button>
+
+            <TaskNotificationBell v-if="currentUser" />
+
+            <div class="user-info" v-if="currentUser">
+              <UserAvatar :avatar="currentUser.avatar" :size="32" />
+              <span class="user-name">{{ currentUser.nickname }}</span>
+            </div>
+            <t-button v-if="currentUser" theme="default" variant="text" @click="logout">Switch User</t-button>
+          </div>
+        </div>
+        <t-content class="layout-content">
+          <slot />
+        </t-content>
+      </div>
     </div>
     <SkillHub />
     <ServerLedger />
@@ -90,47 +93,123 @@ onBeforeUnmount(() => {
   background-color: var(--td-bg-color-page);
 }
 
-.layout-header {
-  flex-shrink: 0;
-  background: transparent;
-  padding: 16px 16px 12px;
+.layout-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
 }
 
-.layout-header__content {
-  max-width: 960px;
-  margin: 0 auto;
-  width: 100%;
+/* ── Sidebar Area (branding + conversation list) ── */
+.sidebar-area {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  background: var(--td-bg-color-container);
+  border-right: 1px solid var(--td-component-stroke);
+}
+
+.sidebar-brand {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: 49px;
+  padding: 0 16px;
   display: flex;
   align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--td-component-stroke);
+}
+
+.sidebar-brand--collapsed {
+  padding: 0;
+  justify-content: center;
+  width: 48px;
+}
+
+.brand-avatar {
+  flex-shrink: 0;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+  overflow: hidden;
+}
+
+.sidebar-area :deep(.sidebar) {
+  border-right: none;
+}
+
+@media (min-width: 768px) {
+  .sidebar-brand {
+    padding: 0 20px;
+  }
+  .sidebar-brand--collapsed {
+    padding: 0;
+  }
+}
+
+/* ── Main Area (header + content) ── */
+.main-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.layout-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--td-component-stroke);
+  background: var(--td-bg-color-container);
 }
 
 @media (min-width: 768px) {
   .layout-header {
-    padding: 24px 24px 12px;
+    padding: 8px 24px;
   }
 }
 
-.layout-brand {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.layout-spacer {
+  flex: 1;
 }
 
+.layout-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+@media (min-width: 768px) {
+  .layout-content {
+    padding: 16px;
+  }
+}
+
+/* ── Branding ── */
 .layout-title {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--td-text-color-primary);
 }
 
 .layout-subtitle {
-  font-size: 14px;
+  font-size: 12px;
   color: var(--td-text-color-secondary);
 }
 
+/* ── Actions ── */
 .layout-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .user-info {
@@ -142,35 +221,5 @@ onBeforeUnmount(() => {
 .user-name {
   font-size: 14px;
   font-weight: 500;
-}
-
-.layout-content {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  padding: 0 12px 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-.layout-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-
-.layout-content-inner {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-@media (min-width: 768px) {
-  .layout-content {
-    padding: 0 24px 24px;
-  }
 }
 </style>
