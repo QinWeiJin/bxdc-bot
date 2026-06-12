@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onErrorCaptured, nextTick, watch, ref } from 'vue'
+import { onMounted, onErrorCaptured, watch, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { provideChat, type Message, type ToolInvocation } from '../composables/useChat'
 import { provideConversations, useConversations } from '../composables/useConversations'
@@ -11,7 +11,7 @@ import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import ApiDetailView from '../components/ApiDetailView.vue'
 
-const { error, messages, addMessage, fetchGreeting, saveMessageCallback } = provideChat()
+const { error, messages, fetchGreeting, saveMessageCallback } = provideChat()
 // provideConversations must be called before useConversations (parent proviides to Layout child)
 provideConversations()
 const conversations = useConversations()

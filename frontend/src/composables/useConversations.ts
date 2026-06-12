@@ -83,10 +83,7 @@ function createConversationsState(): ConversationsState {
   const convNamedMap = ref<Record<string, boolean>>({})
   const isProcessing = ref(false)
 
-  let userIdCache = ''
-
   async function init(userId: string) {
-    userIdCache = userId
     await refreshConversations(userId)
 
     if (conversations.value.length === 0) {
@@ -135,7 +132,7 @@ function createConversationsState(): ConversationsState {
     conversations.value = [conv, ...conversations.value]
     currentConversationId.value = conv.conversation_id
     // Switch to new conversation to clear old messages and show greeting
-    const msgs = await switchConversation(conv.conversation_id, userId)
+    await switchConversation(conv.conversation_id, userId)
     return conv.conversation_id
   }
 

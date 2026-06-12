@@ -140,7 +140,7 @@ function openPublishModal(conv: Conversation) {
   publishModalVisible.value = true
 }
 
-function onPublished(apiKey: string) {
+function onPublished(_apiKey: string) {
   publishModalVisible.value = false
   emit('published', publishTargetConvId.value)
 }
@@ -198,7 +198,7 @@ function handleEditKeydown(event: KeyboardEvent) {
 
       <!-- Conversation list -->
       <div class="sidebar-list">
-        <div v-if="conversations.length === 0" class="sidebar-empty">
+        <div v-if="(conversations || []).length === 0" class="sidebar-empty">
           <ChatIcon class="empty-icon" />
           <span>暂无对话</span>
         </div>
