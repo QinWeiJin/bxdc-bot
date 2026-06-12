@@ -843,7 +843,11 @@ export function provideChat() {
             try {
               await fetch(agentUrl('/memory/add'), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  // X-User-Id header 跨用户守卫（spec memory-initialization-flow）
+                  'X-User-Id': userId,
+                },
                 body: JSON.stringify({
                   userId,
                   text: `本次对话涉及文件：${fileNames.join('、')}`,

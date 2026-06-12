@@ -648,9 +648,11 @@ export class AgentController {
 
           const staticSystemPrompt = buildStaticSystemPrompt();
           const profileDetails = await this.memoryService.fetchUserProfile(userId);
-          const systemContent = profileDetails
-            ? `${staticSystemPrompt}[个人特征信息]${profileDetails}`
-            : staticSystemPrompt;
+          const systemParts: string[] = [staticSystemPrompt];
+          if (memoryContext) {
+            systemParts.push(memoryContext);
+          }
+          const systemContent = systemParts.join('\n\n');
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -663,12 +665,14 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
 
-          const messages = [
-            ...validHistory,
-            { role: 'user' as const, content: userTurnContentWithSystem },
-          ];
+          // dreamsearch 内容注入到 messageList 最前面，作为独立 system 消息
+          const messages: any[] = [];
+          if (profileDetails) {
+            messages.push({ role: 'system', content: `[个人特征信息]\n${profileDetails}` });
+          }
+          messages.push(...(validHistory as any[]), { role: 'user', content: userTurnContentWithSystem });
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
