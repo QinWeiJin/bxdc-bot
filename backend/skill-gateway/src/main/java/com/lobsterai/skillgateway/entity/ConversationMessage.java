@@ -34,6 +34,9 @@ public class ConversationMessage {
     @TableField("skill_outputs")
     private String skillOutputs;
 
+    @TableField("source")
+    private String source;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -93,6 +96,14 @@ public class ConversationMessage {
 
     public void setSkillOutputs(String skillOutputs) {
         this.skillOutputs = skillOutputs;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 
     public LocalDateTime getCreatedAt() {

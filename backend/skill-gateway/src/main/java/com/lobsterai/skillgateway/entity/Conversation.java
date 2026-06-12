@@ -34,6 +34,18 @@ public class Conversation {
     @TableField("status")
     private String status;
 
+    @TableField("is_published")
+    private Boolean isPublished;
+
+    @TableField("api_description")
+    private String apiDescription;
+
+    @TableField("api_key")
+    private String apiKey;
+
+    @TableField("api_key_hash")
+    private String apiKeyHash;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -88,6 +100,38 @@ public class Conversation {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Boolean getIsPublished() {
+        return isPublished;
+    }
+
+    public void setIsPublished(Boolean isPublished) {
+        this.isPublished = isPublished;
+    }
+
+    public String getApiDescription() {
+        return apiDescription;
+    }
+
+    public void setApiDescription(String apiDescription) {
+        this.apiDescription = apiDescription;
+    }
+
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public String getApiKeyHash() {
+        return apiKeyHash;
+    }
+
+    public void setApiKeyHash(String apiKeyHash) {
+        this.apiKeyHash = apiKeyHash;
     }
 
     public LocalDateTime getCreatedAt() {

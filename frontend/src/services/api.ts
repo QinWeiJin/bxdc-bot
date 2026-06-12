@@ -5,6 +5,9 @@ import type {
   SaveMessagesRequest,
   SaveMessagesResponse,
   Conversation,
+  CallLogsResponse,
+  PublishResponse,
+  ApiKeyResponse,
 } from '../types/conversation'
 
 export async function createTask(content: string, userId?: string, history?: any[], sessionId?: string): Promise<{ id: string }> {
@@ -131,5 +134,73 @@ export async function saveMessages(
     body: JSON.stringify({ messages }),
   })
   if (!response.ok) throw new Error('Failed to save messages')
+  return response.json()
+}
+
+export async function publishConversation(
+  userId: string,
+  conversationId: string,
+  apiDescription: string,
+): Promise<PublishResponse> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/publish`), {
+    method: 'PUT',
+    headers: authHeaders(userId),
+    body: JSON.stringify({ apiDescription }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error((body as any).error || 'Failed to publish conversation')
+  }
+  return response.json()
+}
+
+export async function fetchCallLogs(
+  userId: string,
+  conversationId: string,
+  page = 1,
+  size = 20,
+): Promise<CallLogsResponse> {
+  const params = new URLSearchParams({ page: String(page), size: String(size) })
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/call-logs?${params}`), {
+    headers: { 'X-User-Id': userId },
+  })
+  if (!response.ok) throw new Error('Failed to fetch call logs')
+  return response.json()
+}
+
+export async function regenerateApiKey(
+  userId: string,
+  conversationId: string,
+): Promise<ApiKeyResponse> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/regenerate-api-key`), {
+    method: 'PUT',
+    headers: authHeaders(userId),
+  })
+  if (!response.ok) throw new Error('Failed to regenerate API key')
+  return response.json()
+}
+
+export async function fetchApiKey(
+  userId: string,
+  conversationId: string,
+): Promise<ApiKeyResponse> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/api-key`), {
+    headers: { 'X-User-Id': userId },
+  })
+  if (!response.ok) throw new Error('Failed to fetch API key')
+  return response.json()
+}
+
+export async function updateApiDescription(
+  userId: string,
+  conversationId: string,
+  apiDescription: string,
+): Promise<{ conversation: import('../types/conversation').Conversation }> {
+  const response = await fetch(apiUrl(`/api/conversations/${conversationId}/api-description`), {
+    method: 'PUT',
+    headers: authHeaders(userId),
+    body: JSON.stringify({ apiDescription }),
+  })
+  if (!response.ok) throw new Error('Failed to update API description')
   return response.json()
 }

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed, type ComputedRef } from 'vue'
 import {
   fetchConversations,
   createConversation as apiCreateConversation,
@@ -6,6 +6,7 @@ import {
   updateConversation,
   deleteConversation as apiDeleteConversation,
   saveMessages,
+  publishConversation as apiPublishConversation,
 } from '../services/api'
 import type {
   Conversation,
@@ -37,6 +38,12 @@ export interface ConversationsState {
   refreshConversations: (userId: string) => Promise<void>
   activeAbortController: ReturnType<typeof ref<AbortController | null>>
   historyMessages: ReturnType<typeof ref<ConversationMessage[]>>
+  /** True when an SSE stream (Agent reply) is actively running — guards against mid-stream conversation switch */
+  isProcessing: ReturnType<typeof ref<boolean>>
+  /** Computed: the currently active Conversation object (undefined if none) */
+  currentConversation: ComputedRef<Conversation | undefined>
+  /** Publish a conversation as API */
+  publishConversation: (conversationId: string, userId: string, apiDescription: string) => Promise<{ apiKey: string }>
 }
 
 function sanitizeName(raw: string): string {
@@ -63,6 +70,9 @@ function parseEnabledSkillIds(raw: string | undefined | null): number[] {
 // Module-level singleton — no need for Vue provide/inject
 let _instance: ConversationsState | null = null
 
+/** Number of messages to load per page when fetching conversation history */
+const PAGE_SIZE = 20
+
 function createConversationsState(): ConversationsState {
   const conversations = ref<Conversation[]>([])
   const currentConversationId = ref<string | null>(null)
@@ -71,6 +81,7 @@ function createConversationsState(): ConversationsState {
   const activeAbortController = ref<AbortController | null>(null)
   const historyMessages = ref<ConversationMessage[]>([])
   const convNamedMap = ref<Record<string, boolean>>({})
+  const isProcessing = ref(false)
 
   let userIdCache = ''
 
@@ -109,7 +120,7 @@ function createConversationsState(): ConversationsState {
     hasMoreHistory.value = false
 
     try {
-      const res = await apiFetchConversation(userId, conversationId, undefined, 50)
+      const res = await apiFetchConversation(userId, conversationId, undefined, PAGE_SIZE)
       hasMoreHistory.value = res.hasMore
       const msgs = (res.messages || []).reverse()
       historyMessages.value = msgs
@@ -172,8 +183,24 @@ function createConversationsState(): ConversationsState {
   }
 
   async function loadMoreMessages(userId: string): Promise<ConversationMessage[]> {
-    if (!currentConversationId.value || !hasMoreHistory.value) return []
-    return []
+    if (!currentConversationId.value || !hasMoreHistory.value || isLoadingHistory.value) return []
+    isLoadingHistory.value = true
+
+    try {
+      const cursor = historyMessages.value[0]?.created_at
+      if (!cursor) {
+        hasMoreHistory.value = false
+        return []
+      }
+
+      const res = await apiFetchConversation(userId, currentConversationId.value, cursor, PAGE_SIZE)
+      hasMoreHistory.value = res.hasMore
+      const olderMsgs = (res.messages || []).reverse()
+      historyMessages.value = [...olderMsgs, ...historyMessages.value]
+      return olderMsgs
+    } finally {
+      isLoadingHistory.value = false
+    }
   }
 
   async function persistMessages(
@@ -198,6 +225,16 @@ function createConversationsState(): ConversationsState {
     }
   }
 
+  async function publishConversationMethod(conversationId: string, userId: string, apiDescription: string): Promise<{ apiKey: string }> {
+    const res = await apiPublishConversation(userId, conversationId, apiDescription)
+    // Update local cache — use splice for reliable Vue 3 reactivity
+    const idx = conversations.value.findIndex((c) => c.conversation_id === conversationId)
+    if (idx >= 0 && res.conversation) {
+      conversations.value.splice(idx, 1, res.conversation)
+    }
+    return { apiKey: res.apiKey }
+  }
+
   return {
     conversations,
     currentConversationId,
@@ -212,12 +249,17 @@ function createConversationsState(): ConversationsState {
     persistMessages,
     activeAbortController,
     historyMessages,
+    isProcessing,
     getEnabledSkillIds: (conversationId: string): number[] => {
       const conv = conversations.value.find((c) => c.conversation_id === conversationId)
       return parseEnabledSkillIds(conv?.enabled_skills)
     },
     addEnabledSkillToConversation,
     refreshConversations,
+    currentConversation: computed(() =>
+      conversations.value.find((c) => c.conversation_id === currentConversationId.value)
+    ),
+    publishConversation: publishConversationMethod,
   }
 }
 
