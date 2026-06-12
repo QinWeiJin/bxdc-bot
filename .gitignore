@@ -63,3 +63,9 @@ start-all.bat
 start-all.ps1
 stop-all.bat
 stop-all.ps1
+
+# Logs (runtime application logs)
+logs/
+
+# Docs (root-level design / hand-off docs, not in git)
+docs/
