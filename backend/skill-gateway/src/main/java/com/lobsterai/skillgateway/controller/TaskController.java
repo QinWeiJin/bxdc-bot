@@ -2,9 +2,12 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.User;
+import com.lobsterai.skillgateway.entity.UserFile;
+import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.orchestration.AgentStreamConsumer;
 import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
+import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.UserService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +20,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +38,8 @@ public class TaskController {
     private final UserService userService;
     private final AsyncTaskPollingService asyncTaskPollingService;
     private final AsyncPollingAuditService asyncPollingAuditService;
+    private final UserFileMapper userFileMapper;
+    private final FileParseService fileParseService;
     // In-memory storage for task instructions. In production, use a database or cache.
     private final Map<String, TaskContext> taskContexts = new ConcurrentHashMap<>();
     // Store active subscriptions to cancel them if needed
@@ -41,11 +47,15 @@ public class TaskController {
 
     public TaskController(AgentStreamConsumer agentStreamConsumer, UserService userService,
                           AsyncTaskPollingService asyncTaskPollingService,
-                          AsyncPollingAuditService asyncPollingAuditService) {
+                          AsyncPollingAuditService asyncPollingAuditService,
+                          UserFileMapper userFileMapper,
+                          FileParseService fileParseService) {
         this.agentStreamConsumer = agentStreamConsumer;
         this.userService = userService;
         this.asyncTaskPollingService = asyncTaskPollingService;
         this.asyncPollingAuditService = asyncPollingAuditService;
+        this.userFileMapper = userFileMapper;
+        this.fileParseService = fileParseService;
     }
 
     @PostMapping
@@ -113,6 +123,13 @@ public class TaskController {
             User u = userService.getUser(context.getUserId());
             if (u != null) {
                 userService.userLlmOverridesFromDb(u).forEach(executionContext::put);
+            }
+            
+            // 添加用户上传的文件信息到上下文
+            List<UserFile> userFiles = userFileMapper.findByUserId(context.getUserId());
+            if (userFiles != null && !userFiles.isEmpty()) {
+                String fileContext = fileParseService.buildSystemPromptForFiles(userFiles);
+                executionContext.put("fileContext", fileContext);
             }
         }
         executionContext.put("sessionId", id);

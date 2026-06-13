@@ -102,6 +102,20 @@ public class FileToolSeeder implements ApplicationRunner {
                 mdFilterSectionSchema());
         seedFileOperate("md_merge", "多 Markdown 文件拼接合并（frontmatter 冲突可配置，prefixHeaders 可关闭）",
                 mdMergeSchema());
+
+        // ===== Excel 操作（支持 xlsx/xls/csv）=====
+        seedFileOperate("excel_read", "读取 Excel 文件内容，返回表头和数据行。支持分页返回，默认最多返回 100 行。返回结果包含 headers（列头列表）和 rows（数据行列表）。", excelReadSchema());
+        seedFileOperate("excel_write", "创建或覆盖 Excel 文件。需提供 headers（列头数组）和 rows（数据行数组）。创建的文件会自动保存到临时文件，返回文件 ID 供后续操作使用。", excelWriteSchema());
+        seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。", fileRefSchema());
+        seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。", excelFilterSchema());
+        seedFileOperate("excel_sort", "根据指定列对数据进行排序。支持升序（asc）和降序（desc）两种排序方向。排序结果写回临时文件，返回更新后的文件信息。", excelSortSchema());
+        seedFileOperate("excel_aggregate", "按指定列分组并进行聚合统计。支持 sum（求和）、avg（平均值）、count（计数）、min（最小值）、max（最大值）五种聚合类型。聚合结果写回临时文件，返回更新后的文件信息。", excelAggregateSchema());
+        seedFileOperate("excel_pivot", "透视分析：按行维度和列维度进行交叉汇总。需指定 rowDimension（行维度列）、colDimension（列维度列）和 valueColumn（值列）。透视结果写回临时文件，返回更新后的文件信息。", excelPivotSchema());
+        seedFileOperate("excel_calculate", "列运算：基于现有列生成新计算列。通过 formula 参数指定计算公式，支持用 {列名} 引用其他列，例如 {销售额} * {数量} 或 {单价} * 1.1。计算结果作为新列添加到数据中，写回临时文件。", excelCalculateSchema());
+        seedFileOperate("excel_select_columns", "选择指定列，删除其他列。需提供 columns 数组指定要保留的列名。选择结果写回临时文件，返回更新后的文件信息。", excelSelectColumnsSchema());
+        seedFileOperate("excel_clean", "数据清洗操作。支持三种清洗类型：trim（去除字符串首尾空格）、deduplicate（去除重复行）、removeEmpty（移除空行）。清洗结果写回临时文件，返回更新后的文件信息。", excelCleanSchema());
+        seedFileOperate("excel_convert_format", "格式转换：将 Excel 文件转换为其他格式。支持 xlsx、xls、csv 三种格式之间的转换。转换结果写回临时文件，返回更新后的文件信息。", excelConvertFormatSchema());
+        seedFileOperate("excel_validate", "合规校验：根据指定规则对数据进行校验。支持多种校验规则，如必填校验、数值范围校验、格式校验等。校验结果以 JSON 格式返回，不修改原文件。", excelValidateSchema());
     }
 
     // ========== 整合方案 B：word_ops 单一入口 ==========
@@ -381,13 +395,23 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> fileRefSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID，用于指定要操作的文件", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息进行下载等操作");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选，当 fileId 无法获取时使用）", false));
         return s;
     }
 
     private static Map<String, Map<String, Object>> fileDeleteSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("要删除的文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），要删除的文件 ID");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("要删除的文件名（可选）", false));
         Map<String, Object> confirmed = new LinkedHashMap<>();
         confirmed.put("type", "boolean");
         confirmed.put("description", "二次确认标志。LLM 应先在对话中引导用户确认，用户确认后再次调用设置 confirmed=true");
@@ -413,14 +437,24 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> keywordSearchSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         s.put("keyword", stringProp("搜索关键字", true));
         return s;
     }
 
     private static Map<String, Map<String, Object>> replaceTextSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         // 描述中显式包含字段名，避免 LLM 只看语义忽略 key 时漏传
         s.put("oldText", stringProp("oldText：要替换的原文本（必填）", true));
         s.put("newText", stringProp("newText：替换后的新文本（必填）", true));
@@ -433,7 +467,12 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> templateFillSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("type", "object");
         values.put("description", "占位符键值对，如 {\"name\": \"张三\", \"date\": \"2026-01-01\"}");
@@ -443,7 +482,11 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtReadSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
         s.put("encoding", stringProp("文件编码（如 UTF-8/GBK），默认 UTF-8", false));
         s.put("startLine", intProp("起始行号（1-based），默认 1", false));
         s.put("endLine", intProp("结束行号（1-based），默认文件末尾", false));
@@ -452,7 +495,11 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtWriteSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
         s.put("content", stringProp("要写入的文本内容", true));
         s.put("encoding", stringProp("文件编码（如 UTF-8/GBK），默认 UTF-8", false));
         Map<String, Object> append = new LinkedHashMap<>();
@@ -464,7 +511,11 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtKeywordLinesSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
         s.put("keyword", stringProp("要搜索的关键词", true));
         s.put("contextLines", intProp("上下文行数（匹配行前后各 N 行），默认 0", false));
         return s;
@@ -472,7 +523,11 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtRegexSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
         s.put("pattern", stringProp("正则表达式", true));
         s.put("groupIndex", intProp("捕获组索引（0=完整匹配），默认 0", false));
         return s;
@@ -480,7 +535,11 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtLineRangeSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
         s.put("startLine", intProp("起始行号（1-based），默认 1", false));
         s.put("endLine", intProp("结束行号（1-based），默认文件末尾", false));
         return s;
@@ -488,7 +547,12 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtSectionSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         s.put("heading", stringProp("Markdown 标题文本（如 \"## 概述\"）", true));
         Map<String, Object> nested = new LinkedHashMap<>();
         nested.put("type", "boolean");
@@ -558,7 +622,12 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtDistinctLinesSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         Map<String, Object> writeBack = new LinkedHashMap<>();
         writeBack.put("type", "boolean");
         writeBack.put("description", "是否将去重结果写回文件");
@@ -568,7 +637,12 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtSortLinesSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         s.put("mode", stringProp("排序模式：lex（字典序）或 num（数字序），默认 lex", false));
         s.put("order", stringProp("排序方向：asc/desc，默认 asc", false));
         Map<String, Object> writeBack = new LinkedHashMap<>();
@@ -580,7 +654,12 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> txtKeywordFreqSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
         s.put("keyword", stringProp("要统计的关键词（多个用逗号分隔）", true));
         return s;
     }
@@ -625,6 +704,169 @@ public class FileToolSeeder implements ApplicationRunner {
         prefixHeaders.put("type", "boolean");
         prefixHeaders.put("description", "是否在每个源文件内容前添加 `# 文件名` 标题，默认 true");
         s.put("prefixHeaders", prefixHeaders);
+        return s;
+    }
+
+    // ========== Excel 工具 Schema 定义 ==========
+
+    private static Map<String, Map<String, Object>> excelReadSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("maxRows", intProp("最大返回行数，默认 100", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelWriteSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        Map<String, Object> headers = new LinkedHashMap<>();
+        headers.put("type", "array");
+        headers.put("description", "列头列表（必填），如 [\"姓名\", \"年龄\", \"部门\"]");
+        headers.put("required", true);
+        s.put("headers", headers);
+        
+        Map<String, Object> rows = new LinkedHashMap<>();
+        rows.put("type", "array");
+        rows.put("description", "数据行列表，如 [[\"张三\", 25, \"研发部\"], [\"李四\", 30, \"销售部\"]]");
+        s.put("rows", rows);
+        
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelFilterSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("column", stringProp("列名（必填）", true));
+        s.put("operator", stringProp("操作符：equals/contains/gt/lt/gte/lte/notEquals，默认 equals", false));
+        s.put("value", stringProp("筛选值（必填）", true));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelSortSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("column", stringProp("排序列名（必填）", true));
+        s.put("order", stringProp("排序方向：asc/desc，默认 asc", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelAggregateSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("groupBy", stringProp("分组列名（必填）", true));
+        s.put("aggColumn", stringProp("聚合列名（必填）", true));
+        s.put("aggType", stringProp("聚合类型：sum/avg/count/min/max，默认 sum", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelPivotSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("rowDimension", stringProp("行维度（必填）", true));
+        s.put("colDimension", stringProp("列维度（必填）", true));
+        s.put("valueColumn", stringProp("值列（必填）", true));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelCalculateSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("newColumn", stringProp("新列名（必填）", true));
+        s.put("formula", stringProp("计算公式，支持引用列名，如 {col1} + {col2} * 1.1", true));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelSelectColumnsSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        
+        Map<String, Object> columns = new LinkedHashMap<>();
+        columns.put("type", "array");
+        columns.put("description", "要选择的列名列表（必填），如 [\"姓名\", \"年龄\"]");
+        columns.put("required", true);
+        s.put("columns", columns);
+        
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelCleanSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("cleanType", stringProp("清洗类型：trim（去除首尾空格）/deduplicate（去重）/removeEmpty（移除空行）", true));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelConvertFormatSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("targetFormat", stringProp("目标格式：xlsx/xls/csv", true));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> excelValidateSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（必填），通过文件 ID 直接查询文件信息");
+        fileId.put("required", true);
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名（可选）", false));
+        
+        Map<String, Object> rules = new LinkedHashMap<>();
+        rules.put("type", "array");
+        rules.put("description", "校验规则列表，如 [{\"column\": \"年龄\", \"rule\": \"min\", \"value\": 18}]");
+        s.put("rules", rules);
+
         return s;
     }
 
