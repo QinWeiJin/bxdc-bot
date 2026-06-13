@@ -79,6 +79,29 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("txt_distinct_lines", "去重行（保留首次出现顺序，可选写回）", txtDistinctLinesSchema());
         seedFileOperate("txt_sort_lines", "排序行（字典序或数字序，升序/降序，可选写回）", txtSortLinesSchema());
         seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
+
+        // ===== MD 扩展操作（5.5 / 模块四 §4）=====
+        seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
+        seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
+        seedFileOperate("md_table", "提取 Markdown GFM 表格（header + rows，含对齐说明符）");
+        seedFileOperate("md_list_items", "提取 Markdown 所有列表项（无序 + 有序 + 缩进）");
+        seedFileOperate("md_tasks", "提取 Markdown 任务清单项（[ ]/[x]）");
+        seedFileOperate("md_emphasis", "提取 Markdown 加粗/斜体/删除线/行内代码（代码块内不解析）");
+        seedFileOperate("md_toc", "生成 Markdown 文档目录（嵌套 outline 树，支持跳级）");
+        seedFileOperate("md_filter_section",
+                "删除或保留 Markdown 文件中指定标题的整节内容，生成新文件（不改原文件）。\n"
+                        + "参数说明（二选一，不可同时使用）：\n"
+                        + "  • remove: 要删除的标题文本数组——这些标题及其下属整节会被移除，其余内容保留。\n"
+                        + "    例：{\"remove\":[\"第二章\"]} 删除 # 第二章 整节\n"
+                        + "    例：{\"remove\":[\"安装详情\",\"使用方式\"]} 删除 ### 安装详情 和 ### 使用方式 两节\n"
+                        + "  • keep: 要保留的标题文本数组——文档只保留这些标题整节，其余内容全部删除。\n"
+                        + "    例：{\"keep\":[\"第三章\"]} 只保留 # 第三章\n"
+                        + "    例：{\"keep\":[\"第一章\",\"第二章\"]} 只保留前两章\n"
+                        + "  • fileRef: 文件名或文件 ID（如 \"report.md\" 或 \"18\"）\n"
+                        + "一节定义为：从该标题行到下一个同级或更高级标题行之前的所有内容。标题匹配区分大小写。",
+                mdFilterSectionSchema());
+        seedFileOperate("md_merge", "多 Markdown 文件拼接合并（frontmatter 冲突可配置，prefixHeaders 可关闭）",
+                mdMergeSchema());
     }
 
     // ========== 整合方案 B：word_ops 单一入口 ==========
@@ -559,6 +582,49 @@ public class FileToolSeeder implements ApplicationRunner {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
         s.put("fileRef", stringProp("文件名或文件 ID", true));
         s.put("keyword", stringProp("要统计的关键词（多个用逗号分隔）", true));
+        return s;
+    }
+
+    // ===== MD 扩展操作 Schema =====
+
+    private static Map<String, Map<String, Object>> mdFilterSectionSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> keep = new LinkedHashMap<>();
+        keep.put("type", "array");
+        keep.put("description",
+                "要保留的标题文本列表。文档将只保留这些标题及其下属内容，其余全部删除。"
+                        + "如 [\"第三章\"] 只保留 # 第三章 下的全部内容。"
+                        + "注意：keep 和 remove 二选一，不要同时传入。");
+        keep.put("items", stringProp("Markdown 标题文本（精确匹配，区分大小写）", true));
+        s.put("keep", keep);
+        Map<String, Object> remove = new LinkedHashMap<>();
+        remove.put("type", "array");
+        remove.put("description",
+                "要删除的标题文本列表。这些标题及其下属内容将从文档中删除，其余内容保留。"
+                        + "如 [\"第二章\"] 删除 # 第二章 下的全部内容。"
+                        + "注意：keep 和 remove 二选一，不要同时传入。");
+        remove.put("items", stringProp("Markdown 标题文本（精确匹配，区分大小写）", true));
+        s.put("remove", remove);
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> mdMergeSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        Map<String, Object> sourceFileIds = new LinkedHashMap<>();
+        sourceFileIds.put("type", "array");
+        sourceFileIds.put("description", "要合并的源文件 ID 列表（至少 2 个）");
+        Map<String, Object> idItem = new LinkedHashMap<>();
+        idItem.put("type", "integer");
+        idItem.put("description", "user_files 表中的文件 ID");
+        sourceFileIds.put("items", idItem);
+        s.put("sourceFileIds", sourceFileIds);
+        s.put("frontmatterConflict", stringProp("多文件有 frontmatter 时的冲突处理策略：error（报错）/ first（保留第一个）/ last（保留最后一个），默认 error", false));
+        Map<String, Object> prefixHeaders = new LinkedHashMap<>();
+        prefixHeaders.put("type", "boolean");
+        prefixHeaders.put("description", "是否在每个源文件内容前添加 `# 文件名` 标题，默认 true");
+        s.put("prefixHeaders", prefixHeaders);
         return s;
     }
 
