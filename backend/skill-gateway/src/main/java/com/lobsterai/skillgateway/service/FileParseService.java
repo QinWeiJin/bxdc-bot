@@ -103,6 +103,7 @@ public class FileParseService {
         }
 
         // 3. 填充基础字段
+        result.setFileId(userFile.getId());
         result.setOriginalFileName(userFile.getOriginalFileName());
         result.setFileSize(userFile.getFileSize());
 
@@ -133,6 +134,7 @@ public class FileParseService {
         byte[] fileBytes = baos.toByteArray();
 
         FileParseResult result = parserRouter.parse(fileBytes, userFile.getOriginalFileName());
+        result.setFileId(userFile.getId());
         result.setOriginalFileName(userFile.getOriginalFileName());
         result.setFileSize(userFile.getFileSize());
         if (userFile.getDownloadUrl() != null) {

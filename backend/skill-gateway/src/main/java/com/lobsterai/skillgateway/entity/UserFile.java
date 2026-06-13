@@ -57,6 +57,10 @@ public class UserFile {
     @TableField(value = "upload_time", fill = FieldFill.INSERT)
     private LocalDateTime uploadTime;
 
+    /** 源文件 ID（用于临时文件关联源文件） */
+    @TableField("source_file_id")
+    private Long sourceFileId;
+
     // ========== Getters & Setters ==========
 
     public Long getId() {
@@ -137,5 +141,13 @@ public class UserFile {
 
     public void setUploadTime(LocalDateTime uploadTime) {
         this.uploadTime = uploadTime;
+    }
+
+    public Long getSourceFileId() {
+        return sourceFileId;
+    }
+
+    public void setSourceFileId(Long sourceFileId) {
+        this.sourceFileId = sourceFileId;
     }
 }

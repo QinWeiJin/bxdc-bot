@@ -15,6 +15,9 @@ public class FileParseResult {
     /** 文件类型：word / excel / csv / txt / md / py / pdf */
     private String fileType;
 
+    /** 文件 ID（user_files.id） */
+    private Long fileId;
+
     /** 文件下载 URL */
     private String downloadUrl;
 
@@ -241,6 +244,8 @@ public class FileParseResult {
 
     public String getFileType() { return fileType; }
     public void setFileType(String fileType) { this.fileType = fileType; }
+    public Long getFileId() { return fileId; }
+    public void setFileId(Long fileId) { this.fileId = fileId; }
     public String getDownloadUrl() { return downloadUrl; }
     public void setDownloadUrl(String downloadUrl) { this.downloadUrl = downloadUrl; }
     public String getOriginalFileName() { return originalFileName; }
