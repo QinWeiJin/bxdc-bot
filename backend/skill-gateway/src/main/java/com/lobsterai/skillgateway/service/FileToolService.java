@@ -208,9 +208,11 @@ public class FileToolService {
                     }
                 } else if (fileRef != null && !fileRef.trim().isEmpty()) {
                     userFile = fileRefResolver.resolve(userId, fileRef);
-                } else {
+                } else if (!isOptionalFileIdTool(toolName)) {
+                    // 非 OptionalFileId 工具必须提供 fileId 或 fileRef
                     return FileToolResponse.error("fileId or fileRef is required for tool: " + toolName);
                 }
+                // OptionalFileId 工具允许 fileId 和 fileRef 都为空，userFile 保持 null
             }
             // 从 arguments 提取工具特定 params（排除 fileId 和 fileRef）
             Map<String, Object> toolParams = extractToolParams(args);
@@ -330,6 +332,14 @@ public class FileToolService {
 
     private boolean isManagementTool(String toolName) {
         return "file_list".equals(toolName) || "file_clear_all".equals(toolName);
+    }
+
+    /**
+     * 判断工具是否允许不传 fileId（fileId 可选）。
+     * 这些工具在没有 fileId 时会创建新文件。
+     */
+    private boolean isOptionalFileIdTool(String toolName) {
+        return "excel_write".equals(toolName);
     }
 
     /**

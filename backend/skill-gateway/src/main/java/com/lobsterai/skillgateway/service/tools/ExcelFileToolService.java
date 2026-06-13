@@ -318,39 +318,77 @@ public class ExcelFileToolService {
             Sheet sheet = wb.createSheet("Sheet1");
             writeDataToSheet(sheet, headers, rows);
 
-            // 生成临时文件名并保存
-            String originalFileName = userFile != null ? userFile.getOriginalFileName() : "new.xlsx";
-            String tempFileName = getTempFileName(originalFileName);
-            String ftpPath = saveWorkbook(wb, userId, tempFileName);
+            // 将工作簿写入内存，获取文件大小
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            wb.write(baos);
+            byte[] fileBytes = baos.toByteArray();
+            long fileSize = fileBytes.length;
             wb.close();
 
-            // 生成 fileId 和 downloadUrl（返回当前文件的 ID）
-            Long resultFileId = null;
-            String downloadUrl = null;
+            // 生成文件名
+            String fileName;
+            Long resultFileId;
+            String downloadUrl;
+            String ftpPath;
+            
             if (userFile != null) {
+                // 有 fileId：在临时文件基础上操作
+                fileName = getTempFileName(userFile.getOriginalFileName());
+                ftpPath = saveWorkbookWithBytes(userId, userFile.getFileName(), fileBytes);
+                
                 resultFileId = userFile.getId();
-                downloadUrl = baseUrl + "/api/files/download/" + userFile.getId();
+                downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+            } else {
+                // 无 fileId：创建新文件，插入 userfile 表
+                // 生成显示文件名和 UUID 存储文件名
+                String displayFileName = "new_" + System.currentTimeMillis() + ".xlsx";
+                String storageFileName = FtpFileService.generateStorageFileName(displayFileName);
+                
+                // 使用 UUID 存储文件名上传到 FTP
+                ftpPath = ftpFileService.uploadFileWithFileName(userId, storageFileName, new ByteArrayInputStream(fileBytes));
+                
+                // 插入 userfile 表
+                UserFile newUserFile = new UserFile();
+                newUserFile.setUserId(userId);
+                newUserFile.setOriginalFileName(displayFileName); // 显示文件名
+                newUserFile.setFileName(storageFileName); // UUID 存储文件名
+                newUserFile.setFileType("xlsx");
+                newUserFile.setFileSize(fileSize);
+                newUserFile.setFtpPath(ftpPath);
+                newUserFile.setSourceFileId(null); // 新文件，不是临时文件
+                newUserFile.setUploadTime(LocalDateTime.now()); // 设置上传时间
+                userFileMapper.insert(newUserFile);
+                
+                resultFileId = newUserFile.getId();
+                downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+                fileName = displayFileName; // 返回显示文件名
+                
+                log.info("Created new file without fileId: userId={}, displayFileName={}, storageFileName={}, fileId={}, fileSize={}, ftpPath={}", 
+                        userId, displayFileName, storageFileName, resultFileId, fileSize, ftpPath);
             }
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Excel file written successfully");
-            result.put("fileName", tempFileName);
+            result.put("fileName", fileName);
+            result.put("fileId", resultFileId);
+            result.put("downloadUrl", downloadUrl);
             result.put("filePath", ftpPath);
             result.put("totalRows", rows != null ? rows.size() : 0);
             result.put("totalCols", headers.size());
-            if (resultFileId != null) {
-                result.put("fileId", resultFileId);
-            }
-            if (downloadUrl != null) {
-                result.put("downloadUrl", downloadUrl);
-            }
 
-            return FileToolResponse.ok(result, tempFileName);
+            return FileToolResponse.ok(result, fileName);
         } catch (Exception e) {
             log.error("excel_write failed", e);
             return FileToolResponse.error("excel_write failed: " + e.getMessage(), 
                     userFile != null ? userFile.getOriginalFileName() : "new.xlsx");
         }
+    }
+
+    /**
+     * 使用字节数组保存工作簿到 FTP（覆盖写入）。
+     */
+    private String saveWorkbookWithBytes(String userId, String fileName, byte[] fileBytes) throws IOException {
+        return ftpFileService.uploadFileWithFileName(userId, fileName, new ByteArrayInputStream(fileBytes));
     }
 
     /**
@@ -397,6 +435,29 @@ public class ExcelFileToolService {
         }
         if (value instanceof List) {
             return (List<List<Object>>) value;
+        }
+        return null;
+    }
+
+    /**
+     * 安全解析 Map List 参数（二维数组），支持 List 或 JSON String 类型。
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseMapList(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String) {
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                return mapper.readValue((String) value, new TypeReference<List<Map<String, Object>>>() {});
+            } catch (Exception e) {
+                log.warn("Failed to parse JSON map list: {}", value, e);
+                return null;
+            }
+        }
+        if (value instanceof List) {
+            return (List<Map<String, Object>>) value;
         }
         return null;
     }
@@ -929,7 +990,8 @@ public class ExcelFileToolService {
     @SuppressWarnings("unchecked")
     public FileToolResponse excelSelectColumns(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
-        List<String> columns = (List<String>) params.get("columns");
+        // 安全解析 columns 参数（可能是 List 或 JSON String）
+        List<String> columns = parseStringList(params.get("columns"));
 
         if (columns == null || columns.isEmpty()) {
             return FileToolResponse.error("params.columns is required", userFile.getOriginalFileName());
@@ -1246,7 +1308,8 @@ public class ExcelFileToolService {
     @SuppressWarnings("unchecked")
     public FileToolResponse excelValidate(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
-        List<Map<String, Object>> rules = (List<Map<String, Object>>) params.get("rules");
+        // 安全解析 rules 参数（可能是 List 或 JSON String）
+        List<Map<String, Object>> rules = parseMapList(params.get("rules"));
 
         try {
             byte[] fileBytes = downloadBytes(userFile);
@@ -1257,37 +1320,43 @@ public class ExcelFileToolService {
             List<String> headers = new ArrayList<String>();
             List<Map<String, Object>> errors = new ArrayList<Map<String, Object>>();
             
+            // 第一步：解析表头，建立列名到索引的映射
             Map<String, Integer> headerIndices = new LinkedHashMap<String, Integer>();
+            Row headerRow = sheet.getRow(0);
+            if (headerRow != null) {
+                for (int j = 0; j < headerRow.getPhysicalNumberOfCells(); j++) {
+                    Cell cell = headerRow.getCell(j);
+                    String header = getCellStringValue(cell);
+                    headers.add(header);
+                    headerIndices.put(header, j);
+                }
+            }
 
+            // 第二步：遍历数据行，只检查有规则的列
             int rowCount = sheet.getPhysicalNumberOfRows();
-            for (int i = 0; i < rowCount; i++) {
+            for (int i = 1; i < rowCount; i++) { // 从第2行开始（第1行是表头）
                 Row row = sheet.getRow(i);
                 if (row == null) continue;
 
                 int cellCount = row.getPhysicalNumberOfCells();
-                for (int j = 0; j < cellCount; j++) {
-                    Cell cell = row.getCell(j);
-                    if (i == 0) {
-                        String header = getCellStringValue(cell);
-                        headers.add(header);
-                        headerIndices.put(header, j);
-                    } else if (rules != null) {
-                        for (Map<String, Object> rule : rules) {
-                            String column = (String) rule.get("column");
-                            String ruleType = (String) rule.get("rule");
-                            Object ruleValue = rule.get("value");
-                            
-                            Integer colIdx = headerIndices.get(column);
-                            if (colIdx != null && colIdx < cellCount) {
-                                Object cellValue = getCellValue(row.getCell(colIdx));
-                                String error = validateCell(cellValue, ruleType, ruleValue, column, i + 1);
-                                if (error != null) {
-                                    Map<String, Object> errorInfo = new LinkedHashMap<String, Object>();
-                                    errorInfo.put("row", i + 1);
-                                    errorInfo.put("column", column);
-                                    errorInfo.put("error", error);
-                                    errors.add(errorInfo);
-                                }
+                
+                // 遍历每个规则
+                if (rules != null) {
+                    for (Map<String, Object> rule : rules) {
+                        String column = (String) rule.get("column");
+                        String ruleType = (String) rule.get("rule");
+                        Object ruleValue = rule.get("value");
+                        
+                        Integer colIdx = headerIndices.get(column);
+                        if (colIdx != null && colIdx < cellCount) {
+                            Object cellValue = getCellValue(row.getCell(colIdx));
+                            String error = validateCell(cellValue, ruleType, ruleValue, column, i + 1);
+                            if (error != null) {
+                                Map<String, Object> errorInfo = new LinkedHashMap<String, Object>();
+                                errorInfo.put("row", i + 1);
+                                errorInfo.put("column", column);
+                                errorInfo.put("error", error);
+                                errors.add(errorInfo);
                             }
                         }
                     }
@@ -1693,8 +1762,11 @@ public class ExcelFileToolService {
     }
 
     private String validateCell(Object value, String ruleType, Object ruleValue, String column, int rowNum) {
-        if (value == null || value.toString().trim().isEmpty()) {
-            if ("notEmpty".equalsIgnoreCase(ruleType)) {
+        boolean isEmpty = value == null || value.toString().trim().isEmpty();
+        
+        // required 和 notEmpty 规则：空值时返回错误
+        if (isEmpty) {
+            if ("required".equalsIgnoreCase(ruleType) || "notEmpty".equalsIgnoreCase(ruleType)) {
                 return "Row " + rowNum + ": " + column + " cannot be empty";
             }
             return null;
