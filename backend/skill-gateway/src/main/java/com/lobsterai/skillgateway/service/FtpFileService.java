@@ -93,6 +93,41 @@ public class FtpFileService {
     }
 
     /**
+     * 上传文件到用户 FTP 目录，使用指定的存储文件名（覆盖写入）。
+     * <p>
+     * 用于临时文件操作时覆盖写入已存在的文件，节省存储空间。
+     * </p>
+     *
+     * @param userId      AAM 用户 ID
+     * @param fileName    存储文件名（UUID 文件名，如 a1b2c3d4.xlsx）
+     * @param inputStream 文件输入流
+     * @return 上传后的 FTP 完整路径
+     * @throws IOException FTP 操作失败
+     */
+    public String uploadFileWithFileName(String userId, String fileName, InputStream inputStream) throws IOException {
+        FTPClient ftp = connect();
+        try {
+            String userPath = ftpConfig.buildUserPath(userId);
+            if (!directoryExists(ftp, userPath)) {
+                makeDirectories(ftp, userPath);
+            }
+            if (!ftp.changeWorkingDirectory(userPath)) {
+                throw new IOException("Cannot enter user directory: " + userPath);
+            }
+            ftp.setFileType(FTP.BINARY_FILE_TYPE);
+            // 使用指定的文件名上传（覆盖已存在的文件）
+            if (!ftp.storeFile(fileName, inputStream)) {
+                throw new IOException("FTP storeFile failed: " + fileName);
+            }
+            String fullPath = userPath + "/" + fileName;
+            log.info("File overwritten: {} (user={}, fileName={})", fullPath, userId, fileName);
+            return fullPath;
+        } finally {
+            disconnect(ftp);
+        }
+    }
+
+    /**
      * 下载文件内容到内存字节流。
      *
      * @param userId   AAM 用户 ID
