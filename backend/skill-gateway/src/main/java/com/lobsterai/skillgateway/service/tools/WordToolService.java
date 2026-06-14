@@ -9,6 +9,7 @@ import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import com.lobsterai.skillgateway.service.parser.FileParserRouter;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Paragraph;
 import org.apache.poi.hwpf.usermodel.Range;
@@ -183,19 +184,29 @@ public class WordToolService {
         try {
             byte[] bytes = buildDocxBytes(title, content);
             // 写新文件（原文件保持不变），返回新文件 id + 下载链接
-            String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
+            String originalFileName;
+            if (userFile != null) {
+                originalFileName = userFile.getOriginalFileName();
+            } else if (title != null && !title.isEmpty()) {
+                originalFileName = title + ".docx";
+            } else {
+                originalFileName = "untitled.docx";
+            }
+            String fullPath = ftpFileService.uploadFile(userId, originalFileName,
                     new ByteArrayInputStream(bytes));
             String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
 
             UserFile newFile = new UserFile();
             newFile.setUserId(userId);
-            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setOriginalFileName(originalFileName);
             newFile.setFileName(actualFileName);
             newFile.setFileSize((long) bytes.length);
             newFile.setFileType("docx");
             newFile.setFtpPath(fullPath);
             newFile.setUploadTime(java.time.LocalDateTime.now());
-            newFile.setSourceFileId(userFile.getId());
+            if (userFile != null) {
+                newFile.setSourceFileId(userFile.getId());
+            }
             userFileMapper.insert(newFile);
 
             // 写入绝对路径 downloadUrl 到 DB
@@ -205,17 +216,17 @@ public class WordToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Word document created");
-            result.put("originalFileId", userFile.getId());
+            result.put("originalFileId", userFile != null ? userFile.getId() : null);
             result.put("newFileId", newFile.getId());
             result.put("newFileName", actualFileName);
-            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("originalFileName", originalFileName);
             result.put("downloadUrl", downloadUrl);
             result.put("size", bytes.length);
             result.put("paragraphs", content.split("\n", -1).length);
-            return FileToolResponse.ok(result, userFile.getOriginalFileName());
+            return FileToolResponse.ok(result, originalFileName);
         } catch (Exception e) {
-            log.error("word_write failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("word_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+            log.error("word_write failed", e);
+            return FileToolResponse.error("word_write failed: " + e.getMessage(), null);
         }
     }
 
@@ -443,7 +454,21 @@ public class WordToolService {
         ensureWordFile(userFile);
         Object valuesObj = params != null ? params.get("values") : null;
         if (!(valuesObj instanceof Map)) {
-            return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+            // values 可能以 JSON 字符串传入（agent-core 的 buildSkillZodSchema 未支持 object 类型，
+            // 导致 LLM 将 values 序列化为字符串传递），在此尝试解析 JSON 字符串
+            if (valuesObj instanceof String) {
+                try {
+                    ObjectMapper mapper = new ObjectMapper();
+                    valuesObj = mapper.readValue((String) valuesObj, Map.class);
+                } catch (Exception e) {
+                    return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+                }
+                if (!(valuesObj instanceof Map)) {
+                    return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+                }
+            } else {
+                return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+            }
         }
         Map<String, Object> values = (Map<String, Object>) valuesObj;
         boolean fillMissing = readBoolParam(params, "fillMissingWithEmpty", true);
@@ -745,13 +770,17 @@ public class WordToolService {
                 org.apache.poi.xwpf.usermodel.XWPFRun run = titlePara.createRun();
                 run.setBold(true);
                 run.setFontSize(18);
+                run.setFontFamily("SimSun");
                 run.setText(title);
             }
             if (content != null && !content.isEmpty()) {
                 String[] lines = content.split("\n", -1);
                 for (String line : lines) {
                     XWPFParagraph p = doc.createParagraph();
-                    p.createRun().setText(line);
+                    org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+                    r.setFontFamily("SimSun");
+                    r.setFontSize(12);
+                    r.setText(line);
                 }
             }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -828,12 +857,11 @@ public class WordToolService {
         for (int i = runCount - 1; i >= 0; i--) {
             p.removeRun(i);
         }
-        // 写入新 run
-        if (runCount > 0) {
-            p.createRun().setText(replaced);
-        } else {
-            p.createRun().setText(replaced);
-        }
+        // 写入新 run（保留 SimSun 字体以支持中文）
+        org.apache.poi.xwpf.usermodel.XWPFRun newRun = p.createRun();
+        newRun.setFontFamily("SimSun");
+        newRun.setFontSize(12);
+        newRun.setText(replaced);
         return hitCount;
     }
 
