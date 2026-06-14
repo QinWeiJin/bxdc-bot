@@ -192,6 +192,7 @@ public class FileToolService {
         Map<String, Object> args = arguments != null ? arguments : Collections.<String, Object>emptyMap();
         String fileRef = args.get("fileRef") instanceof String ? (String) args.get("fileRef") : null;
         Long fileId = args.get("fileId") instanceof Number ? ((Number) args.get("fileId")).longValue() : null;
+        String fileName = args.get("fileName") instanceof String ? (String) args.get("fileName") : null;
 
         try {
             UserFile userFile = null;
@@ -208,13 +209,15 @@ public class FileToolService {
                     }
                 } else if (fileRef != null && !fileRef.trim().isEmpty()) {
                     userFile = fileRefResolver.resolve(userId, fileRef);
+                } else if (fileName != null && !fileName.trim().isEmpty()) {
+                    userFile = fileRefResolver.resolve(userId, fileName);
                 } else if (!isOptionalFileIdTool(toolName)) {
                     // 非 OptionalFileId 工具必须提供 fileId 或 fileRef
                     return FileToolResponse.error("fileId or fileRef is required for tool: " + toolName);
                 }
                 // OptionalFileId 工具允许 fileId 和 fileRef 都为空，userFile 保持 null
             }
-            // 从 arguments 提取工具特定 params（排除 fileId 和 fileRef）
+            // 从 arguments 提取工具特定 params（排除 fileId、fileRef、fileName）
             Map<String, Object> toolParams = extractToolParams(args);
             return handler.handle(userFile, toolParams, userId);
         } catch (IllegalArgumentException e) {
@@ -350,6 +353,7 @@ public class FileToolService {
         for (Map.Entry<String, Object> entry : arguments.entrySet()) {
             if ("fileId".equals(entry.getKey())) continue;
             if ("fileRef".equals(entry.getKey())) continue;
+            if ("fileName".equals(entry.getKey())) continue;
             params.put(entry.getKey(), entry.getValue());
         }
         return params;

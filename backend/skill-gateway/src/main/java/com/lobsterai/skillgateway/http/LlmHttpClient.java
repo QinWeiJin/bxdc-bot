@@ -8,13 +8,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,23 +27,20 @@ import java.util.Map;
  * 用法：gateway 内部 AsyncTaskChatReplyService 调用，调一次 LLM 拿回纯文本总结。
  * 不做流式（fire-and-forget 场景，agent-core 也不需要流）。
  *
- * 约束（AGENTS.md 5.1）：尽量不新增第三方包。用 JDK 11+ HttpClient（Spring Boot 2.7 自带）。
+ * 约束（AGENTS.md 5.1）：尽量不新增第三方包。用 JDK 1.8 原生 HttpURLConnection。
  */
 @Component
 public class LlmHttpClient {
 
     private static final Logger log = LoggerFactory.getLogger(LlmHttpClient.class);
 
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
+    private static final int CONNECT_TIMEOUT = 5000;
+    private static final int READ_TIMEOUT = 60000;
 
-    private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
     @Autowired
     public LlmHttpClient(ObjectMapper objectMapper) {
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .build();
         this.objectMapper = objectMapper;
     }
 
@@ -68,8 +65,8 @@ public class LlmHttpClient {
         }
 
         // 构造 URL
-        String url = apiBase.endsWith("/") ? apiBase.substring(0, apiBase.length() - 1) : apiBase;
-        url = url + "/chat/completions";
+        String urlStr = apiBase.endsWith("/") ? apiBase.substring(0, apiBase.length() - 1) : apiBase;
+        urlStr = urlStr + "/chat/completions";
 
         // 构造 request body
         Map<String, Object> body = new HashMap<>();
@@ -84,34 +81,32 @@ public class LlmHttpClient {
             throw new LlmHttpException("Failed to serialize request body: " + e.getMessage());
         }
 
-        HttpRequest request;
+        HttpURLConnection conn = null;
         try {
-            request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .timeout(DEFAULT_TIMEOUT)
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(bodyJson, StandardCharsets.UTF_8))
-                    .build();
-        } catch (Exception e) {
-            throw new LlmHttpException("Failed to build request: " + e.getMessage());
-        }
+            URL url = new URL(urlStr);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(CONNECT_TIMEOUT);
+            conn.setReadTimeout(READ_TIMEOUT);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Authorization", "Bearer " + apiKey);
 
-        HttpResponse<String> response;
-        try {
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            throw new LlmHttpException("HTTP send failed: " + e.getMessage());
-        }
+            byte[] bodyBytes = bodyJson.getBytes(StandardCharsets.UTF_8);
+            conn.setRequestProperty("Content-Length", String.valueOf(bodyBytes.length));
 
-        int status = response.statusCode();
-        String responseBody = response.body();
+            OutputStream os = conn.getOutputStream();
+            os.write(bodyBytes);
+            os.flush();
+            os.close();
 
-        if (status / 100 != 2) {
-            throw new LlmHttpException("LLM returned HTTP " + status + ": " + truncate(responseBody, 500));
-        }
+            int status = conn.getResponseCode();
+            String responseBody = readResponse(conn, status);
 
-        try {
+            if (status / 100 != 2) {
+                throw new LlmHttpException("LLM returned HTTP " + status + ": " + truncate(responseBody, 500));
+            }
+
             ChatCompletionResponse parsed = objectMapper.readValue(responseBody, ChatCompletionResponse.class);
             if (parsed.choices == null || parsed.choices.isEmpty()) {
                 throw new LlmHttpException("LLM returned no choices");
@@ -124,8 +119,28 @@ public class LlmHttpClient {
         } catch (LlmHttpException e) {
             throw e;
         } catch (Exception e) {
-            throw new LlmHttpException("Failed to parse LLM response: " + e.getMessage() + " | body: " + truncate(responseBody, 500));
+            throw new LlmHttpException("HTTP request failed: " + e.getMessage());
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
+    }
+
+    private String readResponse(HttpURLConnection conn, int status) throws IOException {
+        BufferedReader reader;
+        if (status / 100 == 2) {
+            reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+        } else {
+            reader = new BufferedReader(new InputStreamReader(conn.getErrorStream(), StandardCharsets.UTF_8));
+        }
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            sb.append(line);
+        }
+        reader.close();
+        return sb.toString();
     }
 
     private static String truncate(String s, int max) {
