@@ -857,9 +857,25 @@ export async function loadGatewayExtendedTools(
                 : undefined);
             const executeSessionId = sessionIdCandidate;
             const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId);
-            const parameters = execInput && typeof execInput === "object" && !Array.isArray(execInput)
-              ? execInput
+            // Strip the `{payload: ...}` wrapper that extendedPassthroughSkillToolSchema
+            // (ensureObjectType) injects for DeepSeek JSON-Schema compatibility, so the
+            // Gateway never sees "payload" as a real parameter name. OPENCLAW path
+            // unwraps `input` similarly above; CONFIG (passthrough) unwraps `payload` here.
+            // `payload` is reserved as a wrapper key — skill parameter contracts must not
+            // declare a parameter named "payload" (use schemaProperties if you need it).
+            let parameters: Record<string, unknown> = execInput && typeof execInput === "object" && !Array.isArray(execInput)
+              ? (execInput as Record<string, unknown>)
               : {};
+            if (
+              parameters
+              && Object.keys(parameters).length === 1
+              && "payload" in parameters
+              && parameters.payload
+              && typeof parameters.payload === "object"
+              && !Array.isArray(parameters.payload)
+            ) {
+              parameters = parameters.payload as Record<string, unknown>;
+            }
 
             const executePayload = { skillId: currentSkill.id, parameters };
 
