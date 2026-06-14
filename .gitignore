@@ -69,3 +69,15 @@ logs/
 
 # Docs (root-level design / hand-off docs, not in git)
 docs/
+
+# llm-context-window-summarization change 跳过的测试代码（仅本地/CI 验证，不进 git）
+backend/agent-core/test/gateway-compact-client.test.cjs
+backend/agent-core/scripts/e2e-compact.sh
+backend/skill-gateway/src/test/java/com/lobsterai/skillgateway/service/ConversationCompactServiceTest.java
+backend/skill-gateway/src/test/java/com/lobsterai/skillgateway/controller/ConversationControllerCompactTest.java
+
+# 所有 test 文件夹整体不进 git（Java src/test/ + agent-core test/ + 其他子项目 test/）
+**/test/
+
+# 所有 dist.zip 打包文件不进 git
+**/dist.zip
