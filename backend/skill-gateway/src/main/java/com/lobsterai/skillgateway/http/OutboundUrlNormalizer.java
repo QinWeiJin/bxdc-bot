@@ -66,17 +66,35 @@ public final class OutboundUrlNormalizer {
     }
 
     private static void appendPath(UriComponentsBuilder b, UriComponents in) {
-        List<String> segments = in.getPathSegments();
-        if (segments.isEmpty()) {
-            String path = in.getPath();
-            if (path != null && !path.isEmpty() && !"/".equals(path)) {
-                b.path(path);
-            }
+        // Build the path string manually instead of using b.pathSegment(...) per segment.
+        // UriComponents.getPathSegments() drops a trailing empty segment, so a URL like
+        // http://host/foo/  would lose its trailing slash when rebuilt segment-by-segment,
+        // which breaks mock servers / APIs that route on the trailing slash.
+        // We rebuild the path from peeled segments, then re-append the trailing slash
+        // (if the original had one) before handing it to b.path(String).
+        String originalPath = in.getPath();
+        if (originalPath == null || originalPath.isEmpty()) {
             return;
         }
-        for (String seg : segments) {
-            b.pathSegment(peelEncoded(seg));
+        if ("/".equals(originalPath)) {
+            b.path("/");
+            return;
         }
+        boolean trailingSlash = originalPath.endsWith("/");
+        List<String> segments = in.getPathSegments();
+        StringBuilder path = new StringBuilder();
+        boolean first = true;
+        for (String seg : segments) {
+            if (!first) {
+                path.append('/');
+            }
+            path.append(peelEncoded(seg));
+            first = false;
+        }
+        if (trailingSlash && !segments.isEmpty()) {
+            path.append('/');
+        }
+        b.path("/" + path.toString());
     }
 
     /**
