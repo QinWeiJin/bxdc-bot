@@ -25,11 +25,26 @@ public interface UserFileMapper extends BaseMapper<UserFile> {
 
     /**
      * 按用户 ID + 原始文件名查文件（用于重复校验）。
+     * 多文件同名时返回第一个（按上传时间倒序），不抛异常。
      */
     default Optional<UserFile> findByUserIdAndOriginalFileName(String userId, String originalFileName) {
-        return Optional.ofNullable(selectOne(new LambdaQueryWrapper<UserFile>()
+        List<UserFile> list = selectList(new LambdaQueryWrapper<UserFile>()
                 .eq(UserFile::getUserId, userId)
-                .eq(UserFile::getOriginalFileName, originalFileName)));
+                .eq(UserFile::getOriginalFileName, originalFileName)
+                .orderByDesc(UserFile::getUploadTime)
+                .last("LIMIT 1"));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
+     * 按用户 ID + 原始文件名查文件（支持多文件同名时取 limit 条，按上传时间倒序）。
+     */
+    default List<UserFile> findByUserIdAndFileNameLimit(String userId, String originalFileName, int limit) {
+        return selectList(new LambdaQueryWrapper<UserFile>()
+                .eq(UserFile::getUserId, userId)
+                .eq(UserFile::getOriginalFileName, originalFileName)
+                .orderByDesc(UserFile::getUploadTime)
+                .last("LIMIT " + limit));
     }
 
     /**

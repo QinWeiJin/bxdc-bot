@@ -199,7 +199,7 @@ public class ConversationController {
             log.debug("[ConversationController.compact] INTERNAL_API_TOKEN not set, allowing (dev mode)");
         } else if (internalToken == null || !expected.equals(internalToken)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "invalid_internal_token"));
+                    .body(Collections.singletonMap("error", "invalid_internal_token"));
         }
 
         String userId = body.get("userId") instanceof String ? (String) body.get("userId") : null;
