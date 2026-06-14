@@ -329,6 +329,25 @@ public class FileManageService {
      */
     public FileToolResponse fileDetail(UserFile userFile, Map<String, Object> params, String userId) {
         try {
+            // 当 userFile 为 null 时（通过 skill 入口直接调用，未经过 fileId/fileRef 解析），
+            // 尝试从 params 中的 fileName 或 fileRef 查找文件
+            if (userFile == null) {
+                String fileName = readStringParam(params, "fileName", "");
+                if (fileName.isEmpty()) {
+                    fileName = readStringParam(params, "fileRef", "");
+                }
+                if (!fileName.isEmpty()) {
+                    // 多文件同名时取最新上传的一个
+                    List<UserFile> candidates = userFileMapper.findByUserIdAndFileNameLimit(userId, fileName, 1);
+                    if (candidates != null && !candidates.isEmpty()) {
+                        userFile = candidates.get(0);
+                    } else {
+                        return FileToolResponse.error("File not found by name: '" + fileName + "'. Use 'file_list' to see available files.", fileName);
+                    }
+                } else {
+                    return FileToolResponse.error("fileId, fileName, or fileRef is required for file_detail");
+                }
+            }
             boolean includeParse = readBoolParam(params, "includeParseResult", true);
             int previewChars = readIntParam(params, "previewChars", 500);
 

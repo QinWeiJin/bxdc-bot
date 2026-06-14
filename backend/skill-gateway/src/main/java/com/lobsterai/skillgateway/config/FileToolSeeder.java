@@ -58,8 +58,8 @@ public class FileToolSeeder implements ApplicationRunner {
                 fileDeleteSchema());
         seedFileManage("file_clear_all", "清空当前用户的所有文件。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
                 confirmedOnlySchema());
-        seedFileManage("file_detail", "查看文件详情（名称、大小、类型、上传时间、downloadUrl、parsedSummary 反序列化结果）",
-                fileRefSchema());
+        seedFileManage("file_detail", "查看文件详情（名称、大小、类型、上传时间、downloadUrl、parsedSummary 反序列化结果）。可通过 fileId（数字）或 fileName（原始文件名）指定目标文件",
+                fileDetailSchema());
 
         // ===== Word 操作（5.3）=====
         // 回退方案 B：恢复 6 个细粒度 word_* 工具，删除 word_ops 整合行。
@@ -76,8 +76,8 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
         seedFileOperate("txt_section", "提取 Markdown 标题章节（支持嵌套控制）", txtSectionSchema());
         seedFileOperate("txt_stats", "统计字符数/词数/行数/字节数");
-        seedFileOperate("txt_distinct_lines", "【首选】对 TXT 文件去重行。用户说'去除重复行'/'去重'/'distinct'/'dedup' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
-        seedFileOperate("txt_sort_lines", "【首选】对 TXT 文件排序行。用户说'排序'/'sort' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
+        seedFileOperate("txt_distinct_lines", "对 TXT 文件去重行。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
+        seedFileOperate("txt_sort_lines", "对 TXT 文件排序行。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
         seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
 
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
@@ -212,14 +212,14 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "【首选】创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。用户说'创建word'/'写word'/'new word' 时，**直接调用本工具**，不要用 skill_generator。生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 downloadUrl。",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
                 keywordSearchSchema());
-        seedFileOperate("word_replace_text", "【首选】替换 Word 文档中的文本（支持全部替换或仅替换第一个）。用户说'替换'/'replace'/'把...改成...' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）。原文件保持不变，生成新文件并返回 downloadUrl。",
                 replaceTextSchema());
-        seedFileOperate("word_template_fill", "【首选】用 values 填充 Word 文档中的 {{placeholder}} 占位符。用户说'填模板'/'template fill' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符。原文件保持不变，生成新文件并返回 downloadUrl。",
                 templateFillSchema());
     }
 
@@ -416,6 +416,23 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选，当 fileId 无法获取时使用）", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> fileDetailSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过 file_list 获取到的文件 ID");
+        s.put("fileId", fileId);
+        Map<String, Object> fileName = new LinkedHashMap<>();
+        fileName.put("type", "string");
+        fileName.put("description", "原始文件名（如 \"report.docx\"），当不知道 fileId 时使用。优先使用 fileId");
+        s.put("fileName", fileName);
+        Map<String, Object> fileRef = new LinkedHashMap<>();
+        fileRef.put("type", "string");
+        fileRef.put("description", "文件名引用（与 fileName 等价，择一使用）");
+        s.put("fileRef", fileRef);
         return s;
     }
 
