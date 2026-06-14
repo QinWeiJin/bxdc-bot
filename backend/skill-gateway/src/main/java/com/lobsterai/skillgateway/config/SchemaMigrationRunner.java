@@ -45,6 +45,7 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateAsyncTasks(conn);
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
+            migrateConversationMessageSummaries(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -300,6 +301,47 @@ public class SchemaMigrationRunner implements InitializingBean {
             log.info("[SchemaMigration] ✅ Added index {} on {}", indexName, table);
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to add index {} on {}: {}", indexName, table, e.getMessage());
+        }
+    }
+
+    /**
+     * llm-context-window-summarization change 配套 schema 迁移。
+     *
+     * 任务：新增 conversation_message_summaries 表，存"对话历史 LLM 摘要"
+     * （按 conversation_id + covers_from_msg_id + covers_to_msg_id 唯一键缓存）。
+     *
+     * 不在 conversation_messages 表上加列，避免对现有热路径造成影响。
+     */
+    void migrateConversationMessageSummaries(Connection conn) {
+        String table = "conversation_message_summaries";
+        if (tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} already exists, skip", table);
+            return;
+        }
+
+        String createSql = "CREATE TABLE " + table + " (\n" +
+                "  id BIGINT PRIMARY KEY AUTO_INCREMENT,\n" +
+                "  conversation_id VARCHAR(64) NOT NULL,\n" +
+                "  covers_from_msg_id BIGINT NOT NULL,\n" +
+                "  covers_to_msg_id BIGINT NOT NULL,\n" +
+                "  summary_text MEDIUMTEXT NOT NULL,\n" +
+                "  model VARCHAR(64) NOT NULL,\n" +
+                "  input_token_count INT,\n" +
+                "  output_token_count INT,\n" +
+                "  created_at DATETIME(3) NOT NULL,\n" +
+                "  updated_at DATETIME(3) NOT NULL,\n" +
+                "  UNIQUE KEY uk_conv_range (conversation_id, covers_from_msg_id, covers_to_msg_id),\n" +
+                "  KEY idx_conv_created (conversation_id, created_at),\n" +
+                "  CONSTRAINT fk_summaries_conv FOREIGN KEY (conversation_id)\n" +
+                "    REFERENCES conversations(conversation_id) ON DELETE CASCADE\n" +
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n" +
+                "  COMMENT '对话历史 LLM 摘要缓存（按 covers msg_id 范围）'";
+
+        try (Statement st = conn.createStatement()) {
+            st.executeUpdate(createSql);
+            log.info("[SchemaMigration] ✅ Created table {}", table);
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
     }
 }
