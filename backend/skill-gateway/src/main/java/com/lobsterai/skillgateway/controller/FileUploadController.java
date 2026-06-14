@@ -321,6 +321,7 @@ public class FileUploadController {
         if (lower.endsWith(".pptx")) return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
         if (lower.endsWith(".ppt"))  return MediaType.parseMediaType("application/vnd.ms-powerpoint");
         if (lower.endsWith(".pdf"))  return MediaType.parseMediaType("application/pdf");
+        if (lower.endsWith(".csv")) return MediaType.parseMediaType("text/csv");
         if (lower.endsWith(".md") || lower.endsWith(".txt")) return MediaType.TEXT_PLAIN;
         if (lower.endsWith(".json")) return MediaType.APPLICATION_JSON;
         if (lower.endsWith(".png"))  return MediaType.IMAGE_PNG;
