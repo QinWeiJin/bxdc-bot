@@ -81,6 +81,12 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
 
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
+        seedFileOperate("md_init_temp", "初始化 Markdown 临时文件：根据源文件创建临时文件副本，后续所有 md_read/md_write/md_filter_section 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
+                fileRefSchema());
+        seedFileOperate("md_read", "读取 Markdown 文件全文内容。返回 fileId、downloadUrl、filePath、content（全文）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。",
+                mdReadSchema());
+        seedFileOperate("md_write", "【修改操作】覆盖写入 Markdown 文件内容。在临时文件上调用则覆盖写回同一文件（fileId 不变），在源文件上调用则自动创建临时文件并返回新 fileId。返回 fileId、downloadUrl、filePath、写入统计。需要 params.content（必填，新的 Markdown 文本）。",
+                mdWriteSchema());
         seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
         seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
         seedFileOperate("md_table", "提取 Markdown GFM 表格（header + rows，含对齐说明符）");
@@ -89,18 +95,17 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("md_emphasis", "提取 Markdown 加粗/斜体/删除线/行内代码（代码块内不解析）");
         seedFileOperate("md_toc", "生成 Markdown 文档目录（嵌套 outline 树，支持跳级）");
         seedFileOperate("md_filter_section",
-                "删除或保留 Markdown 文件中指定标题的整节内容，生成新文件（不改原文件）。\n"
+                "【修改操作】删除或保留 Markdown 文件中指定标题的整节内容，结果覆盖写回同一文件。需传入临时文件的 fileId（先调 md_init_temp）。\n"
                         + "参数说明（二选一，不可同时使用）：\n"
                         + "  • remove: 要删除的标题文本数组——这些标题及其下属整节会被移除，其余内容保留。\n"
                         + "    例：{\"remove\":[\"第二章\"]} 删除 # 第二章 整节\n"
-                        + "    例：{\"remove\":[\"安装详情\",\"使用方式\"]} 删除 ### 安装详情 和 ### 使用方式 两节\n"
                         + "  • keep: 要保留的标题文本数组——文档只保留这些标题整节，其余内容全部删除。\n"
                         + "    例：{\"keep\":[\"第三章\"]} 只保留 # 第三章\n"
-                        + "    例：{\"keep\":[\"第一章\",\"第二章\"]} 只保留前两章\n"
-                        + "  • fileRef: 文件名或文件 ID（如 \"report.md\" 或 \"18\"）\n"
-                        + "一节定义为：从该标题行到下一个同级或更高级标题行之前的所有内容。标题匹配区分大小写。",
+                        + "  • fileRef: 临时文件 ID（如 \"80\"）\n"
+                        + "一节定义为：从该标题行到下一个同级或更高级标题行之前的所有内容。标题匹配区分大小写。\n"
+                        + "返回 fileId、downloadUrl、filePath、message。",
                 mdFilterSectionSchema());
-        seedFileOperate("md_merge", "多 Markdown 文件拼接合并（frontmatter 冲突可配置，prefixHeaders 可关闭）",
+        seedFileOperate("md_merge", "【修改操作】多 Markdown 文件拼接合并。传入 sourceFileIds 数组指定要合并的文件 ID 列表（至少 2 个），合并结果覆盖写回到 fileRef 指定的临时文件（先调 md_init_temp 获得临时 fileId）。frontmatter 冲突可配置（error/first/last），prefixHeaders 控制是否在每个源文件前加 # 文件名 标题。返回 fileId、downloadUrl、filePath、合并文件名。",
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
@@ -671,9 +676,27 @@ public class FileToolSeeder implements ApplicationRunner {
 
     // ===== MD 扩展操作 Schema =====
 
+    private static Map<String, Map<String, Object>> mdReadSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        s.put("fileRef", stringProp("文件名或文件 ID（必填）", true));
+        s.put("maxChars", intProp("最大返回字符数（截断保护），默认不限制", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> mdWriteSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。结果覆盖写入此文件。", true));
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("type", "string");
+        content.put("description", "新 Markdown 文本内容（必填）。覆盖写入到目标文件。");
+        content.put("required", true);
+        s.put("content", content);
+        return s;
+    }
+
     private static Map<String, Map<String, Object>> mdFilterSectionSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。结果覆盖写入此文件。", true));
         Map<String, Object> keep = new LinkedHashMap<>();
         keep.put("type", "array");
         keep.put("description",
@@ -695,10 +718,10 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> mdMergeSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("文件名或文件 ID", true));
+        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。合并结果覆盖写入此文件。", true));
         Map<String, Object> sourceFileIds = new LinkedHashMap<>();
         sourceFileIds.put("type", "array");
-        sourceFileIds.put("description", "要合并的源文件 ID 列表（至少 2 个）");
+        sourceFileIds.put("description", "要合并的源文件 ID 列表（至少 2 个）。合并后生成新文件，返回 fileId 和 downloadUrl。");
         Map<String, Object> idItem = new LinkedHashMap<>();
         idItem.put("type", "integer");
         idItem.put("description", "user_files 表中的文件 ID");

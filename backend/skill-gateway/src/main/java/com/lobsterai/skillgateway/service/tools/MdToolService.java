@@ -1,5 +1,7 @@
 package com.lobsterai.skillgateway.service.tools;
 
+import com.lobsterai.skillgateway.config.FtpConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
@@ -34,6 +36,7 @@ import com.vladsch.flexmark.util.ast.VisitHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -88,14 +91,20 @@ public class MdToolService {
     private final FileToolService fileToolService;
     private final FtpFileService ftpFileService;
     private final UserFileMapper userFileMapper;
+    private final FtpConfig ftpConfig;
+
+    @Value("${app.base-url:http://localhost:18080}")
+    private String baseUrl;
 
     @Autowired
     public MdToolService(FileToolService fileToolService,
                          FtpFileService ftpFileService,
-                         UserFileMapper userFileMapper) {
+                         UserFileMapper userFileMapper,
+                         FtpConfig ftpConfig) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
         this.userFileMapper = userFileMapper;
+        this.ftpConfig = ftpConfig;
     }
 
     /** Spring 启动后自动注册到 FileToolService。 */
@@ -155,7 +164,25 @@ public class MdToolService {
                 return mdMerge(userFile, params, userId);
             }
         });
-        log.info("MdToolService registered 9 handlers: md_images/headings/table/list_items/tasks/emphasis/toc/filter_section/merge");
+        fileToolService.registerHandler("md_init_temp", new FileToolService.ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
+                return mdInitTemp(userFile, params, userId);
+            }
+        });
+        fileToolService.registerHandler("md_read", new FileToolService.ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
+                return mdRead(userFile, params, userId);
+            }
+        });
+        fileToolService.registerHandler("md_write", new FileToolService.ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
+                return mdWrite(userFile, params, userId);
+            }
+        });
+        log.info("MdToolService registered 12 handlers: md_init_temp/read/write/images/headings/table/list_items/tasks/emphasis/toc/filter_section/merge");
     }
 
     // ================================================================
@@ -197,11 +224,17 @@ public class MdToolService {
     }
 
     /**
-     * 把 content 写到新文件 + 写 user_files 行，返回含 {originalFileId, newFileId, ...} 的响应。
-     * 
-     * 传入原始文件名（如 "刑法.md"），由 FtpFileService 统一生成存储名，
-     * 再从返回的完整路径提取实际存储文件名写入 DB，确保 DB 记录与 FTP 磁盘文件一致。
+     * 把 content 写到新文件 + 写 user_files 行，返回含 {originalFileId, newFileId, newFileName, downloadUrl, ...} 的响应。
+     *
+     * <p>
+     * 此方法已废弃：建议调用方先 md_init_temp 创建临时文件，再通过修改类操作（md_filter_section / md_merge）
+     * 就地覆盖同一个临时文件，最终返回 tempFileId 对应的 downloadUrl。
+     * 保留此方法供 md_merge 等需要创建独立新文件的场景使用（当 sourceFileId 为空时先 init temp 更佳）。
+     * </p>
+     *
+     * @deprecated 推荐先 {@link #mdInitTemp} 后直接在临时文件上修改
      */
+    @Deprecated
     private FileToolResponse writeBackNewFile(UserFile userFile, String userId, String content) throws IOException {
         byte[] bytes = content.getBytes(Charset.forName("UTF-8"));
         String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
@@ -264,6 +297,16 @@ public class MdToolService {
         return def;
     }
 
+    private int readIntParam(Map<String, Object> params, String key, int def) {
+        if (params == null) return def;
+        Object v = params.get(key);
+        if (v instanceof Number) return ((Number) v).intValue();
+        if (v instanceof String) {
+            try { return Integer.parseInt((String) v); } catch (NumberFormatException ignored) {}
+        }
+        return def;
+    }
+
     private Long toLong(Object o) {
         if (o == null) return null;
         if (o instanceof Number) return ((Number) o).longValue();
@@ -304,7 +347,276 @@ public class MdToolService {
     }
 
     // ================================================================
-    // 9 个 md_* handler
+    // md_init_temp — 初始化临时文件（创建副本，后续操作在其上进行）
+    // ================================================================
+
+    /**
+     * 根据源文件创建临时文件副本（上传到 FTP + 写 user_files 行），后续操作均在此临时文件上进行。
+     *
+     * @param userFile 源文件实体
+     * @param params   参数：无
+     * @param userId   用户 ID
+     * @return 临时文件信息，包含 fileId、sourceFileId、downloadUrl
+     */
+    public FileToolResponse mdInitTemp(UserFile userFile, Map<String, Object> params, String userId) {
+        ensureMdFile(userFile);
+        try {
+            Long sourceFileId = userFile.getId();
+
+            // 读取源文件内容
+            String content = readAllText(userFile);
+            byte[] fileBytes = content.getBytes(Charset.forName("UTF-8"));
+
+            // 生成临时文件名
+            String tempFileName = getTempFileName(userFile.getOriginalFileName());
+
+            // 上传临时文件到 FTP
+            String ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(fileBytes));
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+
+            // 在 user_files 表中创建新记录
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) fileBytes.length);
+            tempUserFile.setFileType(userFile.getFileType());
+            tempUserFile.setFtpPath(ftpPath);
+            tempUserFile.setSourceFileId(sourceFileId);
+            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+
+            Long tempFileId = tempUserFile.getId();
+
+            // 生成完整下载 URL
+            String downloadUrl = baseUrl + "/api/files/download/" + tempFileId;
+            tempUserFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(tempUserFile);
+
+            log.info("md_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}",
+                    tempFileId, sourceFileId, tempFileName, downloadUrl);
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("message", "临时文件初始化成功");
+            result.put("fileId", tempFileId);
+            result.put("sourceFileId", sourceFileId);
+            result.put("fileName", tempFileName);
+            result.put("filePath", ftpPath);
+            result.put("downloadUrl", downloadUrl);
+
+            return FileToolResponse.ok(result, tempFileName);
+        } catch (Exception e) {
+            log.error("md_init_temp failed for {}", userFile.getOriginalFileName(), e);
+            return FileToolResponse.error("md_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
+        }
+    }
+
+    /**
+     * 生成临时文件名（格式：原文件名_temp.扩展名）。
+     */
+    private String getTempFileName(String originalFileName) {
+        int dotIndex = originalFileName.lastIndexOf('.');
+        String baseName = dotIndex > 0 ? originalFileName.substring(0, dotIndex) : originalFileName;
+        String extension = dotIndex > 0 ? originalFileName.substring(dotIndex) : ".md";
+        return baseName + "_temp" + extension;
+    }
+
+    // ================================================================
+    // md_read — 读取 Markdown 文件全文
+    // ================================================================
+
+    /**
+     * 读取 Markdown 文件全文内容。
+     * <p>
+     * 配合 {@link #mdInitTemp} 使用：先在源文件上创建临时文件，再对临时文件读写操作。
+     * 只读操作不修改文件，直接返回 fileId + downloadUrl + 文件内容。
+     * </p>
+     *
+     * @param userFile 文件实体
+     * @param params   参数：encoding（编码，默认 UTF-8）、maxChars（最大返回字符数，默认不限制）
+     * @param userId   用户 ID
+     * @return 文件全文 + fileId + downloadUrl
+     */
+    public FileToolResponse mdRead(UserFile userFile, Map<String, Object> params, String userId) {
+        ensureMdFile(userFile);
+        String encoding = readStringParam(params, "encoding", "UTF-8");
+        int maxChars = readIntParam(params, "maxChars", Integer.MAX_VALUE);
+        try {
+            String content;
+            if ("UTF-8".equalsIgnoreCase(encoding)) {
+                content = readAllText(userFile);
+            } else {
+                ByteArrayOutputStream baos = ftpFileService.downloadFile(userFile.getUserId(), userFile.getFileName());
+                content = new String(baos.toByteArray(), Charset.forName(encoding));
+            }
+            int totalChars = content.length();
+            boolean truncated = totalChars > maxChars;
+            String displayContent = truncated ? content.substring(0, maxChars) : content;
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("filePath", userFile.getFtpPath());
+            result.put("fileName", userFile.getOriginalFileName());
+            result.put("encoding", encoding);
+            result.put("totalChars", totalChars);
+            result.put("totalLines", content.split("\n", -1).length);
+            result.put("content", displayContent);
+            result.put("truncated", truncated);
+
+            return FileToolResponse.ok(result, userFile.getOriginalFileName());
+        } catch (Exception e) {
+            log.error("md_read failed for {}", userFile.getOriginalFileName(), e);
+            return FileToolResponse.error("md_read failed: " + e.getMessage(), userFile.getOriginalFileName());
+        }
+    }
+
+    // ================================================================
+    // md_write — 覆盖写入 Markdown 文件
+    // ================================================================
+
+    /**
+     * 覆盖写入 Markdown 文件内容。
+     * <p>
+     * 操作模式与 TxtToolService.txtWrite 一致：
+     * <ul>
+     *   <li>临时文件（sourceFileId != null）：覆盖写回同一个 FTP 文件，fileId 不变</li>
+     *   <li>源文件（sourceFileId == null）：自动创建临时文件，返回新 fileId</li>
+     * </ul>
+     * 返回 fileId + downloadUrl + filePath，供后续操作或下载使用。
+     * </p>
+     *
+     * @param userFile 文件实体（需先在源文件上调用 {@link #mdInitTemp} 获得临时文件）
+     * @param params   参数：content（必填，Markdown 文本内容）、encoding（编码，默认 UTF-8）
+     * @param userId   用户 ID
+     * @return fileId + downloadUrl + filePath + 写入统计
+     */
+    public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
+        ensureMdFile(userFile);
+        String content = readStringParam(params, "content", null);
+        if (content == null) {
+            return FileToolResponse.error("params.content is required", userFile.getOriginalFileName());
+        }
+        String encoding = readStringParam(params, "encoding", "UTF-8");
+        try {
+            Map<String, Object> saveResult = saveAndReturnResult(content, userFile, userId);
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("message", "Markdown file written successfully");
+            result.putAll(saveResult);
+            result.put("encoding", encoding);
+            result.put("lineCount", content.split("\n", -1).length);
+            result.put("totalChars", content.length());
+
+            return FileToolResponse.ok(result, saveResult.get("fileName").toString());
+        } catch (Exception e) {
+            log.error("md_write failed for {}", userFile.getOriginalFileName(), e);
+            return FileToolResponse.error("md_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+        }
+    }
+
+    /**
+     * 用原 storageName 覆盖写回 FTP（不生成新 UUID 文件名）。
+     * <p>
+     * 用于临时文件场景：修改操作直接覆盖同一个 FTP 文件，
+     * user_files 行的 file_name 不变，DB 与磁盘一致。
+     * </p>
+     */
+    private String overwriteBytes(String userId, String storageName, byte[] bytes) throws IOException {
+        return ftpFileService.uploadFileWithFileName(userId, storageName, new ByteArrayInputStream(bytes));
+    }
+
+    /**
+     * 保存修改后的内容并生成结果信息（fileId / downloadUrl / filePath）。
+     *
+     * <p>策略：</p>
+     * <ul>
+     *   <li>临时文件（sourceFileId != null）：覆盖写回同一 FTP 文件，返回当前 fileId 的 downloadUrl</li>
+     *   <li>源文件（sourceFileId == null）：创建新临时文件（先 INSERT user_files 再覆盖写入 FTP），
+     *       返回新文件 fileId 的 downloadUrl</li>
+     * </ul>
+     *
+     * @param content  修改后的文本内容
+     * @param userFile 当前文件实体
+     * @param userId   用户 ID
+     * @return 包含 fileId、downloadUrl、fileName、filePath 的 Map
+     */
+    private Map<String, Object> saveAndReturnResult(String content, UserFile userFile, String userId) throws IOException {
+        String baseName = userFile != null ? userFile.getOriginalFileName() : "merged";
+        return saveAndReturnResult(content, userFile, userId, baseName);
+    }
+
+    /**
+     * 保存修改后的内容并生成结果信息（可指定显示名）。
+     *
+     * @param content         修改后的文本内容
+     * @param userFile        当前文件实体（可为 null）
+     * @param userId          用户 ID
+     * @param baseDisplayName 文件显示名（如 "A_+_B_merged"），决定 UserFile.originalFileName
+     * @return 包含 fileId、downloadUrl、fileName、filePath 的 Map
+     */
+    private Map<String, Object> saveAndReturnResult(String content, UserFile userFile, String userId,
+                                                     String baseDisplayName) throws IOException {
+        byte[] bytes = content.getBytes(Charset.forName("UTF-8"));
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+
+        Long sourceFileId = userFile == null ? null : userFile.getSourceFileId();
+        Long resultFileId;
+        String ftpPath;
+        String resultFileName;
+
+        if (sourceFileId != null) {
+            // 临时文件：覆盖写回同一个 FTP 文件
+            String storageFileName = userFile.getFileName();
+            ftpPath = overwriteBytes(userId, storageFileName, bytes);
+            resultFileId = userFile.getId();
+            resultFileName = userFile.getOriginalFileName();
+
+            // 更新文件大小和路径
+            userFile.setFileSize((long) bytes.length);
+            userFile.setFtpPath(ftpPath);
+            userFileMapper.updateById(userFile);
+
+            log.info("md saveAndReturnResult overwrote temp file: fileId={}, storageFileName={}", resultFileId, storageFileName);
+        } else {
+            // 源文件 / 无 fileRef（userFile == null）：创建新文件
+            String fileType = userFile != null ? userFile.getFileType() : "md";
+            String tempFileName = getTempFileName(baseDisplayName);
+            ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(bytes));
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) bytes.length);
+            tempUserFile.setFileType(fileType);
+            tempUserFile.setFtpPath(ftpPath);
+            // userFile == null 表示全新合并（md_merge），不挂 sourceFileId
+            tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
+            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+
+            resultFileId = tempUserFile.getId();
+            resultFileName = tempFileName;
+
+            log.info("md saveAndReturnResult created new temp file: fileId={}, tempFileName={}, userFileNull={}",
+                    resultFileId, tempFileName, userFile == null);
+        }
+
+        String downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+
+        result.put("fileId", resultFileId);
+        result.put("downloadUrl", downloadUrl);
+        result.put("fileName", resultFileName);
+        result.put("filePath", ftpPath);
+        result.put("size", bytes.length);
+
+        return result;
+    }
+
+    // ================================================================
+    // 9 个 md_* handler（+ md_init_temp 首个调用）
     // ================================================================
 
     // ----- md_images -----
@@ -332,6 +644,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", images.size());
             result.put("images", images);
@@ -365,6 +679,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", headings.size());
             result.put("headings", headings);
@@ -438,6 +754,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tables.size());
             result.put("tables", tables);
@@ -499,6 +817,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", items.size());
             result.put("items", items);
@@ -562,6 +882,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tasks.size());
             result.put("tasks", tasks);
@@ -609,6 +931,8 @@ public class MdToolService {
             visitor.visitChildren(document);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", spans.size());
             result.put("spans", spans);
@@ -650,6 +974,8 @@ public class MdToolService {
             List<Map<String, Object>> toc = buildTocTree(flat);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("fileId", userFile.getId());
+            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("headingCount", flat.size());
             result.put("toc", toc);
@@ -803,7 +1129,16 @@ public class MdToolService {
             }
 
             String newContent = out.toString().replaceAll("\\n+$", "") + "\n";
-            return writeBackNewFile(userFile, userId, newContent);
+
+            Map<String, Object> saveResult = saveAndReturnResult(newContent, userFile, userId);
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("message", isKeep ? "Section(s) kept" : "Section(s) removed");
+            result.putAll(saveResult);
+            result.put("targetHeadings", targetHeadings);
+            result.put("mode", isKeep ? "keep" : "remove");
+            result.put("lineCount", newContent.split("\n", -1).length);
+            return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("md_filter_section failed for {}", userFile.getOriginalFileName(), e);
             return FileToolResponse.error("md_filter_section failed: " + e.getMessage(), userFile.getOriginalFileName());
@@ -811,40 +1146,79 @@ public class MdToolService {
     }
 
     // ----- md_merge -----
+    /**
+     * 安全解析 sourceFileIds 参数，兼容 LLM 把整个对象序列化为 JSON string 传过来的情况。
+     * <p>
+     * LLM 经常把 {@code sourceFileIds} 传成 JSON 字符串 {@code "[78, 79]"}，而不是 List，
+     * 因此先用 {@link ObjectMapper} 反序列化一次。
+     * </p>
+     */
     @SuppressWarnings("unchecked")
+    private List<Object> parseSourceFileIdsParam(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof List) {
+            return (List<Object>) raw;
+        }
+        if (raw instanceof String) {
+            String s = ((String) raw).trim();
+            if (s.isEmpty()) {
+                return null;
+            }
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                Object parsed = mapper.readValue(s, Object.class);
+                if (parsed instanceof List) {
+                    return (List<Object>) parsed;
+                }
+                log.warn("md_merge sourceFileIds JSON parsed to non-list: {} (type={})", s, parsed == null ? "null" : parsed.getClass().getSimpleName());
+                return null;
+            } catch (Exception e) {
+                log.warn("md_merge failed to parse sourceFileIds JSON string: {}", s, e);
+                return null;
+            }
+        }
+        return null;
+    }
+
     public FileToolResponse mdMerge(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureMdFile(userFile);
+        // userFile 可空：md_merge 基于 sourceFileIds 合并生成新文件，不需要在某个已有文件上操作
+        if (userFile != null) {
+            ensureMdFile(userFile);
+        }
         try {
-            List<Object> sourceIdsRaw = readListParam(params, "sourceFileIds");
+            // 兼容 List / JSON String 两种入参形式
+            List<Object> sourceIdsRaw = parseSourceFileIdsParam(params.get("sourceFileIds"));
             if (sourceIdsRaw == null || sourceIdsRaw.size() < 2) {
-                return FileToolResponse.error("sourceFileIds must contain at least 2 file ids",
-                        userFile.getOriginalFileName());
+                return FileToolResponse.error("sourceFileIds must contain at least 2 file ids (got: " + sourceIdsRaw + ")",
+                        userFile != null ? userFile.getOriginalFileName() : "md_merge");
             }
             String conflictStrategy = readStringParam(params, "frontmatterConflict", "error");
+            // 兼容 Boolean / String 两种入参
             boolean prefixHeaders = readBoolParam(params, "prefixHeaders", true);
 
             List<UserFile> sources = new ArrayList<UserFile>();
             List<String> sourceContents = new ArrayList<String>();
             List<String> sourceFrontmatters = new ArrayList<String>();
+            // 内部 helper：保证 userFile 为 null 时 error 响应能给出合理 fallback 名
+            String errFileName = userFile != null ? userFile.getOriginalFileName() : "md_merge";
+
             for (Object idObj : sourceIdsRaw) {
                 Long fileId = toLong(idObj);
                 if (fileId == null) {
-                    return FileToolResponse.error("invalid sourceFileIds entry: " + idObj,
-                            userFile.getOriginalFileName());
+                    return FileToolResponse.error("invalid sourceFileIds entry: " + idObj, errFileName);
                 }
                 UserFile src = userFileMapper.selectById(fileId);
                 if (src == null) {
-                    return FileToolResponse.error("source file not found: id=" + fileId,
-                            userFile.getOriginalFileName());
+                    return FileToolResponse.error("source file not found: id=" + fileId, errFileName);
                 }
                 if (!userId.equals(src.getUserId())) {
-                    return FileToolResponse.error("access denied for file id " + fileId,
-                            userFile.getOriginalFileName());
+                    return FileToolResponse.error("access denied for file id " + fileId, errFileName);
                 }
                 String ft = src.getFileType();
                 if (!"md".equalsIgnoreCase(ft) && !"markdown".equalsIgnoreCase(ft)) {
-                    return FileToolResponse.error("all source files must be .md/.markdown (file " + src.getOriginalFileName() + " is " + ft + ")",
-                            userFile.getOriginalFileName());
+                    return FileToolResponse.error("all source files must be .md/.markdown (file " + src.getOriginalFileName() + " is " + ft + ")", errFileName);
                 }
                 sources.add(src);
                 String srcContent = readAllText(src);
@@ -860,8 +1234,7 @@ public class MdToolService {
             }
             if (fmCount > 1) {
                 if ("error".equalsIgnoreCase(conflictStrategy)) {
-                    return FileToolResponse.error("frontmatter conflict: " + fmCount + " source files contain frontmatter",
-                            userFile.getOriginalFileName());
+                    return FileToolResponse.error("frontmatter conflict: " + fmCount + " source files contain frontmatter", errFileName);
                 } else if ("first".equalsIgnoreCase(conflictStrategy)) {
                     for (int i = 0; i < sourceFrontmatters.size(); i++) {
                         if (sourceFrontmatters.get(i) != null) {
@@ -914,20 +1287,33 @@ public class MdToolService {
             }
 
             String newContent = merged.toString();
-            FileToolResponse base = writeBackNewFile(userFile, userId, newContent);
-            if (base.isSuccess()) {
-                Map<String, Object> output = base.getOutput() instanceof Map
-                        ? (Map<String, Object>) base.getOutput()
-                        : new LinkedHashMap<String, Object>();
-                output.put("sourceFileIds", sourceIdsRaw);
-                output.put("totalLines", newContent.split("\n", -1).length);
-                output.put("frontmatterKept", keptFrom);
-                return FileToolResponse.ok(output, userFile.getOriginalFileName());
+
+            // 用源文件名构造合并后的显示名：如 "A_+_B_merged.md"
+            StringBuilder nameBuilder = new StringBuilder();
+            for (int i = 0; i < sources.size() && i < 3; i++) {
+                if (i > 0) nameBuilder.append("_+_");
+                String srcName = sources.get(i).getOriginalFileName();
+                int dot = srcName.lastIndexOf('.');
+                String base = dot > 0 ? srcName.substring(0, dot) : srcName;
+                // 限制每个源名长度，避免总文件名过长
+                if (base.length() > 30) base = base.substring(0, 30);
+                nameBuilder.append(base);
             }
-            return base;
+            nameBuilder.append("_merged.md");
+            String displayName = nameBuilder.toString();
+
+            Map<String, Object> saveResult = saveAndReturnResult(newContent, userFile, userId, displayName);
+
+            saveResult.put("sourceFileIds", sourceIdsRaw);
+            saveResult.put("totalLines", newContent.split("\n", -1).length);
+            saveResult.put("frontmatterKept", keptFrom);
+            saveResult.put("sourceCount", sources.size());
+            saveResult.put("message", "Merge completed: " + sources.size() + " files merged");
+            return FileToolResponse.ok(saveResult, saveResult.get("fileName").toString());
         } catch (Exception e) {
             log.error("md_merge failed", e);
-            return FileToolResponse.error("md_merge failed: " + e.getMessage(), userFile.getOriginalFileName());
+            return FileToolResponse.error("md_merge failed: " + e.getMessage(),
+                    userFile != null ? userFile.getOriginalFileName() : "md_merge");
         }
     }
 }
