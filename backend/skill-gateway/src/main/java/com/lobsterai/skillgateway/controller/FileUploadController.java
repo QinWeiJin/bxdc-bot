@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.dto.FileParseResult;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
@@ -25,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -69,13 +71,16 @@ public class FileUploadController {
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
     private final UserFileMapper userFileMapper;
+    private final FtpConfig ftpConfig;
 
     public FileUploadController(FtpFileService ftpFileService,
                                 FileParseService fileParseService,
-                                UserFileMapper userFileMapper) {
+                                UserFileMapper userFileMapper,
+                                FtpConfig ftpConfig) {
         this.ftpFileService = ftpFileService;
         this.fileParseService = fileParseService;
         this.userFileMapper = userFileMapper;
+        this.ftpConfig = ftpConfig;
     }
 
     /**
@@ -253,13 +258,25 @@ public class FileUploadController {
     @GetMapping("/download/{id}")
     public ResponseEntity<?> downloadFile(
             @PathVariable("id") Long id,
+            @RequestParam(value = "token", required = false) String token,
             HttpServletRequest request
     ) {
         String userId;
         try {
             userId = AamTokenUtil.requireUserId(request);
         } catch (IllegalArgumentException e) {
-            return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
+            // 无 X-User-Id header 时，尝试用 token 参数校验
+            if (token == null || token.isEmpty()) {
+                return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
+            }
+            UserFile uf = userFileMapper.selectById(id);
+            if (uf == null) {
+                return error(HttpStatus.NOT_FOUND, "FILE_NOT_FOUND", "File not found: " + id);
+            }
+            if (!ftpConfig.verifyDownloadToken(id, uf.getUserId(), token)) {
+                return error(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid or expired download token");
+            }
+            userId = uf.getUserId();
         }
 
         UserFile uf = userFileMapper.selectById(id);
@@ -275,9 +292,10 @@ public class FileUploadController {
             long size = uf.getFileSize() == null ? -1L : uf.getFileSize();
 
             HttpHeaders headers = new HttpHeaders();
+            String downloadName = uf.getOriginalFileName() != null ? uf.getOriginalFileName() : uf.getFileName();
             headers.setContentDisposition(
                     org.springframework.http.ContentDisposition.attachment()
-                            .filename(uf.getOriginalFileName() == null ? uf.getFileName() : uf.getOriginalFileName())
+                            .filename(downloadName, StandardCharsets.UTF_8)
                             .build());
             MediaType ct = resolveContentType(uf);
             headers.setContentType(ct);
