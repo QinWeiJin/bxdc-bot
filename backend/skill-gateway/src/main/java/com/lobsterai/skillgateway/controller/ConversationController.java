@@ -1,10 +1,19 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Conversation;
+import com.lobsterai.skillgateway.event.ConversationEventBus;
+import com.lobsterai.skillgateway.metrics.CompactionMetrics;
+import com.lobsterai.skillgateway.service.ConversationCompactService;
 import com.lobsterai.skillgateway.service.ConversationService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
 
@@ -19,10 +28,22 @@ import java.util.*;
 @RequestMapping("/api/conversations")
 public class ConversationController {
 
-    private final ConversationService conversationService;
+    private static final Logger log = LoggerFactory.getLogger(ConversationController.class);
 
-    public ConversationController(ConversationService conversationService) {
+    private final ConversationService conversationService;
+    private final ConversationEventBus eventBus;
+    private final ConversationCompactService compactService;
+    private final CompactionMetrics compactionMetrics;
+
+    @Autowired
+    public ConversationController(ConversationService conversationService,
+                                  ConversationEventBus eventBus,
+                                  ConversationCompactService compactService,
+                                  CompactionMetrics compactionMetrics) {
         this.conversationService = conversationService;
+        this.eventBus = eventBus;
+        this.compactService = compactService;
+        this.compactionMetrics = compactionMetrics;
     }
 
     // ---- Conversation CRUD ----
@@ -103,6 +124,35 @@ public class ConversationController {
         return ResponseEntity.ok(okBody);
     }
 
+    // ---- SSE: 对话级别实时事件订阅 ----
+
+    /**
+     * 订阅对话实时事件。当前主要发两类：
+     * <ul>
+     *   <li>{@code message_inserted} —— 新消息写入（payload 包含完整 message DTO）</li>
+     *   <li>{@code message_updated} —— 消息字段更新（payload 包含完整 message DTO）</li>
+     * </ul>
+     * <p>
+     * open spec: async-task-result-echo-to-chat —— 让异步任务完成时新消息自动出现在聊天流。
+     * <p>
+     * 注：EventSource 浏览器 API 不支持自定义 header，所以 userId 通过 {@code X-User-Id}
+     * 请求头（fetch 客户端）或 {@code ?userId=} query 参数（EventSource）传入。query 路径下
+     * 服务端仍按 X-User-Id 同样的方式做归属校验（{@link ConversationService#getById} 会抛 404）。
+     */
+    @GetMapping(value = "/{id}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamConversationEvents(
+            @RequestHeader(value = "X-User-Id", required = false) String userIdHeader,
+            @RequestParam(value = "userId", required = false) String userIdParam,
+            @PathVariable("id") String conversationId) {
+        String userId = userIdHeader != null ? userIdHeader : userIdParam;
+        if (userId == null || userId.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Missing user identity");
+        }
+        // 校验对话归属（不在自己的对话上订阅会抛 404）
+        conversationService.getById(conversationId, userId);
+        return eventBus.register(conversationId);
+    }
+
     // ---- Messages ----
 
     @PostMapping("/{id}/messages")
@@ -119,6 +169,64 @@ public class ConversationController {
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
+    // ---- Context Compaction (internal, agent-core -> gateway) ----
+
+    /**
+     * 内部端点：agent-core 调一次拿"送 LLM 的最终 messages"。
+     *
+     * open spec: llm-context-window-summarization
+     *
+     * 鉴权：X-Internal-Token == env.INTERNAL_API_TOKEN
+     * 输入：{ userId, messages: [...], model: "..." }
+     * 输出：{ messages: [...], summaryApplied: bool, summarySource: "..." }
+     *
+     * 注意：此端点不要求 X-User-Id（agent-core 是内部服务，用 Internal-Token 鉴权）。
+     * userId 用于读 user.llm_config（按 user 优先 → 系统默认 fallback）。
+     * conversationId 仅做 cache key，不做归属校验（agent-core 已校验过）。
+     */
+    @PostMapping("/{id}/compact")
+    public ResponseEntity<Map<String, Object>> compact(
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
+            @PathVariable("id") String conversationId,
+            @RequestBody Map<String, Object> body) {
+        // 优先 system property（测试用），其次 env var
+        String expected = System.getProperty("INTERNAL_API_TOKEN");
+        if (expected == null || expected.isEmpty()) {
+            expected = System.getenv("INTERNAL_API_TOKEN");
+        }
+        if (expected == null || expected.isEmpty()) {
+            // 未配置 INTERNAL_API_TOKEN：开发环境兜底放行
+            log.debug("[ConversationController.compact] INTERNAL_API_TOKEN not set, allowing (dev mode)");
+        } else if (internalToken == null || !expected.equals(internalToken)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", "invalid_internal_token"));
+        }
+
+        String userId = body.get("userId") instanceof String ? (String) body.get("userId") : null;
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> messages = body.get("messages") instanceof List
+                ? (List<Map<String, Object>>) body.get("messages")
+                : Collections.emptyList();
+
+        ConversationCompactService.CompactResult result = compactService.compact(conversationId, userId, messages);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("messages", result.messages);
+        response.put("summaryApplied", result.summaryApplied);
+        response.put("summarySource", result.summarySource);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * 暴露压缩 metrics 快照（open spec: llm-context-window-summarization §9）
+     * GET /api/conversations/compaction-metrics
+     * 暂不加鉴权（内部端点，运维用）
+     */
+    @GetMapping("/compaction-metrics")
+    public ResponseEntity<CompactionMetrics.Snapshot> compactionMetrics() {
+        return ResponseEntity.ok(compactionMetrics.snapshot());
+    }
+
     // ---- Helper ----
 
     private Map<String, Object> toConversationDto(Conversation conv) {
@@ -128,6 +236,8 @@ public class ConversationController {
         dto.put("name", conv.getName());
         dto.put("enabled_skills", conv.getEnabledSkills());
         dto.put("status", conv.getStatus());
+        dto.put("is_published", conv.getIsPublished());
+        dto.put("api_description", conv.getApiDescription());
         dto.put("created_at", conv.getCreatedAt() != null ? conv.getCreatedAt().toString() : null);
         dto.put("updated_at", conv.getUpdatedAt() != null ? conv.getUpdatedAt().toString() : null);
         return dto;

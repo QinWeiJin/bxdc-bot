@@ -57,6 +57,17 @@ export default defineConfig({
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
+      /**
+       * Agent Core (NestJS): 记忆管理端点
+       *   - GET  /memory/status  (useMemory.getMemoryStatus)
+       *   - POST /memory/delete  (useMemory.deleteUserMemory)
+       *   - POST /memory/add     (useMemory.addUserMemory + useChat 上报文件名)
+       * 与 /agent 平级，路径前缀不冲突。
+       */
+      '/memory': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
     },
   },
 })

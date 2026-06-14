@@ -48,7 +48,7 @@ export class LoggerService {
     fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, 'utf8');
   }
 
-  logMemory(action: 'store' | 'retrieve', data: any) {
+  logMemory(action: 'store' | 'retrieve' | 'delete', data: any) {
     const message = `Action: ${action.toUpperCase()}\nData: ${JSON.stringify(data, null, 2)}`;
     this.writeLog(this.memoryLogPath, message);
   }

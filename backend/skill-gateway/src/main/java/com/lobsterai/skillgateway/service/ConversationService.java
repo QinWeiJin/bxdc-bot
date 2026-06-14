@@ -119,6 +119,12 @@ public class ConversationService {
             m.put("content", msg.getContent());
             m.put("skill_calls", msg.getSkillCalls());
             m.put("skill_outputs", msg.getSkillOutputs());
+            m.put("source", msg.getSource());
+            // async-task-result-echo-to-chat: 异步任务结果消息专用字段
+            m.put("async_task_id", msg.getAsyncTaskId());
+            m.put("summary_pending", msg.getSummaryPending());
+            m.put("summary_text", msg.getSummaryText());
+            m.put("summary_generated_at", msg.getSummaryGeneratedAt() != null ? msg.getSummaryGeneratedAt().toString() : null);
             m.put("created_at", msg.getCreatedAt() != null ? msg.getCreatedAt().toString() : null);
             result.add(m);
         }

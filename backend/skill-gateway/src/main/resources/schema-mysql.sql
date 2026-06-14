@@ -271,10 +271,15 @@ CREATE TABLE IF NOT EXISTS conversations (
     name VARCHAR(255) DEFAULT '' COMMENT '对话名称（默认用户输入前18字）',
     enabled_skills JSON COMMENT '该对话启用的Skill ID列表，如 [1, 3, 5]',
     status VARCHAR(32) DEFAULT 'active' COMMENT '状态：active/archived/deleted',
+    is_published TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发布为API: 0=未发布, 1=已发布',
+    api_description TEXT NULL COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息',
+    api_key VARCHAR(64) NULL COMMENT 'API调用密钥明文，供前端展示和复制',
+    api_key_hash VARCHAR(64) NULL COMMENT 'API调用密钥SHA-256哈希，供认证查询',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_conv_user_id (user_id),
-    INDEX idx_conv_status (status)
+    INDEX idx_conv_status (status),
+    UNIQUE INDEX idx_api_key_hash (api_key_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话会话表';
 
 -- conversation_messages（对话消息表 - 存储每轮对话的完整消息内容）
@@ -286,7 +291,26 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     content TEXT COMMENT '消息内容',
     skill_calls JSON COMMENT '工具调用记录（Tool Calls）',
     skill_outputs JSON COMMENT '工具返回结果',
+    source VARCHAR(10) NOT NULL DEFAULT 'web' COMMENT '消息来源: web=网页端, api=API调用',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_cmsg_conv_id (conversation_id),
     INDEX idx_cmsg_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话消息表';
+
+-- api_call_logs（API调用记录表 - 记录每次API调用的输入/输出/耗时/状态）
+CREATE TABLE IF NOT EXISTS api_call_logs (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    conversation_id VARCHAR(64) NOT NULL COMMENT '所属对话ID',
+    user_id VARCHAR(64) NOT NULL COMMENT '对话所有者用户ID',
+    caller_id VARCHAR(128) NULL COMMENT '调用方标识（由调用方传入，便于外部追踪）',
+    instruction TEXT NOT NULL COMMENT '调用方传入的用户输入',
+    reply TEXT NULL COMMENT 'Agent完整回复文本',
+    tool_call_count INT NOT NULL DEFAULT 0 COMMENT '工具调用次数',
+    duration_ms INT NOT NULL DEFAULT 0 COMMENT '耗时（毫秒）',
+    status VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT '状态: pending/running/success/error/timeout',
+    error_message TEXT NULL COMMENT '错误信息',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_acl_conv_id (conversation_id),
+    INDEX idx_acl_user_id (user_id),
+    INDEX idx_acl_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API调用记录表';

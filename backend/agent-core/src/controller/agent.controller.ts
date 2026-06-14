@@ -63,6 +63,8 @@ import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
 import { Command, INTERRUPT } from '@langchain/langgraph';
 import { buildStaticSystemPrompt, Prompts } from '../prompts';
 import { ConversationLogger } from '../utils/conversation-logger';
+import { gatewayCompactClient } from '../services/gateway-compact-client';
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -527,16 +529,21 @@ export class AgentController {
    */
   @Post('run')
   @Sse()
-  runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string }): Observable<MessageEvent> {
+  async runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string }): Promise<Observable<MessageEvent>> {
     const { instruction, context, history, enabledSkillIds, conversationId } = body;
     const safeHistory = Array.isArray(history) ? history : [];
     const sanitizedHistory = sanitizeHistoryForAgent(safeHistory as Array<{ role?: string; content?: unknown }>);
     console.log('[DEBUG] Sanitized history roles:', sanitizedHistory.map(m => m?.role));
-    
+
     const userId = context?.userId;
     const sessionId = context?.sessionId || 'default-session';
+    const modelName = context?.llmModelName;
 
     logAgentRunRawIfEnabled(body, { sessionId, userId });
+
+    // open spec: llm-context-window-summarization
+    // 1 行接入：调 gateway 压缩；失败 fallback 用原始 sanitizedHistory，不阻塞 chat。
+    const compactedHistory = await this.tryCompactHistory(conversationId, userId, modelName, sanitizedHistory);
 
     const subject = new Subject<MessageEvent>();
 
@@ -570,17 +577,55 @@ export class AgentController {
               llmApiKey: llmConfig.llmApiKey,
             };
           }
-          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
         })
         .catch((e) => {
           console.error('[agent] Error fetching LLM config:', e);
-          this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
         });
     } else {
-      this.executeAgentTask(instruction, llmContext, sanitizedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
     }
 
     return subject.asObservable();
+  }
+
+  /**
+   * 把 sanitized history 喂给 gateway 压缩，再转换回 {role, content} 形状
+   * （与 executeAgentTask 期望一致）。
+   * 失败时静默返回原 sanitizedHistory。
+   */
+  private async tryCompactHistory(
+    conversationId: string | undefined,
+    userId: string | undefined,
+    modelName: string | undefined,
+    sanitizedHistory: Array<{ role?: string; content?: unknown }>,
+  ): Promise<Array<{ role?: string; content?: unknown }>> {
+    if (!conversationId || sanitizedHistory.length === 0) return sanitizedHistory;
+    try {
+      const baseMessages: BaseMessage[] = sanitizedHistory.map((m) => this.toBaseMessage(m));
+      const compacted = await gatewayCompactClient.compact(conversationId, userId, baseMessages, modelName);
+      return compacted.map((m) => this.fromBaseMessage(m));
+    } catch (e: any) {
+      console.warn(`[agent.controller] compact history failed: ${e?.message}, using original`);
+      return sanitizedHistory;
+    }
+  }
+
+  private toBaseMessage(m: { role?: string; content?: unknown }): BaseMessage {
+    const role = (m.role || '').toLowerCase();
+    const content = typeof m.content === 'string' ? m.content : String(m.content ?? '');
+    if (role === 'system') return new SystemMessage(content);
+    if (role === 'assistant' || role === 'ai') return new AIMessage(content);
+    if (role === 'tool') return new ToolMessage({ content, tool_call_id: '', name: '' });
+    return new HumanMessage(content);
+  }
+
+  private fromBaseMessage(m: BaseMessage): { role?: string; content?: unknown } {
+    const t = (m as any).getType?.() ?? (m as any)._getType?.() ?? (m as any).type ?? 'human';
+    const role = t === 'human' ? 'user' : t === 'ai' ? 'assistant' : t;
+    const content = typeof m.content === 'string' ? m.content : String(m.content ?? '');
+    return { role, content };
   }
   private async executeAgentTask(
     instruction: string,
@@ -648,9 +693,11 @@ export class AgentController {
 
           const staticSystemPrompt = buildStaticSystemPrompt();
           const profileDetails = await this.memoryService.fetchUserProfile(userId);
-          const systemContent = profileDetails
-            ? `${staticSystemPrompt}[个人特征信息]${profileDetails}`
-            : staticSystemPrompt;
+          const systemParts: string[] = [staticSystemPrompt];
+          if (memoryContext) {
+            systemParts.push(memoryContext);
+          }
+          const systemContent = systemParts.join('\n\n');
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -663,12 +710,14 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
 
-          const messages = [
-            ...validHistory,
-            { role: 'user' as const, content: userTurnContentWithSystem },
-          ];
+          // dreamsearch 内容注入到 messageList 最前面，作为独立 system 消息
+          const messages: any[] = [];
+          if (profileDetails) {
+            messages.push({ role: 'system', content: `[个人特征信息]\n${profileDetails}` });
+          }
+          messages.push(...(validHistory as any[]), { role: 'user', content: userTurnContentWithSystem });
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
