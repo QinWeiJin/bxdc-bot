@@ -76,8 +76,8 @@ public class FileToolSeeder implements ApplicationRunner {
         seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
         seedFileOperate("txt_section", "提取 Markdown 标题章节（支持嵌套控制）", txtSectionSchema());
         seedFileOperate("txt_stats", "统计字符数/词数/行数/字节数");
-        seedFileOperate("txt_distinct_lines", "去重行（保留首次出现顺序，可选写回）", txtDistinctLinesSchema());
-        seedFileOperate("txt_sort_lines", "排序行（字典序或数字序，升序/降序，可选写回）", txtSortLinesSchema());
+        seedFileOperate("txt_distinct_lines", "【首选】对 TXT 文件去重行。用户说'去除重复行'/'去重'/'distinct'/'dedup' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
+        seedFileOperate("txt_sort_lines", "【首选】对 TXT 文件排序行。用户说'排序'/'sort' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
         seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
 
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
@@ -207,14 +207,14 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）",
+        seedFileOperate("word_write", "【首选】创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。用户说'创建word'/'写word'/'new word' 时，**直接调用本工具**，不要用 skill_generator。生成新文件并返回 downloadUrl。",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
                 keywordSearchSchema());
-        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）",
+        seedFileOperate("word_replace_text", "【首选】替换 Word 文档中的文本（支持全部替换或仅替换第一个）。用户说'替换'/'replace'/'把...改成...' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。",
                 replaceTextSchema());
-        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符",
+        seedFileOperate("word_template_fill", "【首选】用 values 填充 Word 文档中的 {{placeholder}} 占位符。用户说'填模板'/'template fill' 时，**直接调用本工具**，不要用 skill_generator。原文件保持不变，生成新文件并返回 downloadUrl。",
                 templateFillSchema());
     }
 
@@ -240,11 +240,16 @@ public class FileToolSeeder implements ApplicationRunner {
                             .eq(Skill::getName, familyName));
             if (existing != null) {
                 String prev = existing.getSchemaPropertiesJson();
+                boolean descChanged = description != null && !description.equals(existing.getDescription());
                 if (prev == null || !prev.equals(schemaJson)) {
                     existing.setSchemaPropertiesJson(schemaJson);
                     existing.setDescription(description);
                     skillMapper.updateById(existing);
                     log.info("Updated family skill schema: {} (id={})", familyName, existing.getId());
+                } else if (descChanged) {
+                    existing.setDescription(description);
+                    skillMapper.updateById(existing);
+                    log.info("Updated family skill description: {} (id={})", familyName, existing.getId());
                 } else {
                     log.debug("Family skill already exists with same schema: {}", familyName);
                 }
@@ -338,11 +343,16 @@ public class FileToolSeeder implements ApplicationRunner {
                             .eq(Skill::getName, toolName));
             if (existing != null) {
                 String prev = existing.getSchemaPropertiesJson();
+                boolean descChanged = description != null && !description.equals(existing.getDescription());
                 if (prev == null || !prev.equals(schemaJson)) {
                     existing.setSchemaPropertiesJson(schemaJson);
                     existing.setDescription(description);
                     skillMapper.updateById(existing);
                     log.info("Updated existing skill schema: {} (id={})", toolName, existing.getId());
+                } else if (descChanged) {
+                    existing.setDescription(description);
+                    skillMapper.updateById(existing);
+                    log.info("Updated existing skill description: {} (id={})", toolName, existing.getId());
                 } else {
                     log.debug("Skill already exists with same schema: {}", toolName);
                 }
@@ -628,10 +638,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
-        Map<String, Object> writeBack = new LinkedHashMap<>();
-        writeBack.put("type", "boolean");
-        writeBack.put("description", "是否将去重结果写回文件");
-        s.put("writeBack", writeBack);
+        s.put("caseSensitive", boolProp("是否大小写敏感，默认 true", false));
+        s.put("keepEmpty", boolProp("是否保留空行，默认 true", false));
         return s;
     }
 
@@ -643,12 +651,9 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
-        s.put("mode", stringProp("排序模式：lex（字典序）或 num（数字序），默认 lex", false));
         s.put("order", stringProp("排序方向：asc/desc，默认 asc", false));
-        Map<String, Object> writeBack = new LinkedHashMap<>();
-        writeBack.put("type", "boolean");
-        writeBack.put("description", "是否将排序结果写回文件");
-        s.put("writeBack", writeBack);
+        s.put("numeric", boolProp("是否按数字排序（默认 false 字典序）", false));
+        s.put("caseSensitive", boolProp("字典序时是否大小写敏感，默认 false", false));
         return s;
     }
 
@@ -875,6 +880,16 @@ public class FileToolSeeder implements ApplicationRunner {
     private static Map<String, Object> stringProp(String description, boolean required) {
         Map<String, Object> prop = new LinkedHashMap<>();
         prop.put("type", "string");
+        prop.put("description", description);
+        if (required) {
+            prop.put("required", true);
+        }
+        return prop;
+    }
+
+    private static Map<String, Object> boolProp(String description, boolean required) {
+        Map<String, Object> prop = new LinkedHashMap<>();
+        prop.put("type", "boolean");
         prop.put("description", description);
         if (required) {
             prop.put("required", true);
