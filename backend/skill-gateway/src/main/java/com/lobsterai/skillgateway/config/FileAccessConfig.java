@@ -26,7 +26,7 @@ public class FileAccessConfig implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(new FileAccessInterceptor())
                 .addPathPatterns("/api/files/**")
-                .excludePathPatterns("/api/files/health", "/api/files/tools/health");
+                .excludePathPatterns("/api/files/health", "/api/files/tools/health", "/api/files/download/**");
     }
 
     /**

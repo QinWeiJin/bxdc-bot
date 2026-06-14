@@ -7,6 +7,8 @@ import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
 import com.lobsterai.skillgateway.service.SkillService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -41,6 +43,8 @@ import com.lobsterai.skillgateway.util.StringUtils;
 @RestController
 @RequestMapping("/api/skills")
 public class SkillController {
+
+    private static final Logger log = LoggerFactory.getLogger(SkillController.class);
 
     private final SkillService skillService;
     private final LinuxScriptExecutionService linuxScriptExecutionService;
@@ -105,6 +109,17 @@ public class SkillController {
             @RequestBody Skill skill,
             @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
+        // 硬门禁：禁止通过 HTTP API 创建 skills。
+        // LLM 经常误用 skill_generator 在 skills 表里插入大量临时 skill，污染平台工具库。
+        // 只允许在 FileToolSeeder / 启动脚本里直接通过 mapper 写入"系统预置"行。
+        // 例外：平台管理员（SKILL_PLATFORM_ADMIN_USER_ID = "890728"）仍可创建平台级行。
+        if (userId == null
+                || !com.lobsterai.skillgateway.service.SkillService.SKILL_PLATFORM_ADMIN_USER_ID.equals(userId)) {
+            log.warn("[SkillController] Blocked createSkill: userId={}, skillName={}, reason=非平台管理员禁止创建 skill",
+                    userId, skill == null ? null : skill.getName());
+            return ResponseEntity.status(403).body(Collections.singletonMap("error",
+                    "禁止通过 API 创建 skill。所有可用工具已预置在 skills 表中，请使用已有工具。"));
+        }
         try {
             return ResponseEntity.ok(skillService.createSkill(skill, userId));
         } catch (IllegalArgumentException e) {

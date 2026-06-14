@@ -13,7 +13,7 @@
  * @module composables/useFileUpload
  */
 
-import { ref, provide, inject, type InjectionKey, type Ref } from 'vue'
+import { ref, provide, inject, triggerRef, type InjectionKey, type Ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 import {
@@ -157,7 +157,18 @@ function emptyGroups(): Record<FileType, UploadFileInfo[]> {
 // 2. provide / useFileUpload
 // ============================================================
 
+// 模块级 state 单例：避免 useFileUpload fallback 每次 new 一个独立 ref，
+// 导致"addFiles 写 A ref，UI 读 B ref"永久脱节。
+// 根因：某些生命周期时点（Suspense、KeepAlive、onNodeUnmounted）inject 失败，
+// 走 fallback 时跟 provideFileUpload 的 state 不是同一个对象。
+let _fileUploadState: FileUploadState | null = null
+
 export function provideFileUpload(): FileUploadState {
+  // 复用已有 state（避免 App 多次 setup / HMR 重复创建）
+  if (_fileUploadState) {
+    provide(FileUploadKey, _fileUploadState)
+    return _fileUploadState
+  }
   const uploadedFiles = ref<Record<FileType, UploadFileInfo[]>>(emptyGroups())
   const isUploading = ref(false)
   const uploadError = ref<string | null>(null)
@@ -234,6 +245,13 @@ export function provideFileUpload(): FileUploadState {
 
       uploadedFiles.value[fileType].push(info)
       added.push(info)
+    }
+
+    // 防御性：addFiles 完成后立即触发解析，不再依赖 caller 调 parseFiles
+    // （避免 onFileChange / onDrop / onPaste 各自漏调导致文件卡在 pending）
+    if (added.length > 0) {
+      // fire-and-forget；caller 也可 await parseFiles(added) 等待结果
+      parseAllNew(added).catch((e) => console.error('[addFiles] auto-parse failed', e))
     }
 
     return added
@@ -400,31 +418,55 @@ export function provideFileUpload(): FileUploadState {
   // ---- parseFileContent ----
   // 任务 4-5 接入 fileParser.parseDocument（docx/xlsx/txt 已实做；ppt/image 走 agent-core 兜底）
   // 模块二：注册 AbortController 用于 cancel 取消
+  // 幂等表：避免 addFiles auto-trigger + caller 显式 parseFiles 双调用导致重复上传
+  // 第二次调用拿到第一次的同一个 promise，HTTP 请求只发一次
+  const inflightParse = new Map<string, Promise<string>>()
+
   async function parseFileContent(file: UploadFileInfo): Promise<string> {
     if (file.status === 'parsed') {
       return file.parsedText ?? ''
     }
+    // 幂等：如果该文件正在解析，返回同一个 promise，不再发新请求
+    const inflight = inflightParse.get(file.id)
+    if (inflight) return inflight
 
+    const promise = doParseFile(file)
+    inflightParse.set(file.id, promise)
+    try {
+      return await promise
+    } finally {
+      inflightParse.delete(file.id)
+    }
+  }
+
+  async function doParseFile(file: UploadFileInfo): Promise<string> {
     const controller = new AbortController()
     abortControllers.set(file.id, controller)
     file.status = 'parsing'
+    console.log('[parseFile] start', file.id, 'status=', file.status)
     try {
       const { parseDocument } = await import('../utils/fileParser')
       const text = await parseDocument(file.file, file.fileType, controller.signal)
+      console.log('[parseFile] parseDocument returned', file.id, 'len=', text.length)
       if (controller.signal.aborted) {
         file.status = 'skipped'
         throw new DOMException('已取消', 'AbortError')
       }
       file.parsedText = text
       file.status = 'parsed'
+      console.log('[parseFile] set parsed', file.id, 'status=', file.status)
+      // 强制触发响应式（防御性，应对某些情况下 Proxy 没追踪到嵌套对象 mutation）
+      triggerRef(uploadedFiles)
       return text
     } catch (err) {
+      console.log('[parseFile] error', file.id, err instanceof Error ? err.message : err)
       if (err instanceof DOMException && err.name === 'AbortError') {
         if (file.status !== 'skipped') file.status = 'skipped'
       } else {
         file.status = 'failed'
         file.errorMessage = err instanceof Error ? err.message : '解析失败'
       }
+      triggerRef(uploadedFiles)
       throw err
     } finally {
       abortControllers.delete(file.id)
@@ -507,12 +549,19 @@ export function provideFileUpload(): FileUploadState {
     parsingCount: parsingCount,
   }
   provide(FileUploadKey, state)
+  _fileUploadState = state
   return state
 }
 
 export function useFileUpload(): FileUploadState {
+  // 关键：先检查模块级单例。provide/inject 在某些时点会失败
+  // （Suspense、KeepAlive、onNodeUnmounted 期间），fallback 必须返回同一个 state
+  if (_fileUploadState) return _fileUploadState
   const provided = inject(FileUploadKey)
-  if (provided) return provided
+  if (provided) {
+    _fileUploadState = provided
+    return provided
+  }
 
   // 降级：返回本地初始化的 state（单组件独立使用，不通过 provide 共享）
   const uploadedFiles = ref<Record<FileType, UploadFileInfo[]>>(emptyGroups())
@@ -753,5 +802,7 @@ export function useFileUpload(): FileUploadState {
     onPaste: onPasteStub,
     parsingCount: parsingCountStub,
   }
+  // fallback 分支也存到模块级单例，下次 inject 失败直接返回这个
+  _fileUploadState = state
   return state
 }

@@ -24,8 +24,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
+import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 
@@ -58,11 +60,18 @@ public class TxtToolService {
 
     private final FileToolService fileToolService;
     private final FtpFileService ftpFileService;
+    private final UserFileMapper userFileMapper;
+    private final FtpConfig ftpConfig;
 
     @Autowired
-    public TxtToolService(FileToolService fileToolService, FtpFileService ftpFileService) {
+    public TxtToolService(FileToolService fileToolService,
+                          FtpFileService ftpFileService,
+                          UserFileMapper userFileMapper,
+                          FtpConfig ftpConfig) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
+        this.userFileMapper = userFileMapper;
+        this.ftpConfig = ftpConfig;
     }
 
     /** Spring 启动后自动注册到 FileToolService。 */
@@ -569,18 +578,19 @@ public class TxtToolService {
     // ================================================================
 
     /**
-     * 去重行（保留首次出现顺序），覆盖式写回文件。
+     * 去重行（保留首次出现顺序）。**不修改原文件**，写入新文件，返回下载链接。
      * <p>
      * params.caseSensitive — 大小写敏感（默认 true）
      * params.keepEmpty — 是否保留空行（默认 true）
-     * params.inPlace — 是否写回文件（默认 true）；false 时仅返回不写回
+     * </p>
+     * <p>
+     * 返回字段：originalFileId, newFileId, newFileName, downloadUrl, originalLines, distinctLines, removed
      * </p>
      */
     public FileToolResponse txtDistinctLines(UserFile userFile, Map<String, Object> params, String userId) {
         ensureTextFile(userFile);
         boolean caseSensitive = readBoolParam(params, "caseSensitive", true);
         boolean keepEmpty = readBoolParam(params, "keepEmpty", true);
-        boolean inPlace = readBoolParam(params, "inPlace", true);
         String encoding = readStringParam(params, "encoding", DEFAULT_ENCODING);
         try {
             List<String> allLines = readAllLines(userFile, encoding);
@@ -597,23 +607,39 @@ public class TxtToolService {
             }
             int original = allLines.size();
             int removed = original - dedup.size();
-            boolean writtenBack = false;
-            if (inPlace) {
-                String content = joinLines(dedup, "\n");
-                byte[] bytes = content.getBytes(Charset.forName(encoding));
-                String originalStorageName = userFile.getFileName();
-                String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
-                userFile.setFtpPath(fullPath);
-                userFile.setFileSize((long) bytes.length);
-                writtenBack = true;
-            }
+
+            // 写新文件（原文件保持不变），返回新文件 id + 下载链接
+            String content = joinLines(dedup, "\n");
+            byte[] bytes = content.getBytes(Charset.forName(encoding));
+            String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
+                    new ByteArrayInputStream(bytes));
+            String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+            UserFile newFile = new UserFile();
+            newFile.setUserId(userId);
+            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setFileName(actualFileName);
+            newFile.setFileSize((long) bytes.length);
+            newFile.setFileType(userFile.getFileType());
+            newFile.setFtpPath(fullPath);
+            newFile.setUploadTime(java.time.LocalDateTime.now());
+            newFile.setSourceFileId(userFile.getId());
+            userFileMapper.insert(newFile);
+
+            // 写入绝对路径 downloadUrl 到 DB
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+            newFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(newFile);
+
             Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("fileName", userFile.getOriginalFileName());
+            result.put("originalFileId", userFile.getId());
+            result.put("newFileId", newFile.getId());
+            result.put("newFileName", actualFileName);
+            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("downloadUrl", downloadUrl);
             result.put("originalLines", original);
             result.put("distinctLines", dedup.size());
             result.put("removed", removed);
-            result.put("lines", dedup);
-            result.put("writtenBack", writtenBack);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("txt_distinct_lines failed for {}", userFile.getOriginalFileName(), e);
@@ -626,12 +652,14 @@ public class TxtToolService {
     // ================================================================
 
     /**
-     * 排序行（字典序/数字序），覆盖式写回。
+     * 排序行（字典序/数字序）。**不修改原文件**，写入新文件，返回下载链接。
      * <p>
      * params.order — 升序/降序（asc/desc，默认 asc）
      * params.numeric — 是否按数字排序（默认 false 字典序）
      * params.caseSensitive — 字典序时是否大小写敏感（默认 false）
-     * params.inPlace — 是否写回文件（默认 true）
+     * </p>
+     * <p>
+     * 返回字段：originalFileId, newFileId, newFileName, downloadUrl, order, numeric, lineCount
      * </p>
      */
     public FileToolResponse txtSortLines(UserFile userFile, Map<String, Object> params, String userId) {
@@ -639,7 +667,6 @@ public class TxtToolService {
         String order = readStringParam(params, "order", "asc").toLowerCase();
         boolean numeric = readBoolParam(params, "numeric", false);
         boolean caseSensitive = readBoolParam(params, "caseSensitive", false);
-        boolean inPlace = readBoolParam(params, "inPlace", true);
         String encoding = readStringParam(params, "encoding", DEFAULT_ENCODING);
         try {
             List<String> allLines = readAllLines(userFile, encoding);
@@ -664,21 +691,38 @@ public class TxtToolService {
                     return asc ? cmp : -cmp;
                 }
             });
-            if (inPlace) {
-                String content = joinLines(sorted, "\n");
-                byte[] bytes = content.getBytes(Charset.forName(encoding));
-                String originalStorageName = userFile.getFileName();
-                String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
-                userFile.setFtpPath(fullPath);
-                userFile.setFileSize((long) bytes.length);
-            }
+
+            // 写新文件（原文件保持不变），返回新文件 id + 下载链接
+            String content = joinLines(sorted, "\n");
+            byte[] bytes = content.getBytes(Charset.forName(encoding));
+            String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
+                    new ByteArrayInputStream(bytes));
+            String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+            UserFile newFile = new UserFile();
+            newFile.setUserId(userId);
+            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setFileName(actualFileName);
+            newFile.setFileSize((long) bytes.length);
+            newFile.setFileType(userFile.getFileType());
+            newFile.setFtpPath(fullPath);
+            newFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(newFile);
+
+            // 写入绝对路径 downloadUrl 到 DB
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+            newFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(newFile);
+
             Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("fileName", userFile.getOriginalFileName());
+            result.put("originalFileId", userFile.getId());
+            result.put("newFileId", newFile.getId());
+            result.put("newFileName", actualFileName);
+            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("downloadUrl", downloadUrl);
             result.put("order", asc ? "asc" : "desc");
             result.put("numeric", numeric);
             result.put("lineCount", sorted.size());
-            result.put("lines", sorted);
-            result.put("writtenBack", inPlace);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("txt_sort_lines failed for {}", userFile.getOriginalFileName(), e);
