@@ -157,6 +157,8 @@ export class AgentFactory {
       plannerModel: model,
       availableTools: baseTools,
       sessionId: config?.sessionId,
+      // 传 conversationId，让 tool 调 gateway 时 X-Session-Id 用持久化对话 ID 而非 per-turn sessionId
+      conversationId: config?.conversationId,
       enabledSkillIds,
     });
     

@@ -42,17 +42,20 @@ public class AsyncTaskPollingScheduler {
     private final AsyncTaskPollingService pollingService;
     private final ApiProxyService apiProxyService;
     private final AsyncPollingAuditService auditService;
+    private final AsyncTaskChatReplyService chatReplyService;
     private final ObjectMapper objectMapper;
 
     public AsyncTaskPollingScheduler(
             AsyncTaskPollingService pollingService,
             ApiProxyService apiProxyService,
             AsyncPollingAuditService auditService,
+            AsyncTaskChatReplyService chatReplyService,
             ObjectMapper objectMapper
     ) {
         this.pollingService = pollingService;
         this.apiProxyService = apiProxyService;
         this.auditService = auditService;
+        this.chatReplyService = chatReplyService;
         this.objectMapper = objectMapper;
     }
 
@@ -218,6 +221,8 @@ public class AsyncTaskPollingScheduler {
                     completeLog.setStatus("COMPLETED");
                     completeLog.setDurationMs((int) durationMs);
                     auditService.log(completeLog);
+
+                    triggerChatReplyIfTerminal(task);
                     return;
                 }
             } catch (Exception netEx) {
@@ -246,12 +251,16 @@ public class AsyncTaskPollingScheduler {
                         timeoutLog.setErrorMessage(err);
                         timeoutLog.setDurationMs((int) durationMs);
                         auditService.log(timeoutLog);
+
+                        triggerChatReplyIfTerminal(task);
                     } else {
                         // SINGLE_CALL 模式其他 HTTP 异常 → 标 FAILED
                         String err = "SINGLE_CALL network error: " + netEx.getMessage();
                         pollingService.updatePollResult(task.getId(), "FAILED", null, err);
                         log.warn("Async task {} (SINGLE_CALL) failed: {}", task.getId(), netEx.getMessage());
                         auditService.log(buildCompleteLog(task, "FAILED", err));
+
+                        triggerChatReplyIfTerminal(task);
                     }
                     return;
                 }
@@ -314,6 +323,8 @@ public class AsyncTaskPollingScheduler {
                 AsyncPollingAuditLog completeLog = auditService.buildBaseLog(task, "GATEWAY_POLL_COMPLETE");
                 completeLog.setStatus("COMPLETED");
                 auditService.log(completeLog);
+
+                triggerChatReplyIfTerminal(task);
                 return;
             }
 
@@ -326,6 +337,8 @@ public class AsyncTaskPollingScheduler {
                 failLog.setStatus("FAILED");
                 failLog.setErrorMessage(errMsg);
                 auditService.log(failLog);
+
+                triggerChatReplyIfTerminal(task);
                 return;
             }
 
@@ -338,6 +351,8 @@ public class AsyncTaskPollingScheduler {
                 timeoutLog.setStatus("TIMEOUT");
                 timeoutLog.setErrorMessage(errMsg);
                 auditService.log(timeoutLog);
+
+                triggerChatReplyIfTerminal(task);
                 return;
             }
 
@@ -353,10 +368,32 @@ public class AsyncTaskPollingScheduler {
                 failLog.setStatus("FAILED");
                 failLog.setErrorMessage(errMsg);
                 auditService.log(failLog);
+
+                triggerChatReplyIfTerminal(task);
                 return;
             }
             log.error("Polling task {} failed (retry {}/{}): {}", task.getId(), retryCount, MAX_CONSECUTIVE_FAILURES, e.getMessage());
             pollingService.updateStatus(task.getId(), "POLLING", "Poll error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 触发"异步任务回灌对话 + LLM 续答"（open spec: async-task-result-echo-to-chat）。
+     *
+     * - fire-and-forget：调 chatReplyService.onTaskTerminal（@Async），不阻塞轮询线程
+     * - 重新从 DB 读最新 task 状态（status / pollResult / completedAt / errorMessage 都是 updatePollResult 写完的）
+     * - chatReplyService 内部 catch 异常，外层不感知
+     */
+    private void triggerChatReplyIfTerminal(AsyncTask task) {
+        try {
+            AsyncTask fresh = pollingService.findById(task.getId());
+            if (fresh == null) {
+                log.warn("[ChatReply] Task {} not found in DB, skip", task.getId());
+                return;
+            }
+            chatReplyService.onTaskTerminal(fresh);
+        } catch (Exception e) {
+            log.warn("[ChatReply] trigger failed for task {}: {}", task.getId(), e.getMessage());
         }
     }
 

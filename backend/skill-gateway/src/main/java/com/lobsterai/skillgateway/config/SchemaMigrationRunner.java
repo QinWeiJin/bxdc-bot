@@ -44,6 +44,8 @@ public class SchemaMigrationRunner implements InitializingBean {
         try (Connection conn = dataSource.getConnection()) {
             migrateAsyncTasks(conn);
             migrateConversationApiColumns(conn);
+            migrateAsyncTaskChatReply(conn);
+            migrateConversationMessageSummaries(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -205,6 +207,89 @@ public class SchemaMigrationRunner implements InitializingBean {
         }
     }
 
+    /**
+     * async-task-result-echo-to-chat change 配套 schema 迁移（open spec）。
+     *
+     * 任务：扩展 conversation_messages 表，让它能存"异步任务结果"消息 + LLM 续答总结。
+     *
+     * - source VARCHAR(10) → VARCHAR(20)：容纳 'ASYNC_TASK_RESULT'（17 字符）
+     * - 新增 async_task_id / summary_pending / summary_text / summary_generated_at 列
+     * - 新增 async_task_id 索引（查"该任务产生了哪些对话消息"）
+     *
+     * 注意：方法可见性为 package-private（不是 private），方便单测构造 H2 连接直接跑幂等验证。
+     * 线上调用入口仍是 {@link #afterPropertiesSet()}。
+     */
+    void migrateAsyncTaskChatReply(Connection conn) {
+        String table = "conversation_messages";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 1. source 列扩到 VARCHAR(20)（VARCHAR(10) 装不下 'ASYNC_TASK_RESULT'）
+        if (existingColumns.contains("source")) {
+            String currentType = getColumnType(conn, table, "source");
+            if (currentType != null && !currentType.toUpperCase().startsWith("VARCHAR(20")) {
+                try (Statement st = conn.createStatement()) {
+                    st.executeUpdate("ALTER TABLE " + table +
+                            " MODIFY COLUMN source VARCHAR(20) NOT NULL DEFAULT 'web' " +
+                            "COMMENT '消息来源: web=网页端, api=API调用, ASYNC_TASK_RESULT=异步任务结果'");
+                    log.info("[SchemaMigration] ✅ Altered column {}.source to VARCHAR(20)", table);
+                } catch (Exception e) {
+                    log.warn("[SchemaMigration] Failed to alter column {}.source: {}", table, e.getMessage());
+                }
+            }
+        }
+
+        // 2. async_task_id
+        ensureColumn(conn, table, "async_task_id", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN async_task_id VARCHAR(64) DEFAULT NULL " +
+                "COMMENT '关联 async_tasks.id（NULL=普通消息）'");
+
+        // 3. summary_pending
+        ensureColumn(conn, table, "summary_pending", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN summary_pending TINYINT(1) NOT NULL DEFAULT 1 " +
+                "COMMENT 'LLM 续答总结是否尚未生成（1=pending，0=done）'");
+
+        // 4. summary_text
+        ensureColumn(conn, table, "summary_text", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN summary_text MEDIUMTEXT DEFAULT NULL " +
+                "COMMENT 'LLM 续答生成的自然语言总结'");
+
+        // 5. summary_generated_at
+        ensureColumn(conn, table, "summary_generated_at", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN summary_generated_at DATETIME DEFAULT NULL " +
+                "COMMENT 'LLM 续答完成时间'");
+
+        // 6. async_task_id 索引
+        ensureIndex(conn, table, "idx_conv_msg_async_task_id", existingIndexes,
+                "CREATE INDEX idx_conv_msg_async_task_id ON " + table + "(async_task_id)");
+    }
+
+    /**
+     * 读取列的 SQL 类型定义（例如 "VARCHAR(10)" / "TEXT" / "INT(11)"）。
+     * 用于"列存在但类型不够"场景下的条件判断。
+     */
+    private String getColumnType(Connection conn, String table, String column) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT COLUMN_TYPE FROM information_schema.COLUMNS " +
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?")) {
+            ps.setString(1, table);
+            ps.setString(2, column);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getString(1);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] Failed to read column type for {}.{}: {}", table, column, e.getMessage());
+        }
+        return null;
+    }
+
     private void ensureIndex(Connection conn, String table, String indexName,
                              Set<String> existing, String alterSql) {
         if (existing.contains(indexName.toLowerCase())) {
@@ -216,6 +301,47 @@ public class SchemaMigrationRunner implements InitializingBean {
             log.info("[SchemaMigration] ✅ Added index {} on {}", indexName, table);
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to add index {} on {}: {}", indexName, table, e.getMessage());
+        }
+    }
+
+    /**
+     * llm-context-window-summarization change 配套 schema 迁移。
+     *
+     * 任务：新增 conversation_message_summaries 表，存"对话历史 LLM 摘要"
+     * （按 conversation_id + covers_from_msg_id + covers_to_msg_id 唯一键缓存）。
+     *
+     * 不在 conversation_messages 表上加列，避免对现有热路径造成影响。
+     */
+    void migrateConversationMessageSummaries(Connection conn) {
+        String table = "conversation_message_summaries";
+        if (tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} already exists, skip", table);
+            return;
+        }
+
+        String createSql = "CREATE TABLE " + table + " (\n" +
+                "  id BIGINT PRIMARY KEY AUTO_INCREMENT,\n" +
+                "  conversation_id VARCHAR(64) NOT NULL,\n" +
+                "  covers_from_msg_id BIGINT NOT NULL,\n" +
+                "  covers_to_msg_id BIGINT NOT NULL,\n" +
+                "  summary_text MEDIUMTEXT NOT NULL,\n" +
+                "  model VARCHAR(64) NOT NULL,\n" +
+                "  input_token_count INT,\n" +
+                "  output_token_count INT,\n" +
+                "  created_at DATETIME(3) NOT NULL,\n" +
+                "  updated_at DATETIME(3) NOT NULL,\n" +
+                "  UNIQUE KEY uk_conv_range (conversation_id, covers_from_msg_id, covers_to_msg_id),\n" +
+                "  KEY idx_conv_created (conversation_id, created_at),\n" +
+                "  CONSTRAINT fk_summaries_conv FOREIGN KEY (conversation_id)\n" +
+                "    REFERENCES conversations(conversation_id) ON DELETE CASCADE\n" +
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n" +
+                "  COMMENT '对话历史 LLM 摘要缓存（按 covers msg_id 范围）'";
+
+        try (Statement st = conn.createStatement()) {
+            st.executeUpdate(createSql);
+            log.info("[SchemaMigration] ✅ Created table {}", table);
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
     }
 }

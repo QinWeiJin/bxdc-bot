@@ -221,13 +221,86 @@ export class MemoryService implements OnModuleInit {
         userid: userId,
         topk: 1
       }, { timeout: 5000 });
-      if (response.data?.code === 200 && response.data?.details) {
-        return response.data.details;
+
+      console.log('[MemoryService] dreamsearch raw response:', JSON.stringify(response.data).slice(0, 500));
+
+      if (response.data?.code !== 200) {
+        return '';
+      }
+
+      // 对齐 searchMemories 的细节处理：同时支持数组和字符串
+      const details = response.data?.details;
+      if (Array.isArray(details)) {
+        return details.map(item => typeof item === 'string' ? item : JSON.stringify(item)).join('\n');
+      }
+      if (typeof details === 'string' && details.length > 0) {
+        return details;
       }
       return '';
     } catch (e: any) {
       console.error('[MemoryService] fetchUserProfile error:', e.message);
       return '';
     }
+  }
+
+  /**
+   * Delete all memories for a user via mem0 /deletemem endpoint.
+   * Request body aligns with /madd: { sentencein?, sentenceout?, userid }.
+   * No-op if MEM0_ENABLED=false (returns silently).
+   *
+   * Used by the "clear memory" flow triggered from ProfileEditModal.
+   */
+  async deleteAllMemories(userId: string): Promise<void> {
+    if (!this.mem0Enabled) {
+      console.log('[MemoryService] deleteAllMemories skipped: MEM0_ENABLED=false');
+      return;
+    }
+    if (!userId) {
+      console.warn('[MemoryService] deleteAllMemories skipped: userId is missing');
+      return;
+    }
+
+    const requestData = {
+      sentencein: '',
+      sentenceout: '',
+      userid: userId
+    };
+
+    try {
+      const response = await axios.post(`${this.mem0Url}/deletemem`, requestData);
+      if (response.data && response.data.code === 200) {
+        console.log(`[MemoryService] All memories deleted for user ${userId}:`, response.data.message);
+        this.logger.logMemory('delete', {
+          request: requestData,
+          response: response.data
+        });
+      } else {
+        console.warn('[MemoryService] mem0 deletemem failed:', response.data);
+        this.logger.logMemory('delete', {
+          request: requestData,
+          error: 'Failed to delete',
+          response: response.data
+        });
+        throw new Error(response.data?.message || 'mem0 deletemem returned non-200 code');
+      }
+    } catch (e: any) {
+      console.error('[MemoryService] deletemem error:', e.message);
+      this.logger.logMemory('delete', {
+        request: requestData,
+        error: e.message
+      });
+      throw e;
+    }
+  }
+
+  /**
+   * Get memory status for a user.
+   * Returns only `{ enabled }` per spec (no hasMemory field).
+   * Does NOT call mem0 — enabled comes from MEM0_ENABLED env var.
+   * On mem0 unavailability the controller catches and returns enabled: false,
+   * but this method itself never throws.
+   */
+  async getMemoryStatus(userId: string): Promise<{ enabled: boolean }> {
+    return { enabled: this.mem0Enabled };
   }
 }

@@ -30,6 +30,17 @@ export function getEventSourceUrl(taskId: string): string {
   return apiUrl(`/api/tasks/${taskId}/events`)
 }
 
+/**
+ * 对话级别 SSE 订阅 URL —— 用于接收 message_inserted / message_updated 事件，
+ * 让异步任务完成时新消息自动出现在聊天流（不用刷新页面）。
+ *
+ * EventSource 浏览器 API 不支持自定义 header，所以 userId 通过 query 参数传入，
+ * 服务端用同一套 X-User-Id 校验逻辑做归属判断。
+ */
+export function getConversationEventSourceUrl(conversationId: string, userId: string): string {
+  return apiUrl(`/api/conversations/${encodeURIComponent(conversationId)}/events?userId=${encodeURIComponent(userId)}`)
+}
+
 export function getAgentStreamUrl(): string {
   return agentUrl('/agent/run')
 }
