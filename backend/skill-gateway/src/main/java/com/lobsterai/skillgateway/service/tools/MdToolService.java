@@ -36,7 +36,6 @@ import com.vladsch.flexmark.util.ast.VisitHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -92,9 +91,6 @@ public class MdToolService {
     private final FtpFileService ftpFileService;
     private final UserFileMapper userFileMapper;
     private final FtpConfig ftpConfig;
-
-    @Value("${app.base-url:http://localhost:18080}")
-    private String baseUrl;
 
     @Autowired
     public MdToolService(FileToolService fileToolService,
@@ -388,8 +384,8 @@ public class MdToolService {
 
             Long tempFileId = tempUserFile.getId();
 
-            // 生成完整下载 URL
-            String downloadUrl = baseUrl + "/api/files/download/" + tempFileId;
+            // 生成带签名的下载 URL（浏览器可直接点击，无需 X-User-Id header）
+            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
             tempUserFile.setDownloadUrl(downloadUrl);
             userFileMapper.updateById(tempUserFile);
 
@@ -455,7 +451,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("filePath", userFile.getFtpPath());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("encoding", encoding);
@@ -572,11 +568,6 @@ public class MdToolService {
             resultFileId = userFile.getId();
             resultFileName = userFile.getOriginalFileName();
 
-            // 更新文件大小和路径
-            userFile.setFileSize((long) bytes.length);
-            userFile.setFtpPath(ftpPath);
-            userFileMapper.updateById(userFile);
-
             log.info("md saveAndReturnResult overwrote temp file: fileId={}, storageFileName={}", resultFileId, storageFileName);
         } else {
             // 源文件 / 无 fileRef（userFile == null）：创建新文件
@@ -604,7 +595,20 @@ public class MdToolService {
                     resultFileId, tempFileName, userFile == null);
         }
 
-        String downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+        String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
+
+        // 回写 downloadUrl + 文件大小/路径 到 DB（与 Word/Txt 一致，单次 UPDATE）
+        if (sourceFileId == null) {
+            UserFile updateFile = new UserFile();
+            updateFile.setId(resultFileId);
+            updateFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(updateFile);
+        } else {
+            userFile.setFileSize((long) bytes.length);
+            userFile.setFtpPath(ftpPath);
+            userFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(userFile);
+        }
 
         result.put("fileId", resultFileId);
         result.put("downloadUrl", downloadUrl);
@@ -645,7 +649,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", images.size());
             result.put("images", images);
@@ -680,7 +684,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", headings.size());
             result.put("headings", headings);
@@ -755,7 +759,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tables.size());
             result.put("tables", tables);
@@ -818,7 +822,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", items.size());
             result.put("items", items);
@@ -883,7 +887,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tasks.size());
             result.put("tasks", tasks);
@@ -932,7 +936,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", spans.size());
             result.put("spans", spans);
@@ -975,7 +979,7 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", baseUrl + "/api/files/download/" + userFile.getId());
+            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
             result.put("fileName", userFile.getOriginalFileName());
             result.put("headingCount", flat.size());
             result.put("toc", toc);
