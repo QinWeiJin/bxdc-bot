@@ -6,6 +6,7 @@ import com.lobsterai.skillgateway.entity.SkillVisibility;
 import com.lobsterai.skillgateway.entity.SystemSkill;
 import com.lobsterai.skillgateway.mapper.SkillMapper;
 import com.lobsterai.skillgateway.mapper.SystemSkillMapper;
+import java.util.Collections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
@@ -687,7 +688,11 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
-        s.put("keyword", stringProp("要统计的关键词（多个用逗号分隔）", true));
+        Map<String, Object> keywords = new LinkedHashMap<>();
+        keywords.put("type", "array");
+        keywords.put("description", "要统计的关键词列表，例如 [\"Java\",\"Python\"]");
+        keywords.put("items", Collections.singletonMap("type", "string"));
+        s.put("keywords", keywords);
         return s;
     }
 
