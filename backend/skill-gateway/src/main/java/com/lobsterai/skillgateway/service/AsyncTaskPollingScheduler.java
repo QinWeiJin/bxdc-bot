@@ -294,6 +294,24 @@ public class AsyncTaskPollingScheduler {
                 isFailed = pollingService.evaluateFailure(pollResponseStr, task.getCompletionJsonPath(), task.getFailedValues());
             }
 
+            // ========== Auto-detect 兜底（open spec: async-task-polling-completion）==========
+            // 用户配置的 completionJsonPath / failedValues 未命中时，从 pollEndpoint 真实响应
+            // 中按候选 status 字段路径推断终态，避免通知中心永远卡 99%。
+            // 用户配置优先（已完成 evaluateCompletion）；此处仅作 fallback。
+            boolean autoDetected = false;
+            if (!completed && !isFailed) {
+                AsyncTaskPollingService.TerminalStatus auto = pollingService.autoDetectTerminalStatus(pollResponseStr);
+                if (auto == AsyncTaskPollingService.TerminalStatus.SUCCESS) {
+                    completed = true;
+                    autoDetected = true;
+                    log.info("Async task {} auto-detected SUCCESS (user config did not match)", task.getId());
+                } else if (auto == AsyncTaskPollingService.TerminalStatus.FAILURE) {
+                    isFailed = true;
+                    autoDetected = true;
+                    log.info("Async task {} auto-detected FAILURE (user config did not match)", task.getId());
+                }
+            }
+
             if (!completed && !isFailed && task.getStartedAt() != null) {
                 expired = pollingService.isExpired(task.getStartedAt(), task.getMaxWaitSeconds());
             }

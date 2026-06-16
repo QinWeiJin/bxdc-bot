@@ -82,6 +82,30 @@ function progressPercent(t: AsyncTaskNotification): number {
   return 0
 }
 
+/**
+ * 进度条 tooltip 文案。当任务运行时间已接近 maxWaitSeconds 但状态仍未变时，
+ * 给用户"任务仍在运行中，可能即将完成/可能已卡住"的提示，避免 99% 被误认为 bug。
+ * open spec: async-task-polling-completion（前端 UX 部分）
+ */
+function progressTitle(t: AsyncTaskNotification): string {
+  const elapsed = t.elapsedSeconds || 0
+  if (t.status === 'POLLING' || t.status === 'SINGLE_CALLED') {
+    const max = (t.maxWaitSeconds && t.maxWaitSeconds > 0) ? t.maxWaitSeconds : 1800
+    if (elapsed >= max) {
+      return `任务已运行 ${elapsed}s（超过最大等待 ${max}s），仍在等待异步接口返回终态`
+    }
+    if (elapsed >= max * 0.95) {
+      return `任务已运行 ${elapsed}s，即将完成`
+    }
+    return `任务运行中（已 ${elapsed}s / 上限 ${max}s）`
+  }
+  if (t.status === 'COMPLETED') return '任务已完成'
+  if (t.status === 'FAILED') return '任务失败'
+  if (t.status === 'TIMEOUT') return '任务超时'
+  if (t.status === 'PENDING') return '任务等待中'
+  return ''
+}
+
 function progressStatus(t: AsyncTaskNotification): 'success' | 'error' | 'active' | 'undefined' {
   if (t.status === 'COMPLETED') return 'success'
   if (t.status === 'FAILED' || t.status === 'TIMEOUT') return 'error'
@@ -604,6 +628,7 @@ function handleClose() {
           v-if="detailTask.status === 'POLLING' || detailTask.status === 'PENDING' || detailTask.status === 'SINGLE_CALLED'"
           :percentage="progressPercent(detailTask)"
           :status="progressStatus(detailTask)"
+          :title="progressTitle(detailTask)"
           :stroke-width="4"
           class="detail-progress"
         />
