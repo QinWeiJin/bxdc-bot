@@ -24,7 +24,10 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
                 .in(AsyncTask::getStatus, "PENDING", "POLLING")
                 .and(w -> w.isNull(AsyncTask::getLastPolledAt)
                         .or()
-                        .apply("TIMESTAMPDIFF(SECOND, last_polled_at, UTC_TIMESTAMP()) >= poll_interval_seconds"))
+                        // 用 NOW() 不用 UTC_TIMESTAMP()：连接时区是 Asia/Shanghai（JDBC URL serverTimezone=Asia/Shanghai），
+                        // last_polled_at 也是 JVM 本地时间写入；用 UTC 会差 8 小时导致 diff 永远为负数，
+                        // 任务只在首次扫描被扫到，之后永远不会被重新轮询。
+                        .apply("TIMESTAMPDIFF(SECOND, last_polled_at, NOW()) >= poll_interval_seconds"))
                 .orderByAsc(AsyncTask::getCreatedAt)
                 .last("LIMIT " + limit));
     }
