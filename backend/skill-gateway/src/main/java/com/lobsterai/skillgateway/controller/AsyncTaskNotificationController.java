@@ -37,12 +37,13 @@ public class AsyncTaskNotificationController {
     public ResponseEntity<?> listMy(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestParam(value = "unreadOnly", defaultValue = "false") boolean unreadOnly,
-            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+            @RequestParam(value = "limit", defaultValue = "20") int limit,
+            @RequestParam(value = "parentToolId", required = false) String parentToolId) {
         if (StringUtils.isBlank(userId)) {
             return ResponseEntity.badRequest().body(error("missing X-User-Id header"));
         }
         if (limit <= 0 || limit > 200) limit = 20;
-        List<AsyncTaskNotificationDto> items = asyncTaskPollingService.findNotificationsByUser(userId, unreadOnly, limit);
+        List<AsyncTaskNotificationDto> items = asyncTaskPollingService.findNotificationsByUser(userId, unreadOnly, limit, parentToolId);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("items", items);
         body.put("count", items.size());
@@ -124,6 +125,89 @@ public class AsyncTaskNotificationController {
         resp.put("affected", affected);
         resp.put("requested", ids.size());
         return ResponseEntity.ok(resp);
+    }
+
+    /**
+     * 等待异步任务终态。agent-core BxdcbotRunScheduler 用此端点拿子任务真结果。
+     *
+     * 参数：
+     * - timeout：最多 await 秒数，默认 2
+     *
+     * 返回：JSON { status, result, errorMessage, pollResult, ... }
+     * - 若已终态（COMPLETED / FAILED / TIMEOUT / SINGLE_CALLED 已调完），立即返回
+     * - 若还在跑（PENDING / POLLING / SINGLE_CALLED 未完成），在 timeout 秒内每秒查一次 DB
+     */
+    @GetMapping("/{id}/wait")
+    public ResponseEntity<?> waitForTask(
+            @PathVariable("id") Long id,
+            @RequestParam(value = "timeout", defaultValue = "2") int timeoutSec,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        com.lobsterai.skillgateway.entity.AsyncTask task = asyncTaskPollingService.findById(id);
+        if (task == null) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("status", "NOT_FOUND");
+            resp.put("message", "Async task #" + id + " not found");
+            return ResponseEntity.status(404).body(resp);
+        }
+
+        // 终态直接返回
+        String status = task.getStatus();
+        if ("COMPLETED".equals(status) || "FAILED".equals(status) || "TIMEOUT".equals(status)) {
+            return ResponseEntity.ok(buildTaskResult(task));
+        }
+        // SINGLE_CALLED 状态且 poll_result 非空 = 单次长调用已完成
+        if ("SINGLE_CALLED".equals(status) && task.getPollResult() != null && !task.getPollResult().isEmpty()) {
+            return ResponseEntity.ok(buildTaskResult(task));
+        }
+
+        // 非终态：在 timeout 秒内轮询 DB
+        int waited = 0;
+        while (waited < timeoutSec) {
+            try { Thread.sleep(1000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            waited++;
+
+            task = asyncTaskPollingService.findById(id);
+            if (task == null) {
+                Map<String, Object> resp = new HashMap<>();
+                resp.put("status", "NOT_FOUND");
+                return ResponseEntity.status(404).body(resp);
+            }
+            status = task.getStatus();
+            if ("COMPLETED".equals(status) || "FAILED".equals(status) || "TIMEOUT".equals(status)) {
+                return ResponseEntity.ok(buildTaskResult(task));
+            }
+            if ("SINGLE_CALLED".equals(status) && task.getPollResult() != null && !task.getPollResult().isEmpty()) {
+                return ResponseEntity.ok(buildTaskResult(task));
+            }
+        }
+
+        // 超时返回当前状态
+        return ResponseEntity.ok(buildTaskResult(task));
+    }
+
+    private Map<String, Object> buildTaskResult(com.lobsterai.skillgateway.entity.AsyncTask task) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", task.getId());
+        result.put("status", task.getStatus());
+        result.put("skillId", task.getSkillId());
+        result.put("pollStrategy", task.getPollStrategy());
+        if (task.getPollResult() != null) {
+            result.put("result", task.getPollResult());
+        }
+        if (task.getInitialResponse() != null) {
+            result.put("initialResponse", task.getInitialResponse());
+        }
+        if (task.getErrorMessage() != null) {
+            result.put("errorMessage", task.getErrorMessage());
+        }
+        if (task.getMaxWaitSeconds() != null) {
+            result.put("maxWaitSeconds", task.getMaxWaitSeconds());
+        }
+        result.put("pollRetryCount", task.getPollRetryCount());
+        if (task.getStartedAt() != null) result.put("startedAt", task.getStartedAt().toString());
+        if (task.getCompletedAt() != null) result.put("completedAt", task.getCompletedAt().toString());
+        if (task.getCreatedAt() != null) result.put("createdAt", task.getCreatedAt().toString());
+        return result;
     }
 
     private static Map<String, Object> error(String msg) {

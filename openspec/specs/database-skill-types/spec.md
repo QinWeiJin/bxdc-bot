@@ -11,9 +11,9 @@ TBD - created by archiving change support-dual-skill-types. Update Purpose after
 - **THEN** 该记录保存 `executionMode=CONFIG`
 - **AND** 保留现有 `type=EXTENSION` 等来源字段语义不变
 
-#### Scenario: 创建 OpenClaw 风格 skill
+#### Scenario: 创建 Bxdcbot 风格 skill
 - **WHEN** 用户或初始化脚本创建一个 prompt 编排型数据库 skill
-- **THEN** 该记录保存 `executionMode=OPENCLAW`
+- **THEN** 该记录保存 `executionMode=BXDCBOT`
 - **AND** 其配置内容按 prompt/orchestration 协议存储
 
 #### Scenario: 兼容历史数据库记录
@@ -35,20 +35,20 @@ SkillGateway MUST 在数据库 skill 的列表与详情响应中返回稳定的�
 - **AND** 调用方无需解析 `configuration` 才能判断 skill 类型
 
 ### Requirement: Agent 按执行类型加载数据库 Skill
-Agent Core MUST 同时加载 `CONFIG` 与 `OPENCLAW` 两类数据库 skill，并按执行类型分配到对应执行器。
+Agent Core MUST 同时加载 `CONFIG` 与 `BXDCBOT` 两类数据库 skill，并按执行类型分配到对应执行器。
 
 #### Scenario: 加载配置驱动 skill
 - **WHEN** Agent Core 从 SkillGateway 获取到一个 `executionMode=CONFIG` 且启用中的数据库 skill
 - **THEN** 将其注册为数据库 tool
 - **AND** 调用时继续走既有的配置驱动执行逻辑
 
-#### Scenario: 加载 OpenClaw 风格 skill
-- **WHEN** Agent Core 从 SkillGateway 获取到一个 `executionMode=OPENCLAW` 且启用中的数据库 skill
+#### Scenario: 加载 Bxdcbot 风格 skill
+- **WHEN** Agent Core 从 SkillGateway 获取到一个 `executionMode=BXDCBOT` 且启用中的数据库 skill
 - **THEN** 将其注册为数据库 tool
 - **AND** 调用时交由 prompt/orchestration 执行器处理
 
 #### Scenario: 忽略未启用 skill
 - **WHEN** SkillGateway 返回某条 `enabled=false` 的数据库 skill
 - **THEN** Agent Core 不将其注册为可调用 tool
-- **AND** 该规则对 `CONFIG` 与 `OPENCLAW` 两类 skill 一致生效
+- **AND** 该规则对 `CONFIG` 与 `BXDCBOT` 两类 skill 一致生效
 
