@@ -455,7 +455,7 @@ public class FileToolService {
      * 这些工具在没有 fileId 时会创建新文件。
      */
     private boolean isOptionalFileIdTool(String toolName) {
-        return "excel_write".equals(toolName) || "word_write".equals(toolName);
+        return "excel_write".equals(toolName) || "word_write".equals(toolName) || "md_write".equals(toolName);
     }
 
     /**

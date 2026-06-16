@@ -29,8 +29,8 @@ const agentRolePrompt = `[角色与使命]
  * 限制 skill_generator 工具的使用条件，避免重复创建技能
  */
 const skillGeneratorPolicy = `[技能生成策略]
-在使用 skill_generator 工具在 SkillGateway 上创建新的扩展技能之前，你必须满足以下至少一个条件：
-(1) 你已确认现有能力无法完成该任务——这包括内置工具、已可用的 Gateway 扩展工具，以及用户可以通过技能工具加载的文件系统技能；或者
+在使用 skill_generator 工具在 SkillGateway 上创建新的扩展技能之前，你必须满足以下条件：
+
 (2) 用户明确要求你创建、添加或注册一个新技能/扩展。
 
 不要将 skill_generator 作为默认选择。优先使用现有的工具和已加载的技能。

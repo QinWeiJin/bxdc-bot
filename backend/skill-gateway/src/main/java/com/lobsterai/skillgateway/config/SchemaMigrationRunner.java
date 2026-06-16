@@ -117,6 +117,11 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "schema_properties", existingColumns,
                 "ALTER TABLE skills ADD COLUMN schema_properties TEXT DEFAULT NULL " +
                 "COMMENT 'Skill 实体持久化的 JSON schema 配置（lskrat 6-08 加，未同步 SQL）'");
+
+        // skill_owner_type：区分用户技能（1）和系统技能（2），老库缺这列需补齐
+        ensureColumn(conn, table, "skill_owner_type", existingColumns,
+                "ALTER TABLE skills ADD COLUMN skill_owner_type TINYINT(1) DEFAULT 1 " +
+                "COMMENT '1: 用户技能, 2: 系统技能'");
     }
 
     /**

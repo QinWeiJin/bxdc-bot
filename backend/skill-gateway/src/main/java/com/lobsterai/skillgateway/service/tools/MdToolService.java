@@ -487,11 +487,14 @@ public class MdToolService {
      * @param userId   用户 ID
      * @return fileId + downloadUrl + filePath + 写入统计
      */
-    public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureMdFile(userFile);
+skillGeneratorPolicy    public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
+        if (userFile != null) {
+            ensureMdFile(userFile);
+        }
         String content = readStringParam(params, "content", null);
+        String errFileName = userFile != null ? userFile.getOriginalFileName() : "new.md";
         if (content == null) {
-            return FileToolResponse.error("params.content is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.content is required", errFileName);
         }
         String encoding = readStringParam(params, "encoding", "UTF-8");
         try {
@@ -506,8 +509,8 @@ public class MdToolService {
 
             return FileToolResponse.ok(result, saveResult.get("fileName").toString());
         } catch (Exception e) {
-            log.error("md_write failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("md_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+            log.error("md_write failed for {}", errFileName, e);
+            return FileToolResponse.error("md_write failed: " + e.getMessage(), errFileName);
         }
     }
 
@@ -571,28 +574,38 @@ public class MdToolService {
             log.info("md saveAndReturnResult overwrote temp file: fileId={}, storageFileName={}", resultFileId, storageFileName);
         } else {
             // 源文件 / 无 fileRef（userFile == null）：创建新文件
+            // 参考 ExcelFileToolService.excelWrite 的 userFile==null 分支
             String fileType = userFile != null ? userFile.getFileType() : "md";
-            String tempFileName = getTempFileName(baseDisplayName);
-            ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(bytes));
-            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
 
-            UserFile tempUserFile = new UserFile();
-            tempUserFile.setUserId(userId);
-            tempUserFile.setOriginalFileName(tempFileName);
-            tempUserFile.setFileName(storageFileName);
-            tempUserFile.setFileSize((long) bytes.length);
-            tempUserFile.setFileType(fileType);
-            tempUserFile.setFtpPath(ftpPath);
-            // userFile == null 表示全新合并（md_merge），不挂 sourceFileId
-            tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
-            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
-            userFileMapper.insert(tempUserFile);
+            // 生成显示文件名和 UUID 存储文件名
+            String displayFileName;
+            if (userFile == null) {
+                displayFileName = "new_" + System.currentTimeMillis() + ".md";
+            } else {
+                displayFileName = getTempFileName(baseDisplayName);
+            }
+            String storageFileName = FtpFileService.generateStorageFileName(displayFileName);
 
-            resultFileId = tempUserFile.getId();
-            resultFileName = tempFileName;
+            // 使用 UUID 存储文件名上传到 FTP
+            ftpPath = ftpFileService.uploadFileWithFileName(userId, storageFileName, new ByteArrayInputStream(bytes));
 
-            log.info("md saveAndReturnResult created new temp file: fileId={}, tempFileName={}, userFileNull={}",
-                    resultFileId, tempFileName, userFile == null);
+            // 插入 user_files 表
+            UserFile newUserFile = new UserFile();
+            newUserFile.setUserId(userId);
+            newUserFile.setOriginalFileName(displayFileName);
+            newUserFile.setFileName(storageFileName);
+            newUserFile.setFileSize((long) bytes.length);
+            newUserFile.setFileType(fileType);
+            newUserFile.setFtpPath(ftpPath);
+            newUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
+            newUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(newUserFile);
+
+            resultFileId = newUserFile.getId();
+            resultFileName = displayFileName;
+
+            log.info("md saveAndReturnResult created new file: fileId={}, displayFileName={}, storageFileName={}, userFileNull={}",
+                    resultFileId, displayFileName, storageFileName, userFile == null);
         }
 
         String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
