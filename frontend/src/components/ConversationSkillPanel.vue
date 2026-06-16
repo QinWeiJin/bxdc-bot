@@ -47,7 +47,7 @@ async function fetchSkills() {
   isLoading.value = true
   error.value = null
   try {
-    const res = await fetch(apiUrl('/api/skills'), {
+    const res = await fetch(apiUrl('/api/skills?ownerType=1'), {
       cache: 'no-store',
       headers: currentUser.value?.id ? { 'X-User-Id': String(currentUser.value.id) } : {},
     })

@@ -1206,20 +1206,24 @@ public class ExcelFileToolService {
 
             // 如果是临时文件，覆盖写入；否则生成临时文件名保存
             String ftpPath;
+            String newStorageFileName;
             if (userFile.getSourceFileId() != null) {
-                // 临时文件：使用存储文件名覆盖写入
-                ftpPath = ftpFileService.uploadFileWithFileName(userId, userFile.getFileName(), 
+                // 临时文件：生成新存储文件名（带新扩展名），覆盖写入
+                newStorageFileName = FtpFileService.generateStorageFileName(newFileName);
+                ftpPath = ftpFileService.uploadFileWithFileName(userId, newStorageFileName,
                         new ByteArrayInputStream(convertedBytes));
             } else {
                 // 源文件：生成临时文件名保存
                 String tempFileName = getTempFileName(newFileName);
-                ftpPath = ftpFileService.uploadFile(userId, tempFileName, 
+                newStorageFileName = FtpFileService.generateStorageFileName(tempFileName);
+                ftpPath = ftpFileService.uploadFile(userId, tempFileName,
                         new ByteArrayInputStream(convertedBytes));
                 newFileName = tempFileName;
             }
             wb.close();
 
-            // 更新 user_files 表中的文件信息
+            // 更新 user_files 表中的文件信息（含存储文件名和显示文件名）
+            userFile.setFileName(newStorageFileName);
             userFile.setOriginalFileName(newFileName);
             userFile.setFileType(targetFormat.toLowerCase());
             userFile.setFileSize((long) fileSize);
@@ -1277,6 +1281,8 @@ public class ExcelFileToolService {
                     Object value = getCellValue(cell);
                     if (value != null) {
                         String str = value.toString();
+                        // 统一处理换行符，替换 \r\n 和 \r 为 \n
+                        str = str.replace("\r\n", "\n").replace("\r", "\n");
                         // CSV 中需要转义引号和换行符
                         if (str.contains(",") || str.contains("\"") || str.contains("\n")) {
                             str = "\"" + str.replace("\"", "\"\"") + "\"";
