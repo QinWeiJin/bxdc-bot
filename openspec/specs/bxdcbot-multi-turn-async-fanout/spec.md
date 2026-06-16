@@ -276,3 +276,102 @@ Bxdcbot run 完结后，外层 LLM 续答（archive 2026-06-12 路径）调 LLM 
 - **AND** 外层 LLM 自然接力调 Bxdcbot（如果用户想基于真结果再规划）
 - **AND** 这一次是"完整 Bxdcbot 跑"，不是续答中的递归
 
+---
+
+**Production Hardening Checklist (MVP 阶段已知 TODO)**
+
+> 本节记录 MVP 阶段为了快速跑通而做的**显式简化**，生产部署前 MUST 补齐。
+> 每条 follow-up 都在源码里有 self-acknowledged 的 TODO 注释定位。
+> 这不是新需求，是把现有 MVP 代码注释里的话落地为可追踪的 requirement，避免"代码改了注释没人看到"。
+
+### Requirement: BxdcbotRun 状态 MUST 在生产环境部署前持久化到数据库
+
+BxdcbotRun 状态 MUST 在生产环境部署前从 in-memory store 改造为 MySQL 持久化实现。
+MVP 阶段 `globalBxdcbotRunStore` 是进程内 `Map<string, BxdcbotRun>`，agent-core 重启即丢：
+agent-core 重启时**正在跑的 Bxdcbot run 全部丢失**，但 gateway 端已发出的 async task 仍在跑，
+回调时找不到对应 `runId` → `BXDCBOT_RUN_RESULT` 消息缺失或卡住。
+
+#### Scenario: agent-core 重启导致 Bxdcbot run 丢失
+- **WHEN** agent-core 进程重启（OOM / 部署 / 手动重启）
+- **AND** 重启前有 Bxdcbot run 处于 `awaiting_async` 或 `running` 状态
+- **THEN** 这些 run 在新进程里 MUST 不存在（当前 MVP 行为）
+- **AND** gateway 端已发出的 async task 回调时 MUST 找不到对应 runId
+- **AND** 用户对话流 MUST 看不到 `BXDCBOT_RUN_RESULT` 终态消息
+- **AND** 用户在前端 MUST 看到 "Bxcbot run 已丢失，请重新发起" 的降级文案
+
+#### Scenario: 生产环境部署前持久化改造
+- **WHEN** bxdcbot-multi-turn-async 进入生产部署阶段
+- **THEN** `globalBxdcbotRunStore` MUST 改造为基于 MySQL 的持久化实现
+- **AND** `BxdcbotRun` MUST 整表落库（messages 序列化为 JSON / LONGTEXT）
+- **AND** agent-core 启动时 MUST 从 DB 加载 `status IN ('running','awaiting_async')` 的 run 恢复
+- **AND** `registerAsyncTask` / `unregisterAsyncTask` / `update` MUST 是事务写入
+- **AND** MVP 阶段 in-memory store MUST 保留作为 fallback 路径（`if (!env.BXDCBOT_DB_PERSISTED) ...`）
+
+**代码位置**：[bxdcbot-run-store.ts:38-40](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/services/bxdcbot-run-store.ts#L38-L40) 注释 "MVP 阶段：in-memory...后续 DB 持久化"
+
+### Requirement: Bxdcbot skill 重试 MUST 在生产环境部署前按 skillId 而非 skillName 发起
+
+Bxdcbot skill 重试 MUST 在生产环境部署前按 skillId（而非 skillName）发起新 task。
+MVP 阶段 `BxdcbotRunScheduler.retrySkill(run, skillName, originalArgs)` 用 skillName 作为参数，
+但 gateway `/api/skills/execute` 接口需要 skillId（同名 skill 在不同 user / 不同 system 维度下可能重复）。
+源码注释自己承认了 "实际生产需通过 SKILL 名称查表得 skillId"。
+
+#### Scenario: 重试时同名 skill 路由错乱
+- **WHEN** Bxdcbot LLM 调了名为 `query_db` 的 async skill（user A 下 skillId=100，user B 下 skillId=200）
+- **AND** 该 async task FAILED 进入重试路径
+- **THEN** 当前 MVP 实现 MUST 按 skillName `query_db` 发起新 task
+- **AND** gateway 端 MUST 按"名字最近一个 skillId"路由（不可靠）
+- **AND** 极端情况下 MUST 把 user A 的重试路由到 user B 的 skill 实例（信息泄露风险）
+
+#### Scenario: 生产环境部署前用 skillId
+- **WHEN** bxdcbot-multi-turn-async 进入生产部署阶段
+- **THEN** `retrySkill` MUST 按 skillId（而非 skillName）发起新 task
+- **AND** skillId MUST 在 `registerAsyncTask` 时**同时**记录到 `BxdcbotRun` 里（新增字段 `asyncTaskIdToSkillId: Map<number, number>`）
+- **AND** `findSkillNameByAsyncTaskId` 重构为 `findSkillIdByAsyncTaskId`
+- **AND** `/api/skills/execute` 请求体 MUST 改为 `{skillId, parameters, parentToolId, parentSkillId}` 不用 `{skillName, ...}`
+
+**代码位置**：[bxdcbot-run-scheduler.ts:262-266](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/services/bxdcbot-run-scheduler.ts#L262-L266) 注释 "实际生产需通过 SKILL 名称查表得 skillId"
+
+### Requirement: notify 的 subTaskSummary MUST 在生产环境部署前与 subTaskResults 统计一致
+
+notify 的 subTaskSummary MUST 在生产环境部署前与 subTaskResults 真实统计保持一致。
+MVP 阶段 `notifyBxdcbotRunComplete` 用 `totalSkillsAttempted = (run.skillRetries.size || 0) + 1` 估算，
+这是错的：`skillRetries` 只记"重试过的 skill"，不是"调过的全部 skill"。
+前端通知中心 `BXDCBOT_RUN_RESULT` 卡片显示的 `total / succeeded / failed / pending` 数字永远跟真实 subTaskResults 对不上。
+
+#### Scenario: subTaskSummary 数字对不上 subTaskResults
+- **WHEN** Bxdcbot run 完成，调用 `notifyBxdcbotRunComplete`
+- **THEN** 当前 MVP 实现 MUST 计算 `totalSkillsAttempted = (run.skillRetries.size || 0) + 1`
+- **AND** 该值 MUST 与 `run.subTaskResults.length` 不一致（后者是真实记录数）
+- **AND** 前端 MUST 显示错误的 total / succeeded / failed / pending
+- **AND** 用户在前端 MUST 看到"明明跑了 5 个 skill 但卡片显示 total=2"
+
+#### Scenario: 生产环境部署前用 subTaskResults.length
+- **WHEN** bxdcbot-multi-turn-async 进入生产部署阶段
+- **THEN** `subTaskSummary` MUST 改为基于 `run.subTaskResults` 实际统计：
+  - `total = subTaskResults.length`
+  - `succeeded = subTaskResults.filter(s => s.status === 'completed').length`
+  - `failed = subTaskResults.filter(s => s.status === 'failed').length`
+  - `pending = run.pendingAsyncTaskIds.size`（terminated 时剩余未完成的）
+- **AND** `run.skillRetries` MUST 改为只记录"重试次数"（不参与 total 计算）
+- **AND** `run.subTaskResults` MUST 在 `registerAsyncTask` 时立即追加一条 `status='running'` 占位（让总数对得上）
+
+**代码位置**：[bxdcbot-run-notifier.ts:36](file:///Users/dccb/botproject/bxdc-bot/backend/agent-core/src/services/bxdcbot-run-notifier.ts#L36) 注释 "MVP 简化：用 Map size 计数"
+
+### Requirement: 三件 MVP TODO MUST 通过新 OpenSpec change 追踪，不直接改本 spec
+
+部署同事和 reviewer 在看本 spec 时 MUST 能一眼分辨"哪些是 MVP 已实现 / 哪些是生产前必须补"。
+
+#### Scenario: Reviewer / 部署同事看到的状态分界
+- **WHEN** 同事 clone 项目跑 `npm run start:dev` / `mvn spring-boot:run`
+- **THEN** MVP 路径 MUST 可跑（功能上 fanout 多 async、重试、续答都正常）
+- **AND** 日志里 MUST 出现 `[BxdcbotRunScheduler] Started` / `[BxdcbotRunNotifier]` / `[BxdcbotRunResumer]` 三类标识
+- **AND** `openspec/specs/bxdcbot-multi-turn-async-fanout/spec.md` 本节"Production Hardening Checklist" MUST 是部署 checklist 的一部分
+- **AND** 部署到生产环境前 MUST 把本节三条 requirement 的对应代码 TODO 改完
+
+#### Scenario: 跟踪工具
+- **WHEN** 三件 MVP TODO 的任一项被实现
+- **THEN** 实施者 MUST 开新 OpenSpec change（不直接改本 spec）
+- **AND** 完成后 MUST 把本 spec 里对应 requirement 移到 `## REMOVED Requirements` 段
+- **AND** MUST 不在本 spec 直接改 requirement 文本（避免与"已归档 change"混淆）
+
