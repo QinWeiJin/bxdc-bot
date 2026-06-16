@@ -4,13 +4,16 @@
  * 模块职责：
  * - 根据搜索结果创建子 Agent 并执行特定技能
  * - 子 Agent 加载指定的技能列表进行执行
+ * - 支持多步操作，复用子 Agent 实例，保持对话状态
  * - 执行完成后返回结果给主 Agent
+ * - 支持流式返回每一步工具调用结果
  * 
  * 设计说明：
  * - 接收技能 ID 列表和用户输入
- * - 创建临时子 Agent，仅加载指定的技能
- * - 执行子 Agent 并获取结果
+ * - 创建子 Agent 实例并缓存，支持多步复用
+ * - 使用流式执行子 Agent，实时返回每步结果
  * - 返回格式化的执行结果给主 Agent
+ * - 缓存的子 Agent 有过期时间，自动清理
  * 
  * @module ExecuteSkill
  * @author Agent Core Team
@@ -22,6 +25,7 @@ import { z } from "zod";
 import { AgentFactory } from "../agent/agent";
 import { HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { buildStaticSystemPrompt, Prompts } from "../prompts";
+import { unwrapLangGraphStreamPayload } from "../controller/agent.controller";
 
 const executeSkillInputSchema = z.object({
   skillIds: z
@@ -33,13 +37,54 @@ const executeSkillInputSchema = z.object({
     .string()
     .min(1)
     .describe("The user's input or task to be executed by the sub-agent."),
+  continueConversation: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Set to true to continue the previous conversation with the same sub-agent. " +
+      "When true, the sub-agent will reuse the previous conversation history. " +
+      "When false (default), a new conversation will start."),
 });
+
+export type SubAgentStreamCallback = (event: {
+  type: 'tool_call_start' | 'tool_call_end' | 'thinking' | 'error';
+  toolName?: string;
+  input?: any;
+  output?: string;
+  message?: string;
+}) => void;
+
+interface CachedSubAgent {
+  agent: any;
+  messages: BaseMessage[];
+  createdAt: number;
+  skillIds: number[];
+}
+
+const subAgentCache = new Map<string, CachedSubAgent>();
+const CACHE_EXPIRATION_MS = 5 * 60 * 1000;
+
+function getCacheKey(skillIds: number[], userId?: string): string {
+  return `${userId || 'default'}_${skillIds.sort().join('_')}`;
+}
+
+function cleanupExpiredAgents(): void {
+  const now = Date.now();
+  for (const [key, cached] of subAgentCache.entries()) {
+    if (now - cached.createdAt > CACHE_EXPIRATION_MS) {
+      subAgentCache.delete(key);
+    }
+  }
+}
+
+setInterval(cleanupExpiredAgents, 60 * 1000);
 
 /**
  * 技能执行工具（内置名：`execute_skill_with_context`）
  * 
  * 根据指定的技能 ID 列表创建子 Agent，并执行用户任务。
- * 子 Agent 仅加载指定的技能，执行完成后返回结果给主 Agent。
+ * 子 Agent 支持多步操作，会自动缓存和复用，保持对话状态。
+ * 支持流式返回每一步工具调用结果。
  */
 export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof executeSkillInputSchema> {
   constructor(
@@ -47,50 +92,151 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
     private readonly apiToken: string,
     private readonly openAiApiKey: string,
     private readonly llmConfig?: { modelName?: string; baseUrl?: string },
-    private readonly userId?: string
+    private readonly userId?: string,
+    private readonly streamCallback?: SubAgentStreamCallback
   ) {
     super({
       name: "execute_skill_with_context",
       description:
-        "Create a sub-agent with specific skills and execute the user's task. " +
+        "Create or reuse a sub-agent with specific skills and execute the user's task. " +
         "WORKFLOW: First call search_tools to find relevant skills, then extract the 'id' numbers " +
         "from the returned skills array and pass them here as skillIds. " +
         "The sub-agent will be dynamically created with only those specific skills loaded, " +
         "executes the userInput task, and returns the result. " +
+        "SUPPORT MULTI-STEP: The sub-agent is cached and can handle multiple steps. " +
+        "For subsequent steps with the same skills, set continueConversation to true " +
+        "to continue the conversation instead of creating a new sub-agent. " +
         "After receiving the result, you can continue planning or summarize for the user.",
       schema: executeSkillInputSchema,
       func: async (args) => {
         try {
-          const { skillIds, userInput } = args;
+          const { skillIds, userInput, continueConversation } = args;
+          const cacheKey = getCacheKey(skillIds, userId);
 
-          // 创建子 Agent，仅加载指定的技能
-          const { agent, plannerModel } = await AgentFactory.createSubAgent(
-            gatewayUrl,
-            apiToken,
-            openAiApiKey,
-            skillIds, // 仅加载指定的技能
-            {
-              modelName: llmConfig?.modelName || "gpt-4",
-              baseUrl: llmConfig?.baseUrl,
-            },
-            userId
-          );
+          let agent: any;
+          let messages: BaseMessage[];
 
-          // 构建子 Agent 的消息历史
-          const systemPrompt = new SystemMessage(buildStaticSystemPrompt());
-          const humanMessage = new HumanMessage(userInput);
-          
-          const messages: BaseMessage[] = [systemPrompt, humanMessage];
+          if (continueConversation && subAgentCache.has(cacheKey)) {
+            const cached = subAgentCache.get(cacheKey)!;
+            agent = cached.agent;
+            messages = [...cached.messages];
+            messages.push(new HumanMessage(userInput));
+            this.streamCallback?.({
+              type: 'thinking',
+              message: `Reusing cached sub-agent with skillIds: ${skillIds.join(', ')}`,
+            });
+          } else {
+            const { agent: newAgent } = await AgentFactory.createSubAgent(
+              gatewayUrl,
+              apiToken,
+              openAiApiKey,
+              skillIds,
+              {
+                modelName: llmConfig?.modelName || "gpt-4",
+                baseUrl: llmConfig?.baseUrl,
+              },
+              userId
+            );
+            agent = newAgent;
+            messages = [
+              new SystemMessage(buildStaticSystemPrompt()),
+              new HumanMessage(userInput),
+            ];
+            subAgentCache.set(cacheKey, {
+              agent,
+              messages,
+              createdAt: Date.now(),
+              skillIds,
+            });
+            this.streamCallback?.({
+              type: 'thinking',
+              message: `Created new sub-agent with skillIds: ${skillIds.join(', ')}`,
+            });
+          }
 
-          // 执行子 Agent
-          const result = await agent.invoke({ messages });
+          const toolCalls: Array<{
+            toolName: string;
+            input: any;
+            output: string;
+            timestamp: string;
+          }> = [];
 
-          // 提取所有消息
-          const finalMessages = result.messages as BaseMessage[];
+          let output = "";
+          let lastPayload: any = null;
+
+          const stream = await agent.stream({ messages });
+          const iterator = stream[Symbol.asyncIterator]();
+
+          while (true) {
+            const { value: raw, done } = await iterator.next();
+            if (done) break;
+
+            const payload = unwrapLangGraphStreamPayload(raw);
+            lastPayload = payload;
+            const streamMessages = payload?.messages || [];
+
+            for (const msg of streamMessages) {
+              const type = msg._getType?.() ?? (msg as any).type ?? "";
+
+              if (type === "ai" || type === "AIMessageChunk") {
+                const calls = (msg as any).tool_calls ?? [];
+                for (const call of calls) {
+                  toolCalls.push({
+                    toolName: call.name,
+                    input: call.args,
+                    output: "",
+                    timestamp: new Date().toISOString(),
+                  });
+                  this.streamCallback?.({
+                    type: 'tool_call_start',
+                    toolName: call.name,
+                    input: call.args,
+                  });
+                }
+              }
+
+              if (type === "tool") {
+                const toolName = (msg as any).name;
+                const toolContent = (msg as any).content;
+                const toolOutput = typeof toolContent === "string" ? toolContent : JSON.stringify(toolContent);
+
+                const lastCall = toolCalls.find(tc => tc.toolName === toolName && tc.output === "");
+                if (lastCall) {
+                  lastCall.output = toolOutput;
+                }
+
+                this.streamCallback?.({
+                  type: 'tool_call_end',
+                  toolName: toolName,
+                  input: lastCall?.input,
+                  output: toolOutput,
+                });
+              }
+
+              if ((type === "ai" || type === "AIMessageChunk") && !((msg as any).tool_calls?.length > 0)) {
+                const content = typeof msg.content === "string" ? msg.content : "";
+                if (content) {
+                  this.streamCallback?.({
+                    type: 'thinking',
+                    message: content,
+                  });
+                }
+              }
+            }
+          }
+
+          if (lastPayload?.messages) {
+            subAgentCache.set(cacheKey, {
+              agent,
+              messages: lastPayload.messages as BaseMessage[],
+              createdAt: Date.now(),
+              skillIds,
+            });
+          }
+
+          const finalMessages = lastPayload?.messages || [];
           const lastMessage = finalMessages[finalMessages.length - 1];
           
-          // 提取最终输出
-          let output = "";
           if (lastMessage) {
             if (typeof lastMessage.content === "string") {
               output = lastMessage.content;
@@ -101,7 +247,6 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             }
           }
 
-          // 如果没有直接输出，尝试从工具调用结果中提取
           if (!output) {
             for (let i = finalMessages.length - 1; i >= 0; i--) {
               const msg = finalMessages[i];
@@ -115,51 +260,19 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             }
           }
 
-          // 提取所有工具调用记录
-          const toolCalls: Array<{
-            toolName: string;
-            input: any;
-            output: string;
-            timestamp: string;
-          }> = [];
-
-          for (const msg of finalMessages) {
-            const type = msg._getType?.() ?? (msg as any).type ?? "";
-            
-            // 提取 AI 消息中的工具调用（输入）
-            if (type === "ai" || type === "AIMessageChunk") {
-              const calls = (msg as any).tool_calls ?? [];
-              for (const call of calls) {
-                toolCalls.push({
-                  toolName: call.name,
-                  input: call.args,
-                  output: "", // 输出会在 tool 消息中匹配
-                  timestamp: new Date().toISOString(),
-                });
-              }
-            }
-            
-            // 提取工具消息（输出）
-            if (type === "tool") {
-              const toolName = (msg as any).name;
-              const toolContent = (msg as any).content;
-              
-              // 找到对应的工具调用记录，填充输出
-              const lastCall = toolCalls.find(tc => tc.toolName === toolName && tc.output === "");
-              if (lastCall) {
-                lastCall.output = typeof toolContent === "string" ? toolContent : JSON.stringify(toolContent);
-              }
-            }
-          }
-
           return JSON.stringify({
             status: "SUCCESS",
             message: "Sub-agent execution completed successfully",
             executedSkillIds: skillIds,
             result: output || "No output generated",
-            toolCalls, // 包含所有工具调用历史
+            toolCalls,
+            conversationCached: subAgentCache.has(cacheKey),
           });
         } catch (error) {
+          this.streamCallback?.({
+            type: 'error',
+            message: `Error executing skill: ${error instanceof Error ? error.message : String(error)}`,
+          });
           return JSON.stringify({
             status: "ERROR",
             message: `Error executing skill: ${error instanceof Error ? error.message : String(error)}`,

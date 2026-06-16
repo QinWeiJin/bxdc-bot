@@ -85,9 +85,10 @@ public class SkillController {
 
     @GetMapping
     public List<Skill> getAllSkills(
-            @RequestHeader(value = "X-User-Id", required = false) String userId
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestParam(value = "ownerType", required = false) Integer ownerType
     ) {
-        return skillService.listSkillsForUser(userId);
+        return skillService.listSkillsForUser(userId, ownerType);
     }
 
     /**

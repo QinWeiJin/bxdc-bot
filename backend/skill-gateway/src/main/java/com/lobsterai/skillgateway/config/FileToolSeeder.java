@@ -110,7 +110,7 @@ public class FileToolSeeder implements ApplicationRunner {
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
-        seedFileOperate("excel_read", "读取 Excel 文件内容，返回表头和数据行。支持分页返回，默认最多返回 100 行。返回结果包含 headers（列头列表）和 rows（数据行列表）。", excelReadSchema());
+        seedFileOperate("excel_read", "读取 Excel/CSV 文件内容，返回表头和数据行。支持 .xlsx、.xls、.csv 三种格式。支持分页返回，默认最多返回 100 行。返回结果包含 headers（列头列表）和 rows（数据行列表）。", excelReadSchema());
         seedFileOperate("excel_write", "创建或覆盖 Excel 文件。两种场景：1) 传入 fileId 时在临时文件基础上写入数据；2) 不传 fileId 时根据 headers 和 rows 创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新的 fileId 供后续操作使用。需提供 headers（列头数组，必填）和 rows（数据行数组）。", excelWriteSchema());
         seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。", fileRefSchema());
         seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。", excelFilterSchema());
