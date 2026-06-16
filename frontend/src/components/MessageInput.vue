@@ -404,18 +404,24 @@ async function handleSend(value: string) {
 
 .file-list-items {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-list-images {
+  gap: 8px;
 }
 
 .file-list-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
+  gap: 8px;
+  padding: 4px 10px;
   border-radius: 6px;
   background-color: var(--td-bg-color-container);
   transition: background-color 0.15s;
+  max-width: 320px;
 }
 
 .file-list-item:hover {
@@ -423,14 +429,14 @@ async function handleSend(value: string) {
 }
 
 .file-icon {
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
   flex-shrink: 0;
 }
 
 .image-thumb {
-  width: 48px;
-  height: 48px;
+  width: 36px;
+  height: 36px;
   border-radius: 4px;
   overflow: hidden;
   flex-shrink: 0;
@@ -447,7 +453,7 @@ async function handleSend(value: string) {
 }
 
 .file-info {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -460,7 +466,6 @@ async function handleSend(value: string) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 100%;
 }
 
 .file-meta {
@@ -594,12 +599,8 @@ async function handleSend(value: string) {
 
 /* ---------- 移动端适配 ---------- */
 @media (max-width: 768px) {
-  .file-list-group {
-    padding: 6px 8px;
-  }
-
   .file-list-item {
-    padding: 4px 6px;
+    max-width: 240px;
   }
 
   .file-name {

@@ -197,16 +197,24 @@ public class TxtToolService {
      * </p>
      */
     public FileToolResponse txtWrite(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureTextFile(userFile);
         String content = readStringParam(params, "content", null);
         if (content == null) {
-            return FileToolResponse.error("params.content is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.content is required",
+                    userFile != null ? userFile.getOriginalFileName() : null);
         }
         String encoding = readStringParam(params, "encoding", DEFAULT_ENCODING);
         boolean append = readBoolParam(params, "append", false);
+        boolean createNew = readBoolParam(params, "createNew", false);
+        // 当 userFile 缺失但要 createNew 时，允许没有原文件（直接创建新文件）
+        if (userFile == null && !createNew) {
+            return FileToolResponse.error("必须提供 fileId/fileRef（或设置 createNew=true 创建新文件）", null);
+        }
+        if (userFile != null) {
+            ensureTextFile(userFile);
+        }
         try {
             byte[] bytes;
-            if (append) {
+            if (append && userFile != null) {
                 ByteArrayOutputStream baos = ftpFileService.downloadFile(userFile.getUserId(), userFile.getFileName());
                 ByteArrayOutputStream merged = new ByteArrayOutputStream();
                 merged.write(baos.toByteArray());
@@ -215,6 +223,58 @@ public class TxtToolService {
             } else {
                 bytes = content.getBytes(Charset.forName(encoding));
             }
+
+            // createNew=true: 写入新文件（不覆盖原 userFile），返回 downloadUrl
+            if (createNew) {
+                // baseName 优先级：params.originalFileName > 原 userFile 名字 > "untitled.txt"
+                String baseName = readStringParam(params, "originalFileName", null);
+                if (baseName == null || baseName.isEmpty()) {
+                    baseName = userFile != null ? userFile.getOriginalFileName() : "untitled.txt";
+                }
+                // 后缀替换：若原文件扩展名不是 .txt/.md，沿用 createNew 语义强制使用传入的名字
+                String newOriginalName = generateNewOriginalName(baseName, "");
+                // 若原文件名没有 "_" 后缀（说明原本是 createNew 而非 copy），保留原名
+                if (userFile == null) {
+                    newOriginalName = baseName.endsWith(".txt") || baseName.endsWith(".md") || baseName.endsWith(".markdown")
+                            ? baseName : baseName + ".txt";
+                }
+                String fullPath = ftpFileService.uploadFile(userId, generateNewStorageName(baseName),
+                        new ByteArrayInputStream(bytes));
+                String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+                UserFile newFile = new UserFile();
+                newFile.setUserId(userId);
+                newFile.setOriginalFileName(newOriginalName);
+                newFile.setFileName(actualFileName);
+                newFile.setFileSize((long) bytes.length);
+                newFile.setFileType(extractExtension(baseName));
+                newFile.setFtpPath(fullPath);
+                newFile.setUploadTime(java.time.LocalDateTime.now());
+                if (userFile != null) {
+                    newFile.setSourceFileId(userFile.getId());
+                }
+                userFileMapper.insert(newFile);
+
+                String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+                newFile.setDownloadUrl(downloadUrl);
+                userFileMapper.updateById(newFile);
+
+                Map<String, Object> result = new LinkedHashMap<String, Object>();
+                result.put("message", "Text file created");
+                if (userFile != null) {
+                    result.put("originalFileId", userFile.getId());
+                }
+                result.put("newFileId", newFile.getId());
+                result.put("newFileName", actualFileName);
+                result.put("originalFileName", newOriginalName);
+                result.put("downloadUrl", downloadUrl);
+                result.put("encoding", encoding);
+                result.put("size", bytes.length);
+                result.put("lineCount", content.split("\n", -1).length);
+                result.put("mode", "createNew");
+                return FileToolResponse.ok(result, newOriginalName);
+            }
+
             // 覆盖原文件：保留 userFile.fileName（storageName）不变，避免产生孤儿文件
             String originalStorageName = userFile.getFileName();
             String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
@@ -233,9 +293,19 @@ public class TxtToolService {
             result.put("mode", append ? "append" : "overwrite");
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
-            log.error("txt_write failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("txt_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+            String failedName = userFile != null ? userFile.getOriginalFileName() : null;
+            log.error("txt_write failed for {}", failedName, e);
+            return FileToolResponse.error("txt_write failed: " + e.getMessage(), failedName);
         }
+    }
+
+    /** 在原文件名基础上加后缀生成新文件名，例如 foo.txt → foo_copy.txt；无扩展名时直接追加 _copy。 */
+    private String generateNewOriginalName(String baseName, String suffix) {
+        int dot = baseName.lastIndexOf('.');
+        if (dot <= 0) {
+            return baseName + "_" + suffix;
+        }
+        return baseName.substring(0, dot) + "_" + suffix + baseName.substring(dot);
     }
 
     // ================================================================

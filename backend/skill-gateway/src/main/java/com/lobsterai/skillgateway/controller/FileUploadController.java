@@ -33,6 +33,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 文件上传 Controller。
@@ -217,6 +218,42 @@ public class FileUploadController {
      * </ul>
      * </p>
      *
+    /**
+     * 列出当前用户的所有文件（不按会话过滤，配置面板需要全量文件列表）。
+     * <p>
+     * open spec: conversation-file-isolation — 与 {@code file_list} 工具不同，
+     * 此端点不经过 {@code FileToolConversationContext}，直接读 {@code user_files}，
+     * 用于前端配置面板让用户跨会话勾选文件。
+     * </p>
+     *
+    /**
+     * 检查当前用户是否已存在同名文件（按 originalFileName 精确匹配）。
+     * <p>
+     * 用于前端上传时跨会话查重，替代原来仅限当前会话的本地查重。
+     * </p>
+     *
+     * @param fileName 原始文件名
+     * @param request  HTTP 请求（{@code X-User-Id} 头）
+     * @return 200 + { exists: boolean, uploadTime: string|null }
+     */
+    @GetMapping("/check-duplicate")
+    public ResponseEntity<Map<String, Object>> checkDuplicate(
+            @RequestParam("fileName") String fileName,
+            HttpServletRequest request
+    ) {
+        String userId;
+        try {
+            userId = AamTokenUtil.requireUserId(request);
+        } catch (IllegalArgumentException e) {
+            return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
+        }
+        Optional<UserFile> existing = userFileMapper.findByUserIdAndOriginalFileName(userId, fileName);
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("exists", existing.isPresent());
+        body.put("uploadTime", existing.map(uf -> uf.getUploadTime() != null ? uf.getUploadTime().toString() : null).orElse(null));
+        return ResponseEntity.ok(body);
+    }
+
     /**
      * 列出当前用户的所有文件（不按会话过滤，配置面板需要全量文件列表）。
      * <p>
