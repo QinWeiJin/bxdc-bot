@@ -21,6 +21,8 @@ import {
   INSTRUCTION_FILES_MAX_BYTES,
   FILE_UPLOAD_CONFIG,
 } from '../types/fileUpload'
+import { apiUrl } from '../services/config'
+import { useUser } from './useUser'
 import {
   getFileTypeFromName,
   validateFile,
@@ -38,6 +40,27 @@ function findDuplicateByName(
     }
   }
   return undefined
+}
+
+/**
+ * 后端查重：调 GET /api/files/check-duplicate?fileName=xxx
+ * 返回 { exists, uploadTime } 或 null（网络异常等）
+ */
+async function checkBackendDuplicate(
+  fileName: string,
+): Promise<{ exists: boolean; uploadTime: string | null } | null> {
+  try {
+    const { currentUser } = useUser()
+    const headers: Record<string, string> = {}
+    if (currentUser.value?.id) {
+      headers['X-User-Id'] = currentUser.value.id
+    }
+    const res = await fetch(apiUrl(`/api/files/check-duplicate?fileName=${encodeURIComponent(fileName)}`), { headers })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
 }
 
 /** 移除指定 ID 的文件（跨分组） */
@@ -205,27 +228,37 @@ export function provideFileUpload(): FileUploadState {
         continue
       }
 
-      // 4. 重复校验：全量查重，存在同名则弹窗让用户选择"替换 / 取消"
-      const existing = findDuplicateByName(uploadedFiles.value, file.name)
-      if (existing) {
-        const message = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
+      // 4. 重复校验：先查当前会话，再查后端全量用户文件
+      let existingMsg: string | null = null
+      const existingLocal = findDuplicateByName(uploadedFiles.value, file.name)
+      if (existingLocal) {
+        existingMsg = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
           file.name,
-          formatTime(existing.uploadedAt),
+          formatTime(existingLocal.uploadedAt),
         )
-        // 使用同步 confirm：UI 端可替换为 ElMessageBox.confirm
-        // 这里为不引入额外 UI 依赖，使用 window.confirm（简化实现）
-        const replace = window.confirm(message)
+      } else {
+        const backendDup = await checkBackendDuplicate(file.name)
+        if (backendDup?.exists) {
+          existingMsg = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
+            file.name,
+            backendDup.uploadTime || '未知时间',
+          )
+        }
+      }
+      if (existingMsg) {
+        const replace = window.confirm(existingMsg)
         if (!replace) {
-          // 取消：跳过该文件
           continue
         }
-        // 替换：移除旧的（保留 previewUrl 释放 + abort 可能的解析中 controller），添加新的
-        const removed = removeFileById(uploadedFiles.value, existing.id)
-        if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
-        const oldCtrl = abortControllers.get(existing.id)
-        if (oldCtrl) {
-          oldCtrl.abort()
-          abortControllers.delete(existing.id)
+        // 替换：移除本地同名文件（如果存在）
+        if (existingLocal) {
+          const removed = removeFileById(uploadedFiles.value, existingLocal.id)
+          if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+          const oldCtrl = abortControllers.get(existingLocal.id)
+          if (oldCtrl) {
+            oldCtrl.abort()
+            abortControllers.delete(existingLocal.id)
+          }
         }
       }
 
