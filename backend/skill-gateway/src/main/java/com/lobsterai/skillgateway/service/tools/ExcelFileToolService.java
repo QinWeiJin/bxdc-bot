@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
+import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
@@ -43,15 +44,17 @@ public class ExcelFileToolService {
 
     private final FileToolService fileToolService;
     private final FtpFileService ftpFileService;
+    private final FtpConfig ftpConfig;
     private final UserFileMapper userFileMapper;
 
     @Value("${app.base-url:http://localhost:18080}")
     private String baseUrl;
 
     @Autowired
-    public ExcelFileToolService(FileToolService fileToolService, FtpFileService ftpFileService, UserFileMapper userFileMapper) {
+    public ExcelFileToolService(FileToolService fileToolService, FtpFileService ftpFileService, FtpConfig ftpConfig, UserFileMapper userFileMapper) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
+        this.ftpConfig = ftpConfig;
         this.userFileMapper = userFileMapper;
     }
 
@@ -182,8 +185,8 @@ public class ExcelFileToolService {
             
             Long tempFileId = tempUserFile.getId();
             
-            // 生成完整下载 URL（包含域名）
-            String downloadUrl = baseUrl + "/api/files/download/" + tempFileId;
+            // 生成完整下载 URL（包含域名和签名 token）
+            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
             tempUserFile.setDownloadUrl(downloadUrl);
             userFileMapper.updateById(tempUserFile);
             
@@ -269,9 +272,9 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 生成 fileId 和 downloadUrl（返回当前文件的 ID）
+            // 生成 fileId 和 downloadUrl（返回当前文件的 ID，带签名 token）
             Long resultFileId = userFile.getId();
-            String downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+            String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
 
             result.put("headers", headers);
             result.put("rows", rows);
@@ -337,7 +340,7 @@ public class ExcelFileToolService {
                 ftpPath = saveWorkbookWithBytes(userId, userFile.getFileName(), fileBytes);
                 
                 resultFileId = userFile.getId();
-                downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+                downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
             } else {
                 // 无 fileId：创建新文件，插入 userfile 表
                 // 生成显示文件名和 UUID 存储文件名
@@ -360,8 +363,11 @@ public class ExcelFileToolService {
                 userFileMapper.insert(newUserFile);
                 
                 resultFileId = newUserFile.getId();
-                downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
-                fileName = displayFileName; // 返回显示文件名
+                downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
+                // 回写 downloadUrl 到数据库
+                newUserFile.setDownloadUrl(downloadUrl);
+                userFileMapper.updateById(newUserFile);
+                fileName = displayFileName;
                 
                 log.info("Created new file without fileId: userId={}, displayFileName={}, storageFileName={}, fileId={}, fileSize={}, ftpPath={}", 
                         userId, displayFileName, storageFileName, resultFileId, fileSize, ftpPath);
@@ -1222,16 +1228,17 @@ public class ExcelFileToolService {
             }
             wb.close();
 
-            // 更新 user_files 表中的文件信息（含存储文件名和显示文件名）
+            // 生成 downloadUrl（带签名 token）
+            String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+
+            // 更新 user_files 表中的文件信息（含存储文件名、显示文件名和下载 URL）
             userFile.setFileName(newStorageFileName);
             userFile.setOriginalFileName(newFileName);
             userFile.setFileType(targetFormat.toLowerCase());
             userFile.setFileSize((long) fileSize);
             userFile.setFtpPath(ftpPath);
+            userFile.setDownloadUrl(downloadUrl);
             userFileMapper.updateById(userFile);
-
-            // 生成 downloadUrl
-            String downloadUrl = baseUrl + "/api/files/download/" + userFile.getId();
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Format converted successfully");
@@ -1371,9 +1378,9 @@ public class ExcelFileToolService {
 
             wb.close();
 
-            // 生成 fileId 和 downloadUrl（返回当前文件的 ID）
+            // 生成 fileId 和 downloadUrl（返回当前文件的 ID，带签名 token）
             Long resultFileId = userFile.getId();
-            String downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+            String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("valid", errors.isEmpty());
@@ -1464,9 +1471,9 @@ public class ExcelFileToolService {
         result.put("fileName", resultFileName);
         result.put("filePath", ftpPath);
         
-        // 返回当前文件的 ID 和下载 URL
+        // 返回当前文件的 ID 和下载 URL（带签名 token）
         Long resultFileId = userFile.getId();
-        String downloadUrl = baseUrl + "/api/files/download/" + resultFileId;
+        String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
         
         result.put("fileId", resultFileId);
         result.put("downloadUrl", downloadUrl);

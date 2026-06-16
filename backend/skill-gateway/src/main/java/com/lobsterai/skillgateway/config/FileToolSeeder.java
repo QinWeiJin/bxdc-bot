@@ -111,16 +111,16 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
         seedFileOperate("excel_read", "读取 Excel/CSV 文件内容，返回表头和数据行。支持 .xlsx、.xls、.csv 三种格式。支持分页返回，默认最多返回 100 行。返回结果包含 headers（列头列表）和 rows（数据行列表）。", excelReadSchema());
-        seedFileOperate("excel_write", "创建或覆盖 Excel 文件。两种场景：1) 传入 fileId 时在临时文件基础上写入数据；2) 不传 fileId 时根据 headers 和 rows 创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新的 fileId 供后续操作使用。需提供 headers（列头数组，必填）和 rows（数据行数组）。", excelWriteSchema());
-        seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。", fileRefSchema());
-        seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。", excelFilterSchema());
-        seedFileOperate("excel_sort", "根据指定列对数据进行排序。支持升序（asc）和降序（desc）两种排序方向。排序结果写回临时文件，返回更新后的文件信息。", excelSortSchema());
-        seedFileOperate("excel_aggregate", "按指定列分组并进行聚合统计。支持 sum（求和）、avg（平均值）、count（计数）、min（最小值）、max（最大值）五种聚合类型。聚合结果写回临时文件，返回更新后的文件信息。", excelAggregateSchema());
-        seedFileOperate("excel_pivot", "透视分析：按行维度和列维度进行交叉汇总。需指定 rowDimension（行维度列）、colDimension（列维度列）和 valueColumn（值列）。透视结果写回临时文件，返回更新后的文件信息。", excelPivotSchema());
-        seedFileOperate("excel_calculate", "列运算：基于现有列生成新计算列。通过 formula 参数指定计算公式，支持用 {列名} 引用其他列，例如 {销售额} * {数量} 或 {单价} * 1.1。计算结果作为新列添加到数据中，写回临时文件。", excelCalculateSchema());
-        seedFileOperate("excel_select_columns", "选择指定列，删除其他列。需提供 columns 数组指定要保留的列名。选择结果写回临时文件，返回更新后的文件信息。", excelSelectColumnsSchema());
-        seedFileOperate("excel_clean", "数据清洗操作。支持三种清洗类型：trim（去除字符串首尾空格）、deduplicate（去除重复行）、removeEmpty（移除空行）。清洗结果写回临时文件，返回更新后的文件信息。", excelCleanSchema());
-        seedFileOperate("excel_convert_format", "格式转换：将 Excel 文件转换为其他格式。支持 xlsx、xls、csv 三种格式之间的转换。转换结果写回临时文件，返回更新后的文件信息。", excelConvertFormatSchema());
+        seedFileOperate("excel_write", "创建或覆盖 Excel 文件。两种场景：1) 传入 fileId 时在临时文件基础上写入数据；2) 不传 fileId 时根据 headers 和 rows 创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新的 fileId 供后续操作使用。需提供 headers（列头数组，必填）和 rows（数据行数组）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelWriteSchema());
+        seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", fileRefSchema());
+        seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelFilterSchema());
+        seedFileOperate("excel_sort", "根据指定列对数据进行排序。支持升序（asc）和降序（desc）两种排序方向。排序结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelSortSchema());
+        seedFileOperate("excel_aggregate", "按指定列分组并进行聚合统计。支持 sum（求和）、avg（平均值）、count（计数）、min（最小值）、max（最大值）五种聚合类型。聚合结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelAggregateSchema());
+        seedFileOperate("excel_pivot", "透视分析：按行维度和列维度进行交叉汇总。需指定 rowDimension（行维度列）、colDimension（列维度列）和 valueColumn（值列）。透视结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelPivotSchema());
+        seedFileOperate("excel_calculate", "列运算：基于现有列生成新计算列。通过 formula 参数指定计算公式，支持用 {列名} 引用其他列，例如 {销售额} * {数量} 或 {单价} * 1.1。计算结果作为新列添加到数据中，写回临时文件。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelCalculateSchema());
+        seedFileOperate("excel_select_columns", "选择指定列，删除其他列。需提供 columns 数组指定要保留的列名。选择结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelSelectColumnsSchema());
+        seedFileOperate("excel_clean", "数据清洗操作。支持三种清洗类型：trim（去除字符串首尾空格）、deduplicate（去除重复行）、removeEmpty（移除空行）。清洗结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelCleanSchema());
+        seedFileOperate("excel_convert_format", "格式转换：将 Excel 文件转换为其他格式。支持 xlsx、xls、csv 三种格式之间的转换。转换结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelConvertFormatSchema());
         seedFileOperate("excel_validate", "合规校验：根据指定规则对数据进行校验。支持多种校验规则，如必填校验、数值范围校验、格式校验等。校验结果以 JSON 格式返回，不修改原文件。", excelValidateSchema());
     }
 
@@ -150,6 +150,7 @@ public class FileToolSeeder implements ApplicationRunner {
             "  • action=template_fill     用 values 填充 {{placeholder}} 占位符\n" +
             "支持的 fileRef 形式：文件名（如 'report.docx'）或文件 ID（数字）。\n" +
             "写操作（write/replace_text/template_fill）会自动 in-place 覆盖原文件，fileId 不变。\n" +
+            "返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。\n" +
             "**严禁**使用 'replace' / 'template' / 'fill' / 'search' / 'extract' 等简写 — 必须是上表的完整字符串。";
 
     /**
@@ -213,14 +214,14 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
                 keywordSearchSchema());
-        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）。原文件保持不变，生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）。原文件保持不变，生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
                 replaceTextSchema());
-        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符。原文件保持不变，生成新文件并返回 downloadUrl。",
+        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符。原文件保持不变，生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
                 templateFillSchema());
     }
 
