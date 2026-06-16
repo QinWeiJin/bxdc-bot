@@ -10,7 +10,6 @@ const {
   drawerVisible,
   loadTasks,
   acknowledge,
-  deleteTask,
   batchDelete,
   openDrawer,
   closeDrawer,
@@ -82,6 +81,30 @@ function progressPercent(t: AsyncTaskNotification): number {
   return 0
 }
 
+/**
+ * 进度条 tooltip 文案。当任务运行时间已接近 maxWaitSeconds 但状态仍未变时，
+ * 给用户"任务仍在运行中，可能即将完成/可能已卡住"的提示，避免 99% 被误认为 bug。
+ * open spec: async-task-polling-completion（前端 UX 部分）
+ */
+function progressTitle(t: AsyncTaskNotification): string {
+  const elapsed = t.elapsedSeconds || 0
+  if (t.status === 'POLLING' || t.status === 'SINGLE_CALLED') {
+    const max = (t.maxWaitSeconds && t.maxWaitSeconds > 0) ? t.maxWaitSeconds : 1800
+    if (elapsed >= max) {
+      return `任务已运行 ${elapsed}s（超过最大等待 ${max}s），仍在等待异步接口返回终态`
+    }
+    if (elapsed >= max * 0.95) {
+      return `任务已运行 ${elapsed}s，即将完成`
+    }
+    return `任务运行中（已 ${elapsed}s / 上限 ${max}s）`
+  }
+  if (t.status === 'COMPLETED') return '任务已完成'
+  if (t.status === 'FAILED') return '任务失败'
+  if (t.status === 'TIMEOUT') return '任务超时'
+  if (t.status === 'PENDING') return '任务等待中'
+  return ''
+}
+
 function progressStatus(t: AsyncTaskNotification): 'success' | 'error' | 'active' | 'undefined' {
   if (t.status === 'COMPLETED') return 'success'
   if (t.status === 'FAILED' || t.status === 'TIMEOUT') return 'error'
@@ -103,16 +126,7 @@ const detailTask = ref<AsyncTaskNotification | null>(null)
 /** Bxdcbot run 同一 parentToolId 下的所有子任务（detail 弹窗展示用） */
 const siblingTasks = ref<AsyncTaskNotification[]>([])
 
-/** 列表里按 parentToolId 分组后，每个 parent 的子任务数（含自身） */
-const childCountByParent = computed(() => {
-  const m = new Map<string, number>()
-  for (const t of tasks.value) {
-    if (t.parentToolId) {
-      m.set(t.parentToolId, (m.get(t.parentToolId) ?? 0) + 1)
-    }
-  }
-  return m
-})
+
 
 /**
  * 分组后的列表：把同一 parentToolId 的所有子任务合并为一条「Bxdcbot run 通知」。
@@ -390,11 +404,6 @@ function displaySkillName(t: AsyncTaskNotification): string {
   return t.skillName || '异步任务'
 }
 
-/** 是否有子任务上下文 */
-function hasParentContext(t: AsyncTaskNotification): boolean {
-  return !!t.parentToolId
-}
-
 async function handleOpen() {
   openDrawer()
   // 打开抽屉时退出批量模式
@@ -604,6 +613,7 @@ function handleClose() {
           v-if="detailTask.status === 'POLLING' || detailTask.status === 'PENDING' || detailTask.status === 'SINGLE_CALLED'"
           :percentage="progressPercent(detailTask)"
           :status="progressStatus(detailTask)"
+          :title="progressTitle(detailTask)"
           :stroke-width="4"
           class="detail-progress"
         />

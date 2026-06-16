@@ -8,17 +8,80 @@ import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.mapper.AsyncTaskMapper;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 public class AsyncTaskPollingService {
+
+    private static final Logger log = LoggerFactory.getLogger(AsyncTaskPollingService.class);
+
+    /**
+     * Auto-detect 候选 status 字段路径（按优先级）。
+     * 用户配置的 completionJsonPath 优先；若未配置 / 路径不命中 / 值不匹配，
+     * 按此列表顺序提取 status-like 字段，匹配终态白名单。
+     * open spec: async-task-polling-completion
+     */
+    private static final List<String> STATUS_FIELD_CANDIDATES = Collections.unmodifiableList(Arrays.asList(
+            "$.status",
+            "$.state",
+            "$.code",
+            "$.data.status",
+            "$.data.state",
+            "$.data.code",
+            "$.result.status",
+            "$.result.code"
+    ));
+
+    /**
+     * Auto-detect 成功终态值（大小写不敏感）。
+     * 包含 `2` 是兼容部分金融类 API 用 `2` 表示成功。
+     */
+    private static final Set<String> TERMINAL_SUCCESS_VALUES;
+    static {
+        Set<String> s = new HashSet<>();
+        s.add("SUCCESS");
+        s.add("COMPLETED");
+        s.add("FINISHED");
+        s.add("DONE");
+        s.add("SUCCEED");
+        s.add("OK");
+        s.add("2");
+        TERMINAL_SUCCESS_VALUES = Collections.unmodifiableSet(s);
+    }
+
+    /**
+     * Auto-detect 失败终态值（大小写不敏感）。
+     */
+    private static final Set<String> TERMINAL_FAILURE_VALUES;
+    static {
+        Set<String> s = new HashSet<>();
+        s.add("FAILED");
+        s.add("FAILURE");
+        s.add("ERROR");
+        s.add("CANCELLED");
+        s.add("CANCELED");
+        s.add("TIMEOUT");
+        s.add("EXPIRED");
+        TERMINAL_FAILURE_VALUES = Collections.unmodifiableSet(s);
+    }
+
+    /** Auto-detect 命中的终态分类。 */
+    public enum TerminalStatus {
+        SUCCESS, FAILURE, UNKNOWN
+    }
 
     private final AsyncTaskMapper asyncTaskMapper;
     private final ObjectMapper objectMapper;
@@ -213,6 +276,48 @@ public class AsyncTaskPollingService {
         if (startedAt == null || maxWaitSeconds == null) return false;
         long elapsed = ChronoUnit.SECONDS.between(startedAt, LocalDateTime.now());
         return elapsed >= maxWaitSeconds;
+    }
+
+    /**
+     * Auto-detect pollEndpoint 响应中的 status 字段是否命中终态。
+     * 按 {@link #STATUS_FIELD_CANDIDATES} 候选路径顺序提取 status-like 字段，
+     * 命中 {@link #TERMINAL_SUCCESS_VALUES} 返回 SUCCESS，命中 {@link #TERMINAL_FAILURE_VALUES} 返回 FAILURE。
+     *
+     * <p>大小写不敏感；用户配置的 completionJsonPath 优先（由 Scheduler 先调 evaluateCompletion，
+     * 该方法仅作 fallback）。</p>
+     *
+     * <p>open spec: async-task-polling-completion</p>
+     *
+     * @param pollResponse pollEndpoint 原始响应字符串（JSON）
+     * @return TerminalStatus.SUCCESS / FAILURE / UNKNOWN
+     */
+    public TerminalStatus autoDetectTerminalStatus(String pollResponse) {
+        if (pollResponse == null || StringUtils.isBlank(pollResponse)) return TerminalStatus.UNKNOWN;
+        Object parsed;
+        try {
+            parsed = objectMapper.readValue(pollResponse, Object.class);
+        } catch (Exception e) {
+            return TerminalStatus.UNKNOWN;
+        }
+        for (String path : STATUS_FIELD_CANDIDATES) {
+            try {
+                Object value = JsonPathUtils.extractValueByPath(parsed, path);
+                if (value == null) continue;
+                String stringValue = value.toString();
+                String upper = stringValue.toUpperCase();
+                if (TERMINAL_SUCCESS_VALUES.contains(upper)) {
+                    log.debug("Auto-detect hit status field at path={} value={}", path, stringValue);
+                    return TerminalStatus.SUCCESS;
+                }
+                if (TERMINAL_FAILURE_VALUES.contains(upper)) {
+                    log.debug("Auto-detect hit failure field at path={} value={}", path, stringValue);
+                    return TerminalStatus.FAILURE;
+                }
+            } catch (Exception ignored) {
+                // 单个路径解析失败不影响其他路径尝试
+            }
+        }
+        return TerminalStatus.UNKNOWN;
     }
 
     private String extractByPath(Object obj, String path) {
