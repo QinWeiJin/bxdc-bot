@@ -138,7 +138,7 @@ public class SkillExecutionService {
         @SuppressWarnings("unchecked")
         Map<String, Object> asyncPollConfig = (Map<String, Object>) config.get("asyncPoll");
         if (asyncPollConfig != null) {
-            return executeApiSkillAsync(skill, config, effectiveParameters, request.userId, request.getSessionId());
+            return executeApiSkillAsync(skill, config, effectiveParameters, request.userId, request.getSessionId(), request.parentToolId, request.parentSkillId);
         }
 
         String kind = (String) config.getOrDefault("kind", "api");
@@ -470,7 +470,7 @@ public class SkillExecutionService {
     }
 
     @SuppressWarnings("unchecked")
-    private Object executeApiSkillAsync(Skill skill, Map<String, Object> config, Object parameters, String userId, String sessionId) throws Exception {
+    private Object executeApiSkillAsync(Skill skill, Map<String, Object> config, Object parameters, String userId, String sessionId, String parentToolId, Long parentSkillId) throws Exception {
         Map<String, Object> asyncPoll = (Map<String, Object>) config.get("asyncPoll");
         String endpoint = (String) config.get("endpoint");
         String method = (String) config.getOrDefault("method", "GET");
@@ -503,12 +503,15 @@ public class SkillExecutionService {
             task.setSkillId(skill.getId());
             task.setUserId(userId);
             task.setSessionId(sessionId);
+            task.setParentToolId(parentToolId);
+            task.setParentSkillId(parentSkillId);
             task.setPollStrategy("SINGLE_CALL");
             task.setPollEndpoint(endpoint);
             task.setPollMethod(method);
             task.setRequestBody(requestBody);
             task.setPollHeaders(pollHeadersJson);
             task.setSingleCallReadTimeoutSeconds(singleCallReadTimeoutSeconds);
+            task.setMaxWaitSeconds(singleCallReadTimeoutSeconds);  // SINGLE_CALL 的超时也用作 maxWaitSeconds
             task.setStatus("PENDING");
 
             asyncTaskPollingService.createTask(task);
@@ -570,6 +573,8 @@ public class SkillExecutionService {
         task.setSkillId(skill.getId());
         task.setUserId(userId);
         task.setSessionId(sessionId);
+        task.setParentToolId(parentToolId);
+        task.setParentSkillId(parentSkillId);
         task.setExternalTaskId(externalTaskId);
         task.setPollEndpoint(pollEndpoint);
         task.setPollMethod(pollMethod);
@@ -730,6 +735,10 @@ public class SkillExecutionService {
         public Object adjustedParams;
         public String sessionId;
         public String conversationId;
+        /** bxdcbot-multi-turn-async: 父 Bxdcbot run_id (NULL=普通 async) */
+        public String parentToolId;
+        /** bxdcbot-multi-turn-async: 父 Bxdcbot skill_id (NULL=非 Bxdcbot 调起) */
+        public Long parentSkillId;
 
         public boolean isConfirmed() {
             return confirmed;
@@ -740,3 +749,4 @@ public class SkillExecutionService {
         }
     }
 }
+

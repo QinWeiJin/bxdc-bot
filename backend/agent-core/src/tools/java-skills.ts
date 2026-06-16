@@ -49,7 +49,42 @@ import {
 import { z } from "zod";
 import axios from "axios";
 import { pinyin } from "pinyin-pro";
+import { AsyncLocalStorage } from "async_hooks";
 import { tryParseJson, invokeToolDirect, summarizeToolResult, resolveAllowedTools } from "./openclaw-executor";
+
+/**
+ * Bxdcbot 自规划 mode 调用上下文（AsyncLocalStorage）。
+ *
+ * 当 executeOpenClawSkill / runSubPlanner 调 gateway skill 时设置 true，
+ * 让 func 知道"不要阻塞等 async 真结果"——async placeholder 留给 BxdcbotRunScheduler 处理。
+ *
+ * Chat mode（LangGraph agent 直接调 tool）走 func 时不在这个上下文里，
+ * 默认阻塞等真结果，让 LLM 看到真结果再继续规划。
+ */
+export const bxdcbotPlannerCallContext = new AsyncLocalStorage<boolean>();
+import { globalBxdcbotRunStore, BxdcbotRun, BxdcbotPlannerContext } from "../services/bxdcbot-run-store";
+import { notifyBxdcbotRunComplete } from "../services/bxdcbot-run-notifier";
+
+/**
+ * Bxdcbot 子技能调用时的运行时上下文（AsyncLocalStorage）。
+ * 替代模块级全局变量 activeBxdcbotContext，避免并发请求间状态串扰。
+ *
+ * 在 runSubPlanner 的 tool 调用前设置，在 func 闭包中读取。
+ * 用于将 parentToolId/parentSkillId 注入到子 skill 的 execute payload 中，
+ * 让 gateway 的 async_tasks 表正确记录父子关系。
+ */
+interface BxdcbotActiveRunCtx {
+  parentToolId: string
+  parentSkillId: number
+  conversationId: string
+  userId: string
+}
+const bxdcbotActiveRunStorage = new AsyncLocalStorage<BxdcbotActiveRunCtx>();
+
+/** @deprecated 用 bxdcbotActiveRunStorage.getStore() 替代模块级全局变量 */
+export function getActiveBxdcbotContext(): BxdcbotActiveRunCtx | undefined {
+  return bxdcbotActiveRunStorage.getStore();
+}
 
 export function getAgentBuiltinSkillDispatch(): "legacy" | "gateway" {
   const v = (process.env.AGENT_BUILTIN_SKILL_DISPATCH ?? "legacy").trim().toLowerCase();
@@ -548,7 +583,37 @@ export function sanitizeConfigForDisplay(config: ExtendedSkillConfig): ExtendedS
 export type BindableAgentTool = Tool | DynamicTool | StructuredTool;
 
 
+/**
+ * executeOpenClawSkill —— bxdcbot-multi-turn-async 多周期改造版
+ *
+ * 关键设计（决策 1-11 + 漏洞 1-3 修复）：
+ * - 第一周期：创建 BxdcbotRun + 跑 6 轮 LLM 子规划
+ * - 调 async skill 时：检测到 {asyncTaskId, status: "POLLING"|"SINGLE_CALLED"} → 立即退出循环
+ *   run.status 置 awaiting_async + 记录 pendingAsyncTaskIds + 记录 asyncTaskIdToToolCallId（漏洞 3）
+ * - run.awaiting_async 状态由 BxdcbotRunScheduler 监听 async 完成
+ * - 全完成时 resumer 重新进入新周期（调 resumeBxdcbotPlanner）
+ * - 60 轮触顶：run.status 置 failed + 调 complete 回灌
+ * - 决策 11 失败隔离：失败 MUST NOT 注入 messages；走 scheduler 重试路径
+ * - 决策 8/9：system prompt 加 1 行"async 占位不要调下游"约束
+ *
+ * 关键设计（用户硬性要求"1-10 个 async 统一处理"）：
+ * - N=1 / N=5-10 走**同一套**代码路径：pendingAsyncTaskIds Set、asyncTaskIdToToolCallId Map、注入 messages
+ * - scheduler 处理时**不感知** size 是 1 还是 10（用户要求）
+ */
 async function executeOpenClawSkill(
+  plannerModel: any,
+  parentToolName: string,
+  input: string,
+  config: ExtendedSkillConfig,
+  availableTools: BindableAgentTool[],
+): Promise<string> {
+  // Bxdcbot 自规划 mode 上下文（让嵌套的工具调用 func 不阻塞等 async 结果）
+  return await bxdcbotPlannerCallContext.run(true, async () => {
+    return await executeOpenClawSkillImpl(plannerModel, parentToolName, input, config, availableTools);
+  });
+}
+
+async function executeOpenClawSkillImpl(
   plannerModel: any,
   parentToolName: string,
   input: string,
@@ -588,21 +653,98 @@ async function executeOpenClawSkill(
   if (!planner || typeof planner.invoke !== "function") {
     return JSON.stringify({ error: "OPENCLAW planner model is unavailable." });
   }
+
+  // 解析 parentSkillId（从 Bxdcbot tool 的 skill_id 入参；这里 fallback 用 0）
+  const parentSkillId = (config as any)?.skill_id ?? (config as any)?.skillId ?? 0;
+  // 解析 conversationId / userId（从 active context 取）
+  const conversationId = (config as any)?.conversationId ?? (config as any)?.sessionId ?? "unknown";
+  const userId = (config as any)?.userId ?? (config as any)?.user_id ?? "unknown";
+  // 解析主 skill 展示名（来自 config.displayName / config.skill_name / describeGatewayExtendedTool metadata）
+  const parentMetadata = describeGatewayExtendedTool(parentToolName);
+  const parentSkillName = (config as any)?.displayName
+    || (config as any)?.skill_name
+    || (config as any)?.skillName
+    || parentMetadata?.displayName
+    || parentToolName;
+
+  // 创建 BxdcbotRun（决策 2：状态机 + 跨周期上下文）
+  const run = globalBxdcbotRunStore.create({
+    conversationId,
+    userId,
+    parentToolId,
+    parentSkillId,
+    parentSkillName,
+    plannerContext: { plannerModel, parentToolName, input, config, availableTools },
+  });
+
+  // 跑子规划（第一周期）
+  const result = await runSubPlanner(run, planner, parentToolName, input, config, availableTools, allowedTools, parentToolId);
+
+  // 第一周期直接完成（纯 sync）→ 调 complete 回灌
+  if (run.status === "completed" && run.result) {
+    notifyBxdcbotRunComplete(run).catch((e) => console.warn("[executeOpenClawSkill] notifyBxdcbotRunComplete failed:", e));
+  }
+  if (run.status === "failed") {
+    notifyBxdcbotRunComplete(run).catch((e) => console.warn("[executeOpenClawSkill] notifyBxdcbotRunComplete failed:", e));
+  }
+  return result;
+}
+
+/**
+ * runSubPlanner —— 跑一个 6 轮子规划周期（被 executeOpenClawSkill 和 resumeBxdcbotPlanner 复用）。
+ *
+ * 行为：
+ * - 把 run.messages 喂给 LLM（第一周期 system + user；第二周期开始累加）
+ * - 6 轮循环：invoke LLM → if tool_calls → 执行 tool → push tool result
+ * - 检测 async 调（结果含 asyncTaskId + status: POLLING/SINGLE_CALLED）→ 立即退出循环
+ * - run.status 流转：running → awaiting_async / completed
+ */
+async function runSubPlanner(
+  run: BxdcbotRun,
+  planner: any,
+  parentToolName: string,
+  input: string,
+  config: ExtendedSkillConfig,
+  availableTools: BindableAgentTool[],
+  allowedTools: BindableAgentTool[],
+  parentToolId: string,
+): Promise<string> {
+  const orchestrationMode = config.orchestration?.mode || "serial";
   const systemPrompt = [
     config.systemPrompt || "You are an autonomous planning skill.",
-    "You MUST call exactly ONE tool per turn, in order. Never emit multiple tool_calls in a single response.",
-    "Do not skip required tool calls.",
-    "For the compute tool, use structured arguments: operation (enum) and operands (array)—see tool schema. Do not nest under an input key.",
-    "If the user's input is ambiguous or cannot be reliably parsed, ask a clarification question instead of guessing.",
+    // 决策 13：自主规划子规划器要求「一次规划所有子任务，按顺序逐个 tool call」
+    "PLANNING RULES:",
+    "1) Analyze the user input ONCE and emit ALL needed tool_calls in a SINGLE response (one tool call per task, in the correct execution order).",
+    "2) Do NOT stop, summarize, or wait for the user between tool calls. After each tool result, immediately call the NEXT tool you already planned.",
+    "3) The runtime executes your tool_calls sequentially in the order you emit them. There is no extra round-trip between calls — the next tool starts as soon as the previous one returns.",
+    "4) Only emit a final text response (no tool_calls) when ALL required sub-tasks are completed and you are ready to give the user a final answer.",
+    "5) For the compute tool, use structured arguments: operation (enum) and operands (array)—see tool schema. Do not nest under an input key.",
+    "6) If the user's input is genuinely ambiguous (cannot be parsed at all), ask ONE clarification question. Otherwise, plan and execute.",
+    // bxdcbot-multi-turn-async 决策 9：1 行约束（让 LLM 第一眼看到）
+    "\u26a0\ufe0f Async sub-skill returns {asyncTaskId, status: \"POLLING\"|\"SINGLE_CALLED\"} as a PLACEHOLDER. " +
+    "Do NOT plan downstream sub-tasks that depend on the placeholder's result. If you need the real result, end the current turn and wait — the real result will be injected and the next planning cycle will resume.",
   ].join("\n\n");
 
-  const messages: any[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: input || "{}" },
-  ];
+  // 累加 messages：第一周期初始 system + user；后续周期 messages 在 run.messages 里
+  let messages: any[];
+  if (run.messages.length === 0) {
+    messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: input || "{}" },
+    ];
+    console.log(`[runSubPlanner] runId=${run.runId} round=${run.currentRound} init: system + user`);
+  } else {
+    // 续周期：messages 在 run.messages 里（保持累积）
+    messages = [...run.messages];
+    console.log(`[runSubPlanner] runId=${run.runId} round=${run.currentRound} resume: messages.length=${messages.length}, roles=${JSON.stringify(messages.map((m: any) => m.role))}`);
+  }
+
+  let asyncDetected = false;
 
   for (let round = 0; round < 6; round += 1) {
+    console.log(`[runSubPlanner] runId=${run.runId} invoking LLM round=${round}, messages=${messages.length}`);
     const response = await planner.invoke(messages);
+    run.totalLlmCalls += 1;
     const rawToolCalls = Array.isArray((response as any)?.tool_calls) ? (response as any).tool_calls : [];
 
     let toolCalls = rawToolCalls;
@@ -620,19 +762,38 @@ async function executeOpenClawSkill(
 
     if (toolCalls.length === 0) {
       const content = (response as any)?.content;
-      if (typeof content === "string") return content;
-      if (Array.isArray(content)) {
-        return content
-          .map((part: any) => typeof part === "string" ? part : part?.text || "")
-          .join("");
-      }
-      return JSON.stringify(content ?? "");
+      // run 跑完（completed）
+      const finalText = (() => {
+        if (typeof content === "string") return content;
+        if (Array.isArray(content)) {
+          return content.map((part: any) => typeof part === "string" ? part : part?.text || "").join("");
+        }
+        return JSON.stringify(content ?? "");
+      })();
+
+      run.status = "completed";
+      run.result = finalText;
+      run.finishedAt = new Date();
+      run.messages = messages;
+      console.log(`[runSubPlanner] runId=${run.runId} COMPLETED: finalText=${finalText.slice(0, 100)}`);
+      return finalText;
     }
 
-    for (const toolCall of toolCalls) {
+    const runCtx: BxdcbotActiveRunCtx = {
+      parentToolId: run.parentToolId,
+      parentSkillId: run.parentSkillId ?? 0,
+      conversationId: run.conversationId,
+      userId: run.userId,
+    };
+
+    // 在 AsyncLocalStorage 上下文中执行子技能调用（避免模块级全局变量并发串扰）
+    let unauthorizedError: string | null = null;
+    await bxdcbotActiveRunStorage.run(runCtx, async () => {
+      for (const toolCall of toolCalls) {
       const tool = allowedTools.find((candidate) => candidate.name === toolCall.name);
       if (!tool) {
-        return JSON.stringify({ error: `OPENCLAW skill tried to call unauthorized tool: ${toolCall.name}` });
+        unauthorizedError = JSON.stringify({ error: `OPENCLAW skill tried to call unauthorized tool: ${toolCall.name}` });
+        return;
       }
 
       const childToolId = typeof toolCall.id === "string" && toolCall.id.trim()
@@ -651,30 +812,15 @@ async function executeOpenClawSkill(
         arguments: sanitizeToolTraceArguments(toolCall.args || {}),
       });
 
+      let result: string;
       try {
-        const result = await invokeToolDirect(tool, toolCall.args || {});
-        emitToolTraceEvent({
-          type: "tool_status",
-          toolId: childToolId,
-          toolName: tool.name,
-          displayName: childDisplayName,
-          kind: describeGatewayExtendedTool(tool.name)?.kind || "tool",
-          status: "completed",
-          parentToolId,
-          parentToolName,
-          summary: summarizeToolResult(result),
-          result: sanitizeToolResultForTrace(result),
-        });
-        const resolvedCallId =
-          typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id : childToolId;
-        messages.push({
-          role: "tool",
-          tool_call_id: resolvedCallId,
-          content: result,
-        });
+        result = await invokeToolDirect(tool, toolCall.args || {});
       } catch (error) {
         if (isGraphInterrupt(error)) throw error;
         const message = formatToolError(error);
+        // 决策 11：sync skill 失败也走"重试 + 失败隔离"路径
+        // 但 sync skill 不能 asyncTaskId 关联，简化处理：注入 error tool result，让 LLM 看到错误
+        // （注：sync skill 失败当前 NOT 走决策 11 自动重试——决策 11 主用于 async；sync 失败由 LLM 决定）
         emitToolTraceEvent({
           type: "tool_status",
           toolId: childToolId,
@@ -694,11 +840,157 @@ async function executeOpenClawSkill(
           tool_call_id: resolvedCallId,
           content: JSON.stringify({ error: message }),
         });
+        continue;
       }
+
+      // 检测 async skill 调用（决策 1 + 决策 3 + 漏洞 3 修复）
+      let parsedResult: any = null;
+      try { parsedResult = JSON.parse(result); } catch (_) {}
+      if (parsedResult && typeof parsedResult === "object"
+          && typeof parsedResult.asyncTaskId === "number"
+          && (parsedResult.status === "POLLING" || parsedResult.status === "SINGLE_CALLED")) {
+        // async skill 调完：记录到 BxdcbotRun
+        const asyncTaskId = parsedResult.asyncTaskId;
+        const args = toolCall.args || {};
+        globalBxdcbotRunStore.registerAsyncTask(run.runId, tool.name, asyncTaskId, childToolId, args);
+        // 追踪子技能结果（用于 BXDCBOT_RUN_RESULT 消息展示）
+        run.subTaskResults.push({
+          skillName: tool.name,
+          status: "async_pending",
+          asyncTaskId,
+          completedAt: undefined,
+        });
+        asyncDetected = true;
+        // 注入占位 tool result（让 LLM 下一轮能 match tool_call_id）
+        // 注：这里用 childToolId 作为 tool_call_id 注入（漏洞 3 修复：async 完成时用同样 id 注入真结果）
+        const placeholder = JSON.stringify({
+          asyncTaskId,
+          status: parsedResult.status,
+          note: "异步任务已提交，结果将由 BxdcbotRunScheduler 注入",
+          pollUrl: `/api/async-tasks/${asyncTaskId}/wait`,
+        });
+        messages.push({
+          role: "tool",
+          tool_call_id: childToolId,
+          content: placeholder,
+        });
+        console.log(`[runSubPlanner] runId=${run.runId} async placeholder pushed: tool=${tool.name}, tool_call_id=${childToolId}, asyncTaskId=${asyncTaskId}`);
+        emitToolTraceEvent({
+          type: "tool_status",
+          toolId: childToolId,
+          toolName: tool.name,
+          displayName: childDisplayName,
+          kind: describeGatewayExtendedTool(tool.name)?.kind || "tool",
+          status: "running",
+          parentToolId,
+          parentToolName,
+          summary: `async task ${asyncTaskId} submitted`,
+          result: parsedResult,
+        });
+        // 退出 6 轮循环（让 scheduler 等 async 完成）
+        break;
+      }
+
+      // sync skill：注入 tool result
+      emitToolTraceEvent({
+        type: "tool_status",
+        toolId: childToolId,
+        toolName: tool.name,
+        displayName: childDisplayName,
+        kind: describeGatewayExtendedTool(tool.name)?.kind || "tool",
+        status: "completed",
+        parentToolId,
+        parentToolName,
+        summary: summarizeToolResult(result),
+        result: sanitizeToolResultForTrace(result),
+      });
+      const resolvedCallId =
+        typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id : childToolId;
+      messages.push({
+        role: "tool",
+        tool_call_id: resolvedCallId,
+        content: result,
+      });
+      console.log(`[runSubPlanner] runId=${run.runId} sync tool result pushed: tool=${tool.name}, tool_call_id=${resolvedCallId}, content_len=${result.length}`);
+      // 追踪子技能结果
+      run.subTaskResults.push({
+        skillName: tool.name,
+        status: "completed",
+        result,
+        completedAt: new Date().toISOString(),
+      });
+    }  // end for (toolCall of toolCalls)
+    });  // end bxdcbotActiveRunStorage.run()
+    if (unauthorizedError) return unauthorizedError;
+    if (asyncDetected) {
+      break;  // 退出外层 6 轮 for
     }
+  }  // end outer for (rounds)
+
+  // 保存 messages 到 run（续周期用）
+  run.messages = messages;
+
+  if (asyncDetected) {
+    run.status = "awaiting_async";
+    // 决策 12：返回明确指令告诉外层 LLM 停止工具调用
+    // AWAITING_ASYNC 状态由 BxdcbotRunScheduler 处理续周期，LLM 不需要再调任何 tool
+    return JSON.stringify({
+      status: "AWAITING_ASYNC",
+      runId: run.runId,
+      pendingCount: run.pendingAsyncTaskIds.size,
+      instruction: "DO_NOT_INVOKE_ANY_TOOL",
+      finalAnswer: `已为您提交 ${run.pendingAsyncTaskIds.size} 个异步任务，结果将在完成后由系统自动回灌并继续回复。请不要再次调用任何工具，等待后续回复。`,
+      note: "Bxdcbot run 调了异步 skill，等真结果回来后由 BxdcbotRunScheduler 续调",
+    });
   }
 
+  // 跑完 6 轮但没出 async + 没出文本 → 6 轮触顶
   return JSON.stringify({ error: "OPENCLAW skill exceeded the maximum planning steps." });
+}
+
+/**
+ * resumeBxdcbotPlanner —— 由 BxdcbotRunResumer 调，重新进入新一个 6 轮子规划周期。
+ *
+ * 行为：
+ * - 从 run.plannerContext 拿回 plannerModel / config / availableTools / parentToolName
+ * - 跑一个新周期（runSubPlanner 内部用 run.messages 累积）
+ * - 完成后由 BxdcbotRunResumer 决定调 complete
+ */
+export async function resumeBxdcbotPlanner(run: BxdcbotRun): Promise<string> {
+  // Bxdcbot 自规划 mode 续周期也走 AsyncLocalStorage 上下文（不阻塞 func）
+  return await bxdcbotPlannerCallContext.run(true, async () => {
+    return await resumeBxdcbotPlannerImpl(run);
+  });
+}
+
+async function resumeBxdcbotPlannerImpl(run: BxdcbotRun): Promise<string> {
+  const ctx = run.plannerContext;
+  if (!ctx) {
+    throw new Error(`runId=${run.runId} has no plannerContext, cannot resume`);
+  }
+  const { plannerModel, parentToolName, input, config, availableTools } = ctx;
+
+  const availableToolLookup = new Map<string, BindableAgentTool>();
+  availableTools.forEach((tool) => {
+    availableToolLookup.set(tool.name, tool);
+    availableToolLookup.set(tool.name.replace(/_/g, "-"), tool);
+    availableToolLookup.set(tool.name.replace(/-/g, "_"), tool);
+    const metadata = describeGatewayExtendedTool(tool.name);
+    if (metadata?.displayName) {
+      availableToolLookup.set(metadata.displayName, tool);
+    }
+  });
+  const allowedTools = resolveAllowedTools(config.allowedTools, availableToolLookup);
+
+  const planner = allowedTools.length > 0
+    ? (plannerModel && typeof plannerModel.bindTools === "function" ? plannerModel.bindTools(allowedTools) : null)
+    : plannerModel;
+  if (!planner || typeof planner.invoke !== "function") {
+    throw new Error("planner model is unavailable for resume");
+  }
+
+  const parentToolId = run.parentToolId;
+  return await runSubPlanner(run, planner, parentToolName, input, config, availableTools, allowedTools, parentToolId);
 }
 
 export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string, conversationId?: string): Record<string, string> {
@@ -797,9 +1089,11 @@ export async function loadGatewayExtendedTools(
       toolLookup.set(tool.name, tool);
     });
 
-    const resolvedTools: StructuredTool[] = [];
+    // === 第一遍：加载所有 skill 的 config，识别 OPENCLAW 技能及其 allowedTools ===
+    const skillConfigs = new Map<number, { workingSkill: GatewaySkill; config: ExtendedSkillConfig; toolName: string }>();
+    const coveredToolNames = new Set<string>();
+
     for (const skill of filteredSkills) {
-      console.log(`[DEBUG] skill ${skill.id} configuration:`, skill.configuration);
       let workingSkill = skill;
       let config = skill.configuration ? parseSkillConfig(skill) : {} as ExtendedSkillConfig;
       if (!skill.configuration?.trim()) {
@@ -809,12 +1103,33 @@ export async function loadGatewayExtendedTools(
           });
           workingSkill = detailResponse.data as GatewaySkill;
           config = parseSkillConfig(workingSkill);
-        } catch {
-          /* keep empty config; tool may still error at runtime */
-        }
+        } catch { /* keep empty config */ }
       }
       const toolName = normalizeToolName(skill.name || `skill_${skill.id}`, skill.id);
+      skillConfigs.set(skill.id, { workingSkill, config, toolName });
+
+      // 收集 OPENCLAW 技能的 allowedTools（这些技能的 tool 不应该暴露给外层 LLM）
+      const executionMode = normalizeExecutionMode(workingSkill.executionMode);
+      if (executionMode === "OPENCLAW" || (config.kind || "").toLowerCase() === "openclaw") {
+        const allowed = config.allowedTools || [];
+        for (const t of allowed) {
+          const normalized = t.trim().replace(/-/g, "_");
+          coveredToolNames.add(normalized);
+          coveredToolNames.add(t.trim());
+        }
+      }
+    }
+
+    // === 第二遍：创建 tool，OPENCLAW 子技能只加 toolLookup 不暴露给外层 LLM ===
+    const resolvedTools: StructuredTool[] = [];
+    for (const skill of filteredSkills) {
+      const entry = skillConfigs.get(skill.id)!;
+      const { workingSkill, config, toolName } = entry;
       registerGatewayToolMetadata(toolName, workingSkill);
+
+      const executionMode = normalizeExecutionMode(workingSkill.executionMode);
+      const isOpenClaw = executionMode === "OPENCLAW" || (config.kind || "").toLowerCase() === "openclaw";
+      const isCoveredByOpenClaw = !isOpenClaw && coveredToolNames.has(toolName);
 
       let toolDescription = workingSkill.description || `Execute extended skill: ${workingSkill.name}`;
       if (workingSkill.requiresConfirmation) {
@@ -854,11 +1169,19 @@ export async function loadGatewayExtendedTools(
                   : execInput && typeof execInput === "object" && typeof (execInput as Record<string, unknown>).input === "string"
                     ? String((execInput as Record<string, unknown>).input)
                     : JSON.stringify(execInput ?? {});
+              // 注入 skill_id / conversationId 等必要字段到 config（executeOpenClawSkill 需要）
+              const enrichedConfig = {
+                ...currentConfig,
+                skill_id: currentSkill.id,
+                skillId: currentSkill.id,
+                conversationId: options?.conversationId ?? "",
+                userId: userId ?? "",
+              };
               return await executeOpenClawSkill(
                 options?.plannerModel,
                 toolName,
                 openClawInput,
-                currentConfig,
+                enrichedConfig,
                 Array.from(toolLookup.values()),
               );
             }
@@ -895,6 +1218,15 @@ export async function loadGatewayExtendedTools(
             }
 
             const executePayload = { skillId: currentSkill.id, parameters };
+
+            // 如果在 Bxdcbot 子规划上下文中，注入 parentToolId/parentSkillId
+            const activeCtx = bxdcbotActiveRunStorage.getStore();
+            if (activeCtx) {
+              Object.assign(executePayload, {
+                parentToolId: activeCtx.parentToolId,
+                parentSkillId: activeCtx.parentSkillId,
+              });
+            }
 
             let executeResponse;
             try {
@@ -969,7 +1301,15 @@ export async function loadGatewayExtendedTools(
           }
         },
       });
-      resolvedTools.push(structuredTool);
+      // Bxdcbot 子技能：只加到 toolLookup（内部可用），不暴露给外层 chat LLM
+      if (isOpenClaw) {
+        resolvedTools.push(structuredTool);
+      } else if (isCoveredByOpenClaw) {
+        // 子技能被 Bxdcbot 的 allowedTools 覆盖，不暴露给 chat LLM
+        console.log(`[gateway-tools] ${toolName} covered by OPENCLAW, internal only`);
+      } else {
+        resolvedTools.push(structuredTool);
+      }
       toolLookup.set(structuredTool.name, structuredTool);
       if (skill.name) {
         toolLookup.set(skill.name, structuredTool);

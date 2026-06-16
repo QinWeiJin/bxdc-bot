@@ -68,6 +68,19 @@ public class ConversationMessage {
     @TableField("created_at")
     private LocalDateTime createdAt;
 
+    /**
+     * bxdcbot-multi-turn-async change：父 Bxdcbot run_id；
+     * BXDCBOT_RUN_RESULT 消息专用，async_task_id 必为 NULL。
+     */
+    @TableField("parent_tool_id")
+    private String parentToolId;
+
+    /**
+     * bxdcbot-multi-turn-async change：父 Bxdcbot skill_id。
+     */
+    @TableField("parent_skill_id")
+    private Long parentSkillId;
+
     // ---- Getters / Setters ----
 
     public Long getId() {
@@ -164,4 +177,9 @@ public class ConversationMessage {
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
     }
+
+    public String getParentToolId() { return parentToolId; }
+    public void setParentToolId(String parentToolId) { this.parentToolId = parentToolId; }
+    public Long getParentSkillId() { return parentSkillId; }
+    public void setParentSkillId(Long parentSkillId) { this.parentSkillId = parentSkillId; }
 }

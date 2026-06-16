@@ -391,6 +391,15 @@ public class AsyncTaskPollingScheduler {
                 log.warn("[ChatReply] Task {} not found in DB, skip", task.getId());
                 return;
             }
+            // bxdcbot-multi-turn-async change（漏洞 2 修复）：按 parent_tool_id 分流
+            // - 普通 async（parent_tool_id IS NULL）→ 走 echo-to-chat 路径（archive 2026-06-12 行为不变）
+            // - Bxdcbot 子 async（parent_tool_id != null）→ 不调 chatReplyService，避免对话流被 N 条单独消息淹没
+            //   （Bxdcbot 整体结果统一在 run 跑完时通过 /api/internal/bxdcbot-run/complete 回灌）
+            if (fresh.getParentToolId() != null && !fresh.getParentToolId().isEmpty()) {
+                log.info("[ChatReply] Skip echo-to-chat for Bxdcbot sub-task taskId={}, parentToolId={} (will be handled by BxdcbotRunCompletion at run-end)",
+                        fresh.getId(), fresh.getParentToolId());
+                return;
+            }
             chatReplyService.onTaskTerminal(fresh);
         } catch (Exception e) {
             log.warn("[ChatReply] trigger failed for task {}: {}", task.getId(), e.getMessage());

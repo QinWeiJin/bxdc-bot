@@ -27,15 +27,19 @@ export interface ConversationMessage {
    * - 'web' / 'api' 老值
    * - 'ASYNC_TASK_RESULT' 新增：异步任务完成后回灌到对话的消息
    */
-  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT'
+  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT' | 'BXDCBOT_RUN_RESULT'
   /** 异步任务结果消息关联的 async_tasks.id（NULL=普通消息） */
   async_task_id?: string | null
   /** LLM 续答是否尚未生成（1=pending，0=done） */
   summary_pending?: number | null
   /** LLM 续答生成的自然语言总结 */
   summary_text?: string | null
-  /** LLM 续答完成时间（ISO 字符串） */
+  /** 异步任务结果消息：LLM 续答完成时间（ISO 字符串） */
   summary_generated_at?: string | null
+  /** BxdcbotRun：当 Bxdcbot 自主规划调子 skill 时，子 async task 记录 parent_tool_id（runId），用于通知中心按 run 过滤 */
+  parent_tool_id?: string | null
+  /** BxdcbotRun：Bxdcbot 自规划 skillId */
+  parent_skill_id?: number | null
   created_at: string
 }
 

@@ -8,6 +8,7 @@ import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
 import ThinkingMode from './ThinkingMode.vue'
 import AsyncTaskResultMessage from './AsyncTaskResultMessage.vue'
+import BxdcbotRunResultMessage from './BxdcbotRunResultMessage.vue'
 import { ChevronUpIcon, ChevronDownIcon, DownloadIcon, RefreshIcon, CopyIcon, ThumbUpIcon, ThumbDownIcon, Share1Icon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
 import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
@@ -204,14 +205,33 @@ function findToolInvocationSlot(
   return null
 }
 
+/**
+ * 判断一个 tool 是否属于「自主规划任务里涉及轮询 / 单步长调用」的场景。
+ * - pollingStatus：SSE 上报的实时轮询进度
+ * - executionMode：后端写入的异步调度模式（POLLING 轮询 / SINGLE_CALLED 单步长调用）
+ *
+ * 命中后调用日志弹窗只展示主 skill，不再展开 sub-tool，避免日志被 sub-tool 刷屏。
+ */
+function isAsyncOrLongCall(tool: ToolInvocation): boolean {
+  if (tool.pollingStatus) return true
+  if (tool.executionMode === 'POLLING') return true
+  if (tool.executionMode === 'SINGLE_CALLED') return true
+  return false
+}
+
 function buildFallbackLogTimeline(message: Message) {
   const tools = message.toolInvocations ?? []
   const logs = message.llmLogs ?? []
   const entries: { kind: 'tool' | 'llm'; id: string }[] = []
   for (const t of tools) {
     entries.push({ kind: 'tool', id: t.id })
-    for (const c of t.children ?? []) {
-      entries.push({ kind: 'tool', id: c.id })
+    // 仅在「非异步轮询/长调用」且「有二级调用」时才追加 sub-tool
+    const isAsync = isAsyncOrLongCall(t)
+    const hasChildren = (t.children?.length ?? 0) > 0
+    if (!isAsync && hasChildren) {
+      for (const c of t.children ?? []) {
+        entries.push({ kind: 'tool', id: c.id })
+      }
     }
   }
   for (const e of [...logs].sort(
@@ -244,6 +264,9 @@ const logViewerRows = computed<LogViewerRow[]>(() => {
     if (found.variant === 'tool') {
       rows.push({ key: `tool-${found.tool.id}`, variant: 'tool', tool: found.tool })
     } else {
+      // 自主规划任务里，如果父 skill 是「轮询/单步长调用」（Bxdcbot 自主规划 + 子 skill 长调用），
+      // 则不在调用日志里展开子调用，只展示主 skill 的调用展示
+      if (isAsyncOrLongCall(found.parent)) continue
       rows.push({
         key: `tool-${found.child.id}`,
         variant: 'tool-child',
@@ -560,6 +583,8 @@ const chatItems = computed(() =>
     // async-task-result-echo-to-chat: 透传异步任务结果专用字段
     source: message.source,
     asyncTaskId: message.asyncTaskId,
+    parentToolId: message.parentToolId,
+    parentSkillId: message.parentSkillId,
     summaryPending: message.summaryPending,
     summaryText: message.summaryText,
     summaryGeneratedAt: message.summaryGeneratedAt,
@@ -669,6 +694,15 @@ async function copyContent(text: string) {
               :summary-pending="item.summaryPending"
               :summary-text="item.summaryText"
             />
+            <BxdcbotRunResultMessage
+              v-else-if="item.role === 'assistant' && item.source === 'BXDCBOT_RUN_RESULT'"
+              :content="item.rawContent || ''"
+              :run-id="item.parentToolId ?? item.id"
+              :message-id="item.id"
+              :llm-log-count="item.llmLogs?.length ?? 0"
+              :tool-invocations="item.toolInvocations"
+              @open-log="openLogViewer"
+            />
             <TChatContent
               v-else
               :role="item.role"
@@ -679,7 +713,7 @@ async function copyContent(text: string) {
               "
             />
             <span
-              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent && item.source !== 'ASYNC_TASK_RESULT'"
+              v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent && item.source !== 'ASYNC_TASK_RESULT' && item.source !== 'BXDCBOT_RUN_RESULT'"
               class="typewriter-cursor"
             />
           </div>
@@ -739,7 +773,7 @@ async function copyContent(text: string) {
           </div>
 
           <div
-            v-if="item.role === 'assistant' && item.toolInvocations.length"
+            v-if="item.role === 'assistant' && (item.toolInvocations?.length ?? 0) > 0"
             class="tool-status-list"
           >
             <div
@@ -814,48 +848,23 @@ async function copyContent(text: string) {
                   <pre class="tool-status-result-body">{{ formatToolResultText(tool.result) }}</pre>
                 </div>
               </div>
-              <div v-if="tool.children?.length" class="tool-children-list">
-                <div
-                  v-for="child in tool.children"
-                  :key="child.id"
-                  class="tool-child-block"
-                >
-                  <div
-                    class="tool-child-item"
-                    :class="`tool-child-item--${child.status}`"
-                  >
-                    <span class="tool-child-name">{{ child.displayName }}</span>
-                    <span class="tool-status-separator">·</span>
-                    <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
-                    <span v-if="child.summary" class="tool-status-separator">·</span>
-                    <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
-                    <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
-                    <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
-                  </div>
-                  <div
-                    v-if="formatToolResultText(child.result)"
-                    class="tool-child-result"
-                  >
-                    <pre class="tool-status-result-body">{{ formatToolResultText(child.result) }}</pre>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
 
-          <div
-            v-if="item.role === 'assistant' && item.llmLogs.length"
-            class="llm-log-actions"
-          >
-            <t-button size="small" variant="outline" @click="openLogViewer(item.id)">
-              日志查看
-            </t-button>
-            <span class="llm-log-count">共 {{ item.llmLogs.length }} 条</span>
-          </div>
         </div>
       </template>
 
       <template #actions="{ item }">
+        <!-- 日志查看：放在 重新生成 按钮上方，样式与调用日志模块一致 -->
+        <div
+          v-if="item.role === 'assistant' && item.llmLogs?.length"
+          class="llm-log-actions--inline"
+        >
+          <t-button size="small" variant="outline" @click="openLogViewer(item.id)">
+            日志查看
+          </t-button>
+          <span class="llm-log-count">共 {{ item.llmLogs.length }} 条</span>
+        </div>
         <div v-if="item.role === 'assistant' && item.rawContent" class="chat-actions-bar">
           <t-tooltip content="重新生成">
             <t-button theme="default" size="small" variant="text">
@@ -1343,11 +1352,11 @@ async function copyContent(text: string) {
   overflow-y: auto;
 }
 
-.llm-log-actions {
-  display: inline-flex;
+.llm-log-actions--inline {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding-left: 8px;
+  margin-bottom: 6px;
 }
 
 .llm-log-count {

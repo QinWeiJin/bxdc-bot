@@ -54,8 +54,20 @@ public class AsyncTaskNotificationDto {
     private boolean unread;
     private String previewResult;
 
+    /** 异步任务最大等待秒数（PERIODIC 的 maxWaitSeconds / SINGLE_CALL 的 singleCallReadTimeoutSeconds）。前端进度条用。 */
+    private Integer maxWaitSeconds;
+
+    /** bxdcbot-multi-turn-async：父 Bxdcbot run_id（NULL=普通 async） */
+    private String parentToolId;
+    /** bxdcbot-multi-turn-async：父 Bxdcbot skill_id（NULL=非 Bxdcbot 调起） */
+    private Long parentSkillId;
+
+    /** bxdcbot-multi-turn-async：父 Bxdcbot skill 名称（前端通知中心用） */
+    private String parentSkillName;
+
     public static AsyncTaskNotificationDto from(AsyncTask t, String skillName, int pollResponseCount,
-                                                Long elapsedSeconds, String previewResult) {
+                                                Long elapsedSeconds, String previewResult,
+                                                Integer maxWaitSeconds) {
         AsyncTaskNotificationDto d = new AsyncTaskNotificationDto();
         d.id = t.getId();
         d.skillId = t.getSkillId();
@@ -75,6 +87,9 @@ public class AsyncTaskNotificationDto {
         d.unread = t.getNotifiedAt() == null
                 && Arrays.asList("COMPLETED", "FAILED", "TIMEOUT").contains(t.getStatus());
         d.previewResult = previewResult;
+        d.maxWaitSeconds = maxWaitSeconds;
+        d.parentToolId = t.getParentToolId();
+        d.parentSkillId = t.getParentSkillId();
         return d;
     }
 
@@ -112,4 +127,14 @@ public class AsyncTaskNotificationDto {
     public void setUnread(boolean unread) { this.unread = unread; }
     public String getPreviewResult() { return previewResult; }
     public void setPreviewResult(String previewResult) { this.previewResult = previewResult; }
+
+    public Integer getMaxWaitSeconds() { return maxWaitSeconds; }
+    public void setMaxWaitSeconds(Integer maxWaitSeconds) { this.maxWaitSeconds = maxWaitSeconds; }
+
+    public String getParentToolId() { return parentToolId; }
+    public void setParentToolId(String parentToolId) { this.parentToolId = parentToolId; }
+    public Long getParentSkillId() { return parentSkillId; }
+    public void setParentSkillId(Long parentSkillId) { this.parentSkillId = parentSkillId; }
+    public String getParentSkillName() { return parentSkillName; }
+    public void setParentSkillName(String parentSkillName) { this.parentSkillName = parentSkillName; }
 }
