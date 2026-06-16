@@ -213,12 +213,52 @@ function createInstance() {
     // 立即拉一次
     fetchUnreadCount()
     pollTimer = window.setInterval(fetchUnreadCount, intervalMs)
+    // 同时开一个 SSE 订阅，实时接收 unread_count_changed 事件
+    startNotificationSse()
   }
 
   function stopPolling(): void {
     if (pollTimer !== null) {
       window.clearInterval(pollTimer)
       pollTimer = null
+    }
+    stopNotificationSse()
+  }
+
+  // ============================================================
+  // 用户级 SSE —— 通知中心 badge 实时更新
+  // ============================================================
+  // 之前的实现：30s 轮询 /api/async-tasks/my/unread-count
+  // 改后：SSE 主动推 unread_count_changed，轮询只作为 SSE 断开兜底
+  let notifSse: EventSource | null = null
+
+  function startNotificationSse(): void {
+    if (!currentUser.value?.id) return
+    if (notifSse) {
+      try { notifSse.close() } catch { /* ignore */ }
+      notifSse = null
+    }
+    try {
+      const es = new EventSource(apiUrl(`/api/notifications/events?userId=${encodeURIComponent(currentUser.value.id)}`))
+      es.addEventListener('unread_count_changed', () => {
+        // 后端只推 "changed" 信号（避免 Hikari stale snapshot 导致 count 错），
+        // frontend re-fetch 拿权威值
+        void fetchUnreadCount()
+      })
+      es.onerror = () => {
+        // EventSource 默认自动重连；只在断开时记日志
+        console.debug('[notif-sse] connection error (will auto-reconnect)')
+      }
+      notifSse = es
+    } catch (e) {
+      console.warn('[notif-sse] failed to open EventSource', e)
+    }
+  }
+
+  function stopNotificationSse(): void {
+    if (notifSse) {
+      try { notifSse.close() } catch { /* ignore */ }
+      notifSse = null
     }
   }
 
