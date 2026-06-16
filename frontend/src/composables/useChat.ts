@@ -86,7 +86,7 @@ export interface Message {
    * 消息来源（async-task-result-echo-to-chat change）。
    * 未设置或 'web'/'api' 走普通渲染；'ASYNC_TASK_RESULT' 走专用 UI。
    */
-  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT'
+  source?: 'web' | 'api' | 'ASYNC_TASK_RESULT' | 'BXDCBOT_RUN_RESULT'
   /** 异步任务结果消息：关联的 async_tasks.id */
   asyncTaskId?: string | null
   /** 异步任务结果消息：LLM 续答是否尚未生成（1=pending，0=done） */
@@ -95,6 +95,10 @@ export interface Message {
   summaryText?: string | null
   /** 异步任务结果消息：LLM 续答完成时间（毫秒时间戳） */
   summaryGeneratedAt?: number | null
+  /** BxdcbotRun：Bxdcbot 自规划调子 skill 时的 runId */
+  parentToolId?: string | null
+  /** BxdcbotRun：Bxdcbot 自规划 skillId */
+  parentSkillId?: number | null
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {

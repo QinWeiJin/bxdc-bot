@@ -46,9 +46,60 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
             migrateConversationMessageSummaries(conn);
+            migrateAsyncTaskParentToolId(conn);
+            migrateChatMessageParentToolId(conn);
+            cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 清理历史重复的 ASYNC_TASK_RESULT 消息（属于 Bxdcbot 自主规划子任务的）。
+     *
+     * 背景：
+     * - 旧实现：每个 Bxdcbot 子任务完成都会插入一条 ASYNC_TASK_RESULT 卡片到对话流
+     *   再加一条 BXDCBOT_RUN_RESULT 总结卡片 → 同一 Bxdcbot run 出现 N+1 张卡片
+     * - 新实现（AsyncTaskChatReplyService.onTaskTerminal）：Bxdcbot 子任务跳过 chat reply，
+     *   只留 BXDCBOT_RUN_RESULT 一张卡片
+     *
+     * 本方法清理已存在数据库中的"旧 N 张 ASYNC_TASK_RESULT 卡片"，保留 BXDCBOT_RUN_RESULT。
+     * 幂等：重复执行时第二次不再删任何行。
+     */
+    void cleanupDuplicateBxdcbotSubTaskChatMessages(Connection conn) {
+        String table = "conversation_messages";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        // 仅删 source=ASYNC_TASK_RESULT 且 async_task_id 在 async_tasks.parent_tool_id IS NOT NULL 子集里的行
+        // 即：这些是 Bxdcbot 子任务产生的卡片，应该被 BXDCBOT_RUN_RESULT 取代
+        // 注：用 COLLATE 显式统一两表字符集比较（避免 utf8mb4_unicode_ci vs utf8mb4_0900_ai_ci 冲突）
+        String deleteSql =
+                "DELETE FROM " + table + " " +
+                "WHERE source = 'ASYNC_TASK_RESULT' " +
+                "  AND async_task_id IS NOT NULL " +
+                "  AND EXISTS ( " +
+                "    SELECT 1 FROM async_tasks t " +
+                "    WHERE CAST(t.id AS CHAR) COLLATE utf8mb4_unicode_ci = " +
+                table + ".async_task_id COLLATE utf8mb4_unicode_ci " +
+                "      AND t.parent_tool_id IS NOT NULL " +
+                "      AND t.parent_tool_id <> '' " +
+                "  )";
+
+        try (Statement st = conn.createStatement()) {
+            int affected = st.executeUpdate(deleteSql);
+            if (affected > 0) {
+                log.info("[SchemaMigration] ✅ Cleaned up {} duplicate ASYNC_TASK_RESULT messages " +
+                        "(belonging to Bxdcbot sub-tasks)", affected);
+            } else {
+                log.debug("[SchemaMigration] No duplicate ASYNC_TASK_RESULT messages to clean up");
+            }
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] Failed to clean up duplicate ASYNC_TASK_RESULT messages: {}",
+                    e.getMessage());
         }
     }
 
@@ -343,5 +394,87 @@ public class SchemaMigrationRunner implements InitializingBean {
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
+    }
+
+    /**
+     * bxdcbot-multi-turn-async change 配套 schema 迁移（open spec）。
+     *
+     * 任务：扩展 async_tasks 表，让它能记录"这个 async 任务是被哪个 Bxdcbot run 调起的"。
+     * - parent_tool_id (VARCHAR 128)：BxdcbotRun.runId 副本，对应 chat_messages.parent_tool_id
+     * - parent_skill_id (BIGINT)：Bxdcbot skill_id（冗余字段，方便按 skill 过滤）
+     * - idx_parent_tool_status 复合索引（按 parent_tool_id + status 过滤子任务）
+     *
+     * 列必须可空（NULL safe）——历史 async 任务记录 parent_tool_id=NULL，
+     * AsyncTaskPollingScheduler 走 echo-to-chat 旧路径（向后兼容）。
+     */
+    void migrateAsyncTaskParentToolId(Connection conn) {
+        String table = "async_tasks";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 1. parent_tool_id
+        ensureColumn(conn, table, "parent_tool_id", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN parent_tool_id VARCHAR(128) DEFAULT NULL " +
+                "COMMENT '父 Bxdcbot run_id（标识这是 Bxdcbot X 调的第 N 个子任务）；NULL=普通 async'");
+
+        // 2. parent_skill_id
+        ensureColumn(conn, table, "parent_skill_id", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN parent_skill_id BIGINT DEFAULT NULL " +
+                "COMMENT '父 Bxdcbot skill_id（冗余字段，方便按 skill 过滤）'");
+
+        // 3. subtask_only: 标记「这是 Bxdcbot 子任务的合成通知（sync 子任务）」。
+        //    与普通 async 任务区分：subtask_only=1 的行 poll_endpoint 必为 NULL，
+        //    但仍要出现在通知中心列表里（让用户看到 Bxdcbot 调用的所有子任务，包括 sync）。
+        ensureColumn(conn, table, "subtask_only", existingColumns,
+                "ALTER TABLE async_tasks ADD COLUMN subtask_only TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '1=合成通知（sync 子任务）；0=普通 async 任务'");
+
+        // 4. idx_parent_tool_status 复合索引
+        ensureIndex(conn, table, "idx_parent_tool_status", existingIndexes,
+                "ALTER TABLE async_tasks ADD INDEX idx_parent_tool_status (parent_tool_id, status)");
+    }
+
+    /**
+     * bxdcbot-multi-turn-async change 配套 schema 迁移（open spec）。
+     *
+     * 任务：扩展 conversation_messages 表，让 Bxdcbot run 终态消息（source=BXDCBOT_RUN_RESULT）
+     * 也能像 async 任务结果一样，关联到具体的 Bxdcbot run / skill。
+     *
+     * - parent_tool_id (VARCHAR 128)：BxdcbotRun.runId，对应 async_tasks.parent_tool_id
+     * - parent_skill_id (BIGINT)：Bxdcbot skill_id
+     * - idx_chat_msg_parent_tool 索引
+     *
+     * 注意：与 archive 2026-06-12 async-task-result-echo-to-chat 路径的 async_task_id 字段共存——
+     * BXDCBOT_RUN_RESULT 消息的 async_task_id 必为 NULL（不是单 async 的回显，而是 Bxdcbot 整体结果），
+     * 但 parent_tool_id 必填（用于前端通知中心聚合）。
+     */
+    void migrateChatMessageParentToolId(Connection conn) {
+        String table = "conversation_messages";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 1. parent_tool_id
+        ensureColumn(conn, table, "parent_tool_id", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN parent_tool_id VARCHAR(128) DEFAULT NULL " +
+                "COMMENT '父 Bxdcbot run_id；BXDCBOT_RUN_RESULT 消息专用'");
+
+        // 2. parent_skill_id
+        ensureColumn(conn, table, "parent_skill_id", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN parent_skill_id BIGINT DEFAULT NULL " +
+                "COMMENT '父 Bxdcbot skill_id'");
+
+        // 3. 复合索引（按 parent_tool_id 过滤子任务产生的对话消息）
+        ensureIndex(conn, table, "idx_chat_msg_parent_tool", existingIndexes,
+                "CREATE INDEX idx_chat_msg_parent_tool ON " + table + "(parent_tool_id)");
     }
 }

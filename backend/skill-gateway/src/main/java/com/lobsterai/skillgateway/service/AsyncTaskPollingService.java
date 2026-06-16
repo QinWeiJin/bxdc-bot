@@ -39,6 +39,47 @@ public class AsyncTaskPollingService {
         return task;
     }
 
+    /**
+     * 创建 Bxdcbot 子任务的合成通知（用于 sync 子任务也要显示在通知中心的场景）。
+     * subtask_only=1，poll_endpoint 必为 NULL，status 必为 COMPLETED。
+     * 幂等：同一 (parentToolId, skillName) 组合在已存在 COMPLETED 行时直接返回，不重复插入。
+     */
+    public AsyncTask createBxdcbotSubtaskNotification(
+            String userId, String sessionId, String skillName, String parentToolId, Long parentSkillId,
+            Long skillId, String result, Long elapsedSeconds) {
+        // 幂等检查：同 parentToolId + skillName + status=COMPLETED 是否已有
+        try {
+            List<AsyncTask> existing = asyncTaskMapper.selectList(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AsyncTask>()
+                            .eq(AsyncTask::getUserId, userId)
+                            .eq(AsyncTask::getParentToolId, parentToolId)
+                            .eq(AsyncTask::getSkillId, skillId)
+                            .eq(AsyncTask::getStatus, "COMPLETED")
+                            .eq(AsyncTask::getSubtaskOnly, 1)
+                            .last("LIMIT 1"));
+            if (existing != null && !existing.isEmpty()) {
+                return existing.get(0);
+            }
+        } catch (Exception ignore) { /* 幂等检查失败不影响插入 */ }
+
+        AsyncTask task = new AsyncTask();
+        task.setUserId(userId);
+        task.setSessionId(sessionId);
+        task.setSkillId(skillId);
+        task.setStatus("COMPLETED");
+        task.setParentToolId(parentToolId);
+        task.setParentSkillId(parentSkillId);
+        task.setSubtaskOnly(1);
+        task.setPollResult(result != null ? result : "{}");
+        task.setStartedAt(LocalDateTime.now());
+        task.setCompletedAt(LocalDateTime.now());
+        task.setCreatedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+        // 默认未读：notified_at = NULL
+        asyncTaskMapper.insert(task);
+        return task;
+    }
+
     public AsyncTask findById(Long id) {
         return asyncTaskMapper.selectById(id);
     }
@@ -196,25 +237,34 @@ public class AsyncTaskPollingService {
      * 列出指定用户的异步任务（仅走 asyncPoll 分支），转 DTO。
      * 同时触发一次"7 天前已完成/失败/超时且未读"的自动清理。
      */
-    public List<AsyncTaskNotificationDto> findNotificationsByUser(String userId, boolean unreadOnly, int limit) {
+    public List<AsyncTaskNotificationDto> findNotificationsByUser(String userId, boolean unreadOnly, int limit, String parentToolId) {
         // 自动清理历史未读任务，避免用户登录时看到几个月前的旧任务
         try {
             asyncTaskMapper.autoMarkStaleAsRead();
         } catch (Exception ignore) {
             // 自动清理失败不应阻塞列表查询
         }
-        List<AsyncTask> tasks = asyncTaskMapper.findByUserAndAsyncPoll(userId, unreadOnly, limit);
+        List<AsyncTask> tasks = asyncTaskMapper.findByUserAndAsyncPoll(userId, unreadOnly, limit, parentToolId);
         if (tasks.isEmpty()) return java.util.Collections.emptyList();
 
         // 预加载 skill 名称，避免 N+1
         Map<Long, String> skillNameCache = new HashMap<>();
+        Map<Long, String> parentSkillNameCache = new HashMap<>();
         for (AsyncTask t : tasks) {
-            if (t.getSkillId() == null) continue;
-            skillNameCache.computeIfAbsent(t.getSkillId(), sid -> {
-                return skillService.getSkillByIdForUser(sid, userId)
-                        .map(Skill::getName)
-                        .orElse(null);
-            });
+            if (t.getSkillId() != null) {
+                skillNameCache.computeIfAbsent(t.getSkillId(), sid -> {
+                    return skillService.getSkillByIdForUser(sid, userId)
+                            .map(Skill::getName)
+                            .orElse(null);
+                });
+            }
+            if (t.getParentSkillId() != null) {
+                parentSkillNameCache.computeIfAbsent(t.getParentSkillId(), psid -> {
+                    return skillService.getSkillByIdForUser(psid, userId)
+                            .map(Skill::getName)
+                            .orElse(null);
+                });
+            }
         }
 
         return tasks.stream().map(t -> {
@@ -230,7 +280,16 @@ public class AsyncTaskPollingService {
                 if (elapsed < 0) elapsed = 0;
             }
             String preview = buildPreview(t);
-            return AsyncTaskNotificationDto.from(t, skillName, 0, elapsed, preview);
+            Integer maxWaitSec = t.getMaxWaitSeconds();
+            // SINGLE_CALL 用 singleCallReadTimeoutSeconds 作为 maxWaitSeconds（如果没有显式设置 maxWaitSeconds）
+            if (maxWaitSec == null && t.getSingleCallReadTimeoutSeconds() != null) {
+                maxWaitSec = t.getSingleCallReadTimeoutSeconds();
+            }
+            AsyncTaskNotificationDto dto = AsyncTaskNotificationDto.from(t, skillName, 0, elapsed, preview, maxWaitSec);
+            if (t.getParentSkillId() != null) {
+                dto.setParentSkillName(parentSkillNameCache.get(t.getParentSkillId()));
+            }
+            return dto;
         }).collect(Collectors.toList());
     }
 

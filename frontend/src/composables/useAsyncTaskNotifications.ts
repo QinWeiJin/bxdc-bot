@@ -29,6 +29,14 @@ export interface AsyncTaskNotification {
   notifiedAt: string | null
   unread: boolean
   previewResult: string | null
+  /** 异步任务最大等待秒数（前端进度条用） */
+  maxWaitSeconds?: number | null
+  /** Bxdcbot 自主规划调子 skill 时的 runId（parent_tool_id） */
+  parentToolId?: string | null
+  /** Bxdcbot 父技能 ID */
+  parentSkillId?: number | null
+  /** Bxdcbot 父技能名称（通知中心用） */
+  parentSkillName?: string | null
 }
 
 let _instance: ReturnType<typeof createInstance> | null = null
@@ -68,10 +76,10 @@ function createInstance() {
     }
   }
 
-  async function loadTasks(unreadOnly = false, limit = 20): Promise<void> {
+  async function loadTasks(unreadOnly = false, limit = 20, parentToolId?: string): Promise<AsyncTaskNotification[]> {
     if (!currentUser.value?.id) {
       tasks.value = []
-      return
+      return []
     }
     loading.value = true
     try {
@@ -79,21 +87,34 @@ function createInstance() {
         unreadOnly: String(unreadOnly),
         limit: String(limit),
       })
+      if (parentToolId) params.append('parentToolId', parentToolId)
       const res = await fetch(`${apiUrl('/api/async-tasks/my')}?${params.toString()}`, {
         method: 'GET',
         headers: authHeaders(),
         credentials: 'include',
       })
       if (!res.ok) {
-        tasks.value = []
-        return
+        if (!parentToolId) tasks.value = []
+        return []
       }
       const data = await res.json()
-      tasks.value = Array.isArray(data.items) ? data.items : []
-      // 列表加载后重新同步未读数
-      unreadCount.value = tasks.value.filter(t => t.unread).length
+      const items: AsyncTaskNotification[] = Array.isArray(data.items) ? data.items : []
+      if (parentToolId) {
+        // 只把 Bxdcbot 兄弟任务合入到已有列表（不覆盖主列表）
+        const map = new Map(tasks.value.map(t => [t.id, t]))
+        for (const it of items) map.set(it.id, it)
+        tasks.value = Array.from(map.values())
+        // 拉兄弟任务后，同步未读数（兜底用权威接口）
+        void fetchUnreadCount()
+      } else {
+        tasks.value = items
+        // 列表加载后用后端权威 count 同步未读数（避免只展示 20-50 条导致不准）
+        void fetchUnreadCount()
+      }
+      return items
     } catch {
-      tasks.value = []
+      if (!parentToolId) tasks.value = []
+      return []
     } finally {
       loading.value = false
     }
@@ -118,9 +139,8 @@ function createInstance() {
           t.unread = false
           t.notifiedAt = new Date().toISOString()
         }
-        // 重新计算未读数
-        const newUnread = tasks.value.filter(t => t.unread).length
-        if (newUnread < unreadCount.value) unreadCount.value = newUnread
+        // 重新拉后端权威 count
+        void fetchUnreadCount()
       }
       return ok
     } catch {
@@ -144,12 +164,9 @@ function createInstance() {
       const data = await res.json()
       const ok = !!data.ok
       if (ok) {
-        const removed = tasks.value.find(t => t.id === taskId)
         tasks.value = tasks.value.filter(t => t.id !== taskId)
-        if (removed?.unread) {
-          const newUnread = tasks.value.filter(t => t.unread).length
-          if (newUnread < unreadCount.value) unreadCount.value = newUnread
-        }
+        // 重新拉后端权威 count
+        void fetchUnreadCount()
       }
       return ok
     } catch {
@@ -173,14 +190,9 @@ function createInstance() {
       if (!res.ok) return 0
       const data = await res.json()
       const affected = Number(data.affected) || 0
-      // 本地移除被删除的（按后端返回的 affected 数）
-      const removed = tasks.value.filter(t => taskIds.includes(t.id))
-      const hadUnread = removed.some(t => t.unread)
       tasks.value = tasks.value.filter(t => !taskIds.includes(t.id))
-      if (hadUnread) {
-        const newUnread = tasks.value.filter(t => t.unread).length
-        if (newUnread < unreadCount.value) unreadCount.value = newUnread
-      }
+      // 重新拉后端权威 count
+      void fetchUnreadCount()
       return affected
     } catch {
       return 0

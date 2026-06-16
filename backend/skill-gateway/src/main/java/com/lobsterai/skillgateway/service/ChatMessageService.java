@@ -37,6 +37,8 @@ public class ChatMessageService {
      * 与 spec 决议 2 一致（VARCHAR 风格，不强制 ENUM）。
      */
     public static final String SOURCE_ASYNC_TASK_RESULT = "ASYNC_TASK_RESULT";
+    /** bxdcbot-multi-turn-async change：Bxdcbot run 终态结果消息（与 ASYNC_TASK_RESULT 区分） */
+    public static final String SOURCE_BXDCBOT_RUN_RESULT = "BXDCBOT_RUN_RESULT";
 
     /**
      * 降级文本（spec 决策 6：LLM 续答失败时 summary_text 用此）。
@@ -93,6 +95,62 @@ public class ChatMessageService {
             return msg.getId();
         } catch (Exception e) {
             log.error("[ChatMessageService] Failed to insert async task result message: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * bxdcbot-multi-turn-async change：插入 Bxdcbot run 终态结果消息。
+     *
+     * 与 insertAsyncTaskResult 的关键区别：
+     * - source = BXDCBOT_RUN_RESULT（与 ASYNC_TASK_RESULT 区分）
+     * - async_task_id = NULL（不是单 async 的回显，而是 Bxdcbot 整体结果）
+     * - parent_tool_id = runId（用于前端通知中心聚合）
+     * - parent_skill_id = skillId
+     * - 幂等：按 parent_tool_id 去重（同 run 多次调 complete 只写一次）
+     */
+    public Long insertBxdcbotRunResult(String conversationId, String runId, Long parentSkillId,
+                                       String content) {
+        if (conversationId == null || conversationId.isEmpty()) {
+            log.warn("[ChatMessageService] insertBxdcbotRunResult skipped: conversationId is empty");
+            return null;
+        }
+        if (runId == null || runId.isEmpty()) {
+            log.warn("[ChatMessageService] insertBxdcbotRunResult skipped: runId is empty");
+            return null;
+        }
+
+        // 幂等：同 runId 已存在 BXDCBOT_RUN_RESULT 消息则不重复写
+        ConversationMessage existing = messageMapper.findByParentToolId(conversationId, runId);
+        if (existing != null) {
+            log.info("[ChatMessageService] insertBxdcbotRunResult skipped (idempotent): runId={} already has messageId={}",
+                    runId, existing.getId());
+            return existing.getId();
+        }
+
+        ConversationMessage msg = new ConversationMessage();
+        msg.setMessageId(UUID.randomUUID().toString());
+        msg.setConversationId(conversationId);
+        msg.setRole("assistant");
+        msg.setSource(SOURCE_BXDCBOT_RUN_RESULT);
+        msg.setContent(content != null ? content : "");
+        msg.setAsyncTaskId(null);  // BXDCBOT_RUN_RESULT 消息的 async_task_id 必为 NULL
+        msg.setParentToolId(runId);
+        msg.setParentSkillId(parentSkillId);
+        msg.setSummaryPending(1);
+        msg.setSummaryText(null);
+        msg.setSummaryGeneratedAt(null);
+        msg.setCreatedAt(LocalDateTime.now());
+
+        try {
+            messageMapper.insert(msg);
+            log.info("[ChatMessageService] Inserted Bxdcbot run result message: id={}, conversationId={}, runId={}",
+                    msg.getId(), conversationId, runId);
+            // SSE 推送
+            eventBus.publish(conversationId, "message_inserted", toMessageDto(msg));
+            return msg.getId();
+        } catch (Exception e) {
+            log.error("[ChatMessageService] Failed to insert Bxdcbot run result message: {}", e.getMessage(), e);
             return null;
         }
     }

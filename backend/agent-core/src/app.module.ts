@@ -32,6 +32,8 @@ import { SkillProxyController } from './features/skills/skill-proxy.controller';
 import { MemoryService } from './mem/memory.service';
 import { SkillManager } from './skills/skill.manager';
 import { LoggerService } from './utils/logger.service';
+// bxdcbot-multi-turn-async
+import { BxdcbotRunScheduler } from './services/bxdcbot-run-scheduler.js';
 
 /**
  * 应用程序根模块
@@ -47,6 +49,6 @@ import { LoggerService } from './utils/logger.service';
 @Module({
   imports: [ConfigModule.forRoot()],
   controllers: [AgentController, HealthController, MemoryController, UserController, AvatarController, OptimizeTextController, SkillProxyController],
-  providers: [MemoryService, SkillManager, LoggerService],
+  providers: [MemoryService, SkillManager, LoggerService, BxdcbotRunScheduler],
 })
 export class AppModule {}

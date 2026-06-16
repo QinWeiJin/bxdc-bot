@@ -187,6 +187,10 @@ public class SkillController {
             req.adjustedParams = body.get("adjustedParams");
             req.userId = userId;
             req.sessionId = sessionId;
+            // bxdcbot-multi-turn-async：父任务标识
+            req.parentToolId = (String) body.get("parentToolId");
+            req.parentSkillId = body.get("parentSkillId") instanceof Number
+                    ? ((Number) body.get("parentSkillId")).longValue() : null;
 
             Object result = skillExecutionService.execute(req);
             return ResponseEntity.ok(result);

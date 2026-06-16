@@ -84,6 +84,8 @@ function convertHistoryMessages(msgs: ConversationMessage[]): Message[] {
         summaryGeneratedAt: msg.summary_generated_at
           ? new Date(msg.summary_generated_at).getTime()
           : null,
+        parentToolId: msg.parent_tool_id ?? null,
+        parentSkillId: msg.parent_skill_id ?? null,
       })
       pendingToolInvocations = skillCalls
     } else if (msg.role === 'tool') {
@@ -231,6 +233,8 @@ function convertSingleMessage(msg: ConversationMessage): Message {
     summaryGeneratedAt: msg.summary_generated_at
       ? new Date(msg.summary_generated_at).getTime()
       : null,
+    parentToolId: msg.parent_tool_id ?? null,
+    parentSkillId: msg.parent_skill_id ?? null,
   }
 }
 

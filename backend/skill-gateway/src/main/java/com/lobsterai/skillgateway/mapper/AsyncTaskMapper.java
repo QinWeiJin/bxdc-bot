@@ -37,18 +37,27 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
     }
 
     /**
-     * 列出某用户的异步任务（仅返回走 asyncPoll 分支创建的任务）。
-     * 通过 poll_endpoint IS NOT NULL 过滤掉非异步调用。
+     * 列出某用户的异步任务（普通 async + Bxdcbot 合成通知）。
+     * 普通 async 任务要求 poll_endpoint IS NOT NULL。
+     * Bxdcbot 合成通知（subtask_only=1）即使 poll_endpoint 为 NULL 也要返回，
+     * 让用户能在通知中心看到 Bxdcbot 调用的所有子任务（包括 sync 子任务）。
      * 如果 unreadOnly=true，额外限制 notified_at IS NULL。
+     * 如果 parentToolId 非空，额外限制 parent_tool_id = parentToolId
+     * （bxdcbot-multi-turn-async change：前端按 Bxdcbot run 聚合子任务用）。
      */
-    default List<AsyncTask> findByUserAndAsyncPoll(String userId, boolean unreadOnly, int limit) {
+    default List<AsyncTask> findByUserAndAsyncPoll(String userId, boolean unreadOnly, int limit, String parentToolId) {
         LambdaQueryWrapper<AsyncTask> w = new LambdaQueryWrapper<AsyncTask>()
                 .eq(AsyncTask::getUserId, userId)
-                .isNotNull(AsyncTask::getPollEndpoint)
+                .and(q -> q.isNotNull(AsyncTask::getPollEndpoint)
+                        .or()
+                        .eq(AsyncTask::getSubtaskOnly, 1))
                 .orderByDesc(AsyncTask::getCreatedAt)
                 .last("LIMIT " + limit);
         if (unreadOnly) {
             w.isNull(AsyncTask::getNotifiedAt);
+        }
+        if (parentToolId != null && !parentToolId.isEmpty()) {
+            w.eq(AsyncTask::getParentToolId, parentToolId);
         }
         return selectList(w);
     }
@@ -56,7 +65,9 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
     default int countUnreadByUser(String userId) {
         Long count = selectCount(new LambdaQueryWrapper<AsyncTask>()
                 .eq(AsyncTask::getUserId, userId)
-                .isNotNull(AsyncTask::getPollEndpoint)
+                .and(q -> q.isNotNull(AsyncTask::getPollEndpoint)
+                        .or()
+                        .eq(AsyncTask::getSubtaskOnly, 1))
                 .in(AsyncTask::getStatus, "COMPLETED", "FAILED", "TIMEOUT")
                 .isNull(AsyncTask::getNotifiedAt));
         return count == null ? 0 : count.intValue();
