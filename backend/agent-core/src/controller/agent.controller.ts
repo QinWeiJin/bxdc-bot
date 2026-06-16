@@ -79,7 +79,7 @@ type SkillInterruptPayload = {
   parametersPreview?: unknown;
 };
 
-function unwrapLangGraphStreamPayload(raw: unknown): any {
+export function unwrapLangGraphStreamPayload(raw: unknown): any {
   if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
     return raw[1];
   }
@@ -677,7 +677,16 @@ export class AgentController {
             gatewayUrl,
             apiToken,
             openAiApiKey,
-            { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId, conversationId },
+            { 
+              modelName, 
+              baseUrl, 
+              callbacks: [llmCallbackHandler], 
+              sessionId, 
+              conversationId,
+              streamCallback: (event) => {
+                subject.next({ data: JSON.stringify({ type: 'sub_agent_event', ...event }) });
+              }
+            },
             userId,
           );
 

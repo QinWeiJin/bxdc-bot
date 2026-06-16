@@ -29,6 +29,24 @@ public interface SkillMapper extends BaseMapper<Skill> {
     }
 
     /**
+     * 按可见性 + 所有者类型过滤（用于页面只查询用户技能）
+     * @param userId 当前用户 ID
+     * @param skillOwnerType 1: 用户技能, 2: 系统技能
+     */
+    default List<Skill> findVisibleSummaryForUserByOwnerType(String userId, Integer skillOwnerType) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return selectList(new LambdaQueryWrapper<Skill>()
+                    .eq(Skill::getVisibility, SkillVisibility.PUBLIC)
+                    .eq(Skill::getSkillOwnerType, skillOwnerType));
+        }
+        return selectList(new LambdaQueryWrapper<Skill>()
+                .eq(Skill::getSkillOwnerType, skillOwnerType)
+                .and(w -> w.eq(Skill::getVisibility, SkillVisibility.PUBLIC)
+                        .or(ww -> ww.eq(Skill::getVisibility, SkillVisibility.PRIVATE)
+                                .eq(Skill::getCreatedBy, userId))));
+    }
+
+    /**
      * 按技能所有者类型查找技能
      * @param skillOwnerType 1: 用户技能, 2: 系统技能
      */
