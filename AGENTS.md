@@ -195,3 +195,17 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
   - 对现有 Skill 类型的兼容性影响？（是否破坏已有 api / ssh / template / openclaw 的行为）
   - 是否需要 agent-core 单独回归测试？
   以便开发人员评估是否接受这次架构侵入
+
+### 5.6 前端 build 必须零 TS6133（vue-tsc -b 严格模式）
+- `frontend/package.json` 的 `build` 脚本是 `vue-tsc -b && vite build --skipTypeCheck`，**先跑 vue-tsc -b（严格 build mode）再跑 vite**。vue-tsc -b 严格模式会报 TS6133（声明但未使用），一旦有 TS6133 整个 build 立即 exit code 2，**不进入 vite 阶段**
+- 重构 / 删字段 / 改 composable 解构后 MUST 自查所有未用 declaration，**不能用 `vue-tsc --noEmit` 蒙混过关**（单文件模式比 -b 宽松，可能漏报；CI / 同事 build 才会触发）
+- 常见触发点（已踩过）：
+  - 从 composable 解构出来的方法 / ref（如 `useAsyncTaskNotifications` 的 `deleteTask`）
+  - 写了但没在 template 引用的 computed（如 `childCountByParent`）
+  - 写了但没在 script 调用的辅助函数（如 `hasParentContext`、`formatToolSummary`）
+  - 删字段后没删对应 import
+- **自查 checklist**（重构后跑一遍）：
+  1. `cd frontend && npx vue-tsc -b` 必须静默通过（无输出）
+  2. `cd frontend && npm run build` 必须 exit 0
+  3. 关注 vite 输出的 chunk size warning（如新增大依赖需说明）
+- 教训来源：commit `53def51` 一次性删了 4 处 TS6133 declaration 才让 build 通过；之前 `vue-tsc --noEmit` 不报，但 `vue-tsc -b` 必报
