@@ -4,6 +4,9 @@ node_modules/
 # Build outputs
 # dist/ 在部署环境（内网）从源码 npm run build 生成，不进 git
 dist-ssr/
+
+# E2E test reports (generated artifacts)
+tests/e2e/reports/
 target/
 frontend/dist/
 backend/agent-core/dist/

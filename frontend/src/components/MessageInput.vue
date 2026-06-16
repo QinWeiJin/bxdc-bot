@@ -335,7 +335,7 @@ async function handleSend(value: string) {
     </div>
 
     <!-- 文本输入区 + 上传按钮 -->
-    <div class="chat-sender-row">
+    <div class="chat-sender-row" data-ref="chat-input-area">
       <TChatSender
         v-model="input"
         class="chat-sender"

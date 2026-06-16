@@ -426,11 +426,6 @@ public class SkillExecutionService {
             } catch (java.io.UnsupportedEncodingException e) {
                 throw new RuntimeException(e);
             }
-            // JDK 1.8: URLEncoder.encode(String, Charset) 是 JDK 10+；使用单参数版本（deprecated but 1.8 compatible）
-            // 单参数版本默认使用平台默认编码（实际为 UTF-8 在绝大多数环境），足够覆盖项目使用场景
-            sb.append(URLEncoder.encode(entry.getKey()));
-            sb.append("=");
-            sb.append(URLEncoder.encode(String.valueOf(entry.getValue())));
         }
         return sb.toString();
     }

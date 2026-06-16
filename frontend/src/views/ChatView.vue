@@ -313,7 +313,7 @@ onErrorCaptured((err) => {
       :conversation-id="currentConvId"
     />
     <template v-else>
-      <div class="chat-card">
+      <div class="chat-card" data-ref="chat-container">
         <div class="chat-main">
           <MessageList />
         </div>
