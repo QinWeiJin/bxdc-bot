@@ -36,6 +36,14 @@ public class SkillService {
         return skillMapper.findVisibleSummaryForUser(userId);
     }
 
+    /**
+     * 按技能所有者类型查询技能
+     * @param ownerType 1: 用户技能, 2: 系统技能
+     */
+    public List<Skill> listSkillsByOwnerType(Integer ownerType) {
+        return skillMapper.findBySkillOwnerTypeAndEnabledIsTrue(ownerType);
+    }
+
     public Optional<Skill> getSkillByIdForUser(Long id, String userId) {
         Skill skill = skillMapper.selectById(id);
         if (skill == null || !canViewSkill(skill, userId)) {

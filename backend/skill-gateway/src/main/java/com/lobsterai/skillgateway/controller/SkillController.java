@@ -90,6 +90,18 @@ public class SkillController {
         return skillService.listSkillsForUser(userId);
     }
 
+    /**
+     * 按技能所有者类型查询技能
+     * @param ownerType 1: 用户技能, 2: 系统技能
+     */
+    @GetMapping("/by-owner-type")
+    public List<Skill> getSkillsByOwnerType(
+            @RequestParam Integer ownerType,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
+        return skillService.listSkillsByOwnerType(ownerType);
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<Skill> getSkillById(
             @PathVariable Long id,

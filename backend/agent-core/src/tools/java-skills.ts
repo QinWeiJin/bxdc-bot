@@ -760,13 +760,25 @@ export async function loadGatewayExtendedTools(
     conversationId?: string;
     /** 对话级别 Skill 过滤：有值时仅加载匹配 ID 的 Extension Skill，undefined 或 [] 时全量加载 */
     enabledSkillIds?: number[];
+    /** 技能所有者类型过滤：1=用户技能, 2=系统技能, undefined=全部 */
+    skillOwnerType?: number;
   },
 ): Promise<StructuredTool[]> {
   try {
     const listHeaders = gatewaySkillReadHeaders(apiToken, userId);
-    const response = await axios.get(`${gatewayUrl}/api/skills`, {
-      headers: listHeaders,
-    });
+    
+    // 根据 skillOwnerType 决定调用哪个端点
+    let response;
+    if (options?.skillOwnerType !== undefined) {
+      response = await axios.get(`${gatewayUrl}/api/skills/by-owner-type`, {
+        headers: listHeaders,
+        params: { ownerType: options.skillOwnerType },
+      });
+    } else {
+      response = await axios.get(`${gatewayUrl}/api/skills`, {
+        headers: listHeaders,
+      });
+    }
 
     const skills = Array.isArray(response.data) ? response.data as GatewaySkill[] : [];
     const extensionSkills = skills.filter(

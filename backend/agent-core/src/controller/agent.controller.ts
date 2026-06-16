@@ -671,14 +671,14 @@ export class AgentController {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });
           });
-          const { agent } = await AgentFactory.createAgent(
+          // 使用主 Agent（仅携带基础工具，不加载扩展技能）
+          // 具体技能执行由主 Agent 通过 search_tools + execute_skill_with_context 创建子 Agent 完成
+          const { agent } = await AgentFactory.createMainAgent(
             gatewayUrl,
             apiToken,
             openAiApiKey,
             { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId, conversationId },
-            this.skillManager,
             userId,
-            enabledSkillIds,
           );
 
           const memories = await this.memoryService.searchMemories(instruction, userId, 10);

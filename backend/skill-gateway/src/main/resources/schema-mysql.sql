@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS skills (
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
     type VARCHAR(255) NOT NULL,
+    skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1: 用户技能, 2: 系统技能',
     configuration TEXT,
     schema_properties TEXT,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
