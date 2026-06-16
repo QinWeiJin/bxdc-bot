@@ -270,6 +270,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     user_id VARCHAR(64) NOT NULL COMMENT '所属用户ID',
     name VARCHAR(255) DEFAULT '' COMMENT '对话名称（默认用户输入前18字）',
     enabled_skills JSON COMMENT '该对话启用的Skill ID列表，如 [1, 3, 5]',
+    enabled_files JSON DEFAULT NULL COMMENT '该对话启用的文件ID列表，如 [1, 3, 5]；NULL=存量对话不启用过滤',
     status VARCHAR(32) DEFAULT 'active' COMMENT '状态：active/archived/deleted',
     is_published TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发布为API: 0=未发布, 1=已发布',
     api_description TEXT NULL COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息',

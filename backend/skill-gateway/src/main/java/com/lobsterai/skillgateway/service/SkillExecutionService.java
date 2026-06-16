@@ -150,7 +150,7 @@ public class SkillExecutionService {
             case "template":
                 return executeTemplateSkill(config, effectiveParameters);
             case "file_tool":
-                return executeFileToolSkill(config, effectiveParameters, request.userId);
+                return executeFileToolSkill(config, effectiveParameters, request.userId, request.conversationId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }
@@ -629,12 +629,15 @@ public class SkillExecutionService {
      * </p>
      */
     @SuppressWarnings("unchecked")
-    private Object executeFileToolSkill(Map<String, Object> config, Object parameters, String userId) {
+    private Object executeFileToolSkill(Map<String, Object> config, Object parameters, String userId,
+                                        String conversationId) {
         String toolName = resolveFileToolName(config, parameters);
         Map<String, Object> params = parameters instanceof Map
                 ? (Map<String, Object>) parameters
                 : new LinkedHashMap<String, Object>();
-        FileToolResponse response = fileToolService.execute(userId, toolName, params);
+        // open spec: conversation-file-isolation — 把 conversationId 传入 4 参 overload，
+        // 让 FileToolService 解析 enabled_files 并按会话过滤
+        FileToolResponse response = fileToolService.execute(userId, toolName, params, conversationId);
 
         // file_tool 内部 file_delete / file_clear_all 返回 { requiresConfirmation: true, ... }
         // 必须把这个内部信号转成顶层 CONFIRMATION_REQUIRED 协议，
@@ -726,6 +729,7 @@ public class SkillExecutionService {
         public String userId;
         public Object adjustedParams;
         public String sessionId;
+        public String conversationId;
 
         public boolean isConfirmed() {
             return confirmed;

@@ -3,6 +3,7 @@ package com.lobsterai.skillgateway.service;
 import com.lobsterai.skillgateway.dto.ExcelOperationResult;
 import com.lobsterai.skillgateway.dto.FileToolRequest;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
+import com.lobsterai.skillgateway.entity.Conversation;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.util.AamTokenUtil;
@@ -38,16 +39,22 @@ public class FileToolService {
     private final UserFileMapper userFileMapper;
     private final FileParseService fileParseService;
     private final ExcelToolService excelToolService;
+    private final ConversationService conversationService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final Map<String, ToolHandler> handlers = new ConcurrentHashMap<String, ToolHandler>();
 
     public FileToolService(FileRefResolver fileRefResolver,
                            UserFileMapper userFileMapper,
                            FileParseService fileParseService,
-                           ExcelToolService excelToolService) {
+                           ExcelToolService excelToolService,
+                           ConversationService conversationService,
+                           com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         this.fileRefResolver = fileRefResolver;
         this.userFileMapper = userFileMapper;
         this.fileParseService = fileParseService;
         this.excelToolService = excelToolService;
+        this.conversationService = conversationService;
+        this.objectMapper = objectMapper;
         initHandlers();
     }
 
@@ -179,6 +186,23 @@ public class FileToolService {
      * @return 统一响应
      */
     public FileToolResponse execute(String userId, String toolName, Map<String, Object> arguments) {
+        return execute(userId, toolName, arguments, null);
+    }
+
+    /**
+     * 带 conversationId 的执行入口。
+     * <p>
+     * open spec: conversation-file-isolation — 在执行上下文设置 enabled_files，
+     * FileManageService 通过 {@link FileToolConversationContext} 读取并按会话过滤。
+     * </p>
+     *
+     * @param userId         用户 ID
+     * @param toolName       工具名
+     * @param arguments      请求参数
+     * @param conversationId 会话 ID（可空）；非空时从 Conversation.enabled_files 解析权限列表
+     */
+    public FileToolResponse execute(String userId, String toolName,
+                                    Map<String, Object> arguments, String conversationId) {
         if (toolName == null || toolName.trim().isEmpty()) {
             return FileToolResponse.error("toolName is required");
         }
@@ -217,15 +241,104 @@ public class FileToolService {
                 }
                 // OptionalFileId 工具允许 fileId 和 fileRef 都为空，userFile 保持 null
             }
-            // 从 arguments 提取工具特定 params（排除 fileId、fileRef、fileName）
-            Map<String, Object> toolParams = extractToolParams(args);
-            return handler.handle(userFile, toolParams, userId);
+            // 设置当前会话 enabled_files 上下文（FileManageService 会读取并按会话过滤）
+            List<Long> enabledFiles = resolveEnabledFiles(conversationId, userId);
+            FileToolConversationContext.set(enabledFiles);
+
+            // open spec: conversation-file-isolation — 操作类工具统一校验：
+            // 非管理类工具（Excel/Word/Txt/MD 等必须有 userFile 的工具）需校验文件是否在 enabled_files 内
+            if (!isManagementTool(toolName) && enabledFiles != null && userFile != null
+                    && !enabledFiles.contains(userFile.getId())) {
+                return FileToolResponse.error(
+                        "文件(ID=" + userFile.getId() + ")不在当前会话权限内，请先确认文件已上传并在会话配置面板中勾选，或使用 file_list 查看可用文件",
+                        userFile.getOriginalFileName());
+            }
+
+            try {
+                // 从 arguments 提取工具特定 params（排除 fileId、fileRef、fileName）
+                Map<String, Object> toolParams = extractToolParams(args);
+                FileToolResponse response = handler.handle(userFile, toolParams, userId);
+
+                // open spec: conversation-file-isolation — 工具操作产生的新文件自动绑定到当前会话
+                autoBindCreatedFiles(response, conversationId, userId);
+
+                return response;
+            } finally {
+                FileToolConversationContext.clear();
+            }
         } catch (IllegalArgumentException e) {
             log.warn("File tool '{}' error: {}", toolName, e.getMessage());
             return FileToolResponse.error(e.getMessage(), fileRef);
         } catch (Exception e) {
             log.error("File tool '{}' unexpected error", toolName, e);
             return FileToolResponse.error("Internal error: " + e.getMessage(), fileRef);
+        }
+    }
+
+    /**
+     * 解析会话的 enabled_files。
+     * <ul>
+     *   <li>conversationId 为 null → 返回 null（表示不启用过滤，向后兼容）</li>
+     *   <li>对话的 enabled_files 为 NULL → 返回 null（存量对话，向后兼容）</li>
+     *   <li>对话的 enabled_files 为空数组 [] → 返回空列表（启用隔离但权限为空）</li>
+     *   <li>解析为 JSON 数组 → 返回 Long 列表</li>
+     * </ul>
+     */
+    private List<Long> resolveEnabledFiles(String conversationId, String userId) {
+        if (conversationId == null || conversationId.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            Conversation conv = conversationService.getById(conversationId, userId);
+            if (conv == null || conv.getEnabledFiles() == null || "null".equals(conv.getEnabledFiles())) {
+                return null;
+            }
+            Long[] arr = objectMapper.readValue(conv.getEnabledFiles(), Long[].class);
+            List<Long> result = new ArrayList<Long>();
+            if (arr != null) {
+                for (Long id : arr) {
+                    if (id != null) result.add(id);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("resolveEnabledFiles failed for conv={}: {}", conversationId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * open spec: conversation-file-isolation
+     * 工具操作产生的文件（临时/下载/新建）自动绑定到当前会话的 enabled_files。
+     * <p>
+     * 从响应 output 中提取 fileId / newFileId / resultFileId，验证文件存在且归属当前用户后
+     * 调用 {@link ConversationService#appendEnabledFile} 写入（幂等，重复调用无副作用）。
+     * </p>
+     */
+    private void autoBindCreatedFiles(FileToolResponse response, String conversationId, String userId) {
+        if (conversationId == null || conversationId.trim().isEmpty()) return;
+        if (response == null || !response.isSuccess()) return;
+        if (!(response.getOutput() instanceof Map)) return;
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> output = (Map<String, Object>) response.getOutput();
+        String[] keys = {"fileId", "newFileId", "resultFileId"};
+
+        for (String key : keys) {
+            Object val = output.get(key);
+            if (val == null) continue;
+            long fileId = val instanceof Number ? ((Number) val).longValue() : -1;
+            if (fileId <= 0) continue;
+
+            try {
+                UserFile uf = userFileMapper.selectById(fileId);
+                if (uf != null && userId.equals(uf.getUserId())) {
+                    conversationService.appendEnabledFile(conversationId, userId, fileId);
+                    log.debug("autoBindCreatedFiles: bound fileId={} to conv={}", fileId, conversationId);
+                }
+            } catch (Exception e) {
+                log.warn("autoBindCreatedFiles failed for fileId={}: {}", fileId, e.getMessage());
+            }
         }
     }
 

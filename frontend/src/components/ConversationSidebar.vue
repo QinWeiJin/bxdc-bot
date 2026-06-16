@@ -41,6 +41,7 @@ const editInputRef = ref<HTMLInputElement | null>(null)
 const skillPanelVisible = ref(false)
 const skillPanelConvId = ref('')
 const skillPanelConvEnabledIds = ref<number[]>([])
+const skillPanelConvEnabledFileIds = ref<number[]>([])
 
 const emit = defineEmits<{
   (e: 'select', conversationId: string): void
@@ -128,6 +129,7 @@ async function handleDelete(conv: Conversation) {
 function openSkillPanel(conv: Conversation) {
   skillPanelConvId.value = conv.conversation_id
   skillPanelConvEnabledIds.value = parseEnabledSkills(conv.enabled_skills)
+  skillPanelConvEnabledFileIds.value = parseEnabledFiles(conv.enabled_files)
   skillPanelVisible.value = true
 }
 
@@ -145,18 +147,28 @@ function onPublished(_apiKey: string) {
   emit('published', publishTargetConvId.value)
 }
 
-function onSkillPanelSaved(ids: number[]) {
+function onSkillPanelSaved(skillIds: number[], fileIds: number[]) {
   // Update local conversations list
   const conv = (conversations.value || []).find(
     (c) => c.conversation_id === skillPanelConvId.value,
   )
   if (conv) {
-    conv.enabled_skills = JSON.stringify(ids)
+    conv.enabled_skills = JSON.stringify(skillIds)
+    conv.enabled_files = JSON.stringify(fileIds)
   }
 }
 
 function parseEnabledSkills(raw: string): number[] {
   if (!raw) return []
+  try {
+    return JSON.parse(raw) as number[]
+  } catch {
+    return []
+  }
+}
+
+function parseEnabledFiles(raw: string | null | undefined): number[] {
+  if (!raw || raw === 'null') return []
   try {
     return JSON.parse(raw) as number[]
   } catch {
@@ -285,7 +297,7 @@ function handleEditKeydown(event: KeyboardEvent) {
                 @click.stop="openSkillPanel(conv)"
               >
                 <template #icon><SettingIcon /></template>
-                Skill配置
+                配置
               </t-button>
             </div>
           </div>
@@ -299,6 +311,7 @@ function handleEditKeydown(event: KeyboardEvent) {
     :visible="skillPanelVisible"
     :conversation-id="skillPanelConvId"
     :enabled-skill-ids="skillPanelConvEnabledIds"
+    :enabled-file-ids="skillPanelConvEnabledFileIds"
     @close="skillPanelVisible = false"
     @saved="onSkillPanelSaved"
   />

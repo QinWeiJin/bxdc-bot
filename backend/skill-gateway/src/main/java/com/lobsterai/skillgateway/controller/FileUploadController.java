@@ -4,6 +4,7 @@ import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.dto.FileParseResult;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
+import com.lobsterai.skillgateway.service.ConversationService;
 import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import com.lobsterai.skillgateway.util.AamTokenUtil;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,6 +31,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -72,15 +75,18 @@ public class FileUploadController {
     private final FileParseService fileParseService;
     private final UserFileMapper userFileMapper;
     private final FtpConfig ftpConfig;
+    private final ConversationService conversationService;
 
     public FileUploadController(FtpFileService ftpFileService,
                                 FileParseService fileParseService,
                                 UserFileMapper userFileMapper,
-                                FtpConfig ftpConfig) {
+                                FtpConfig ftpConfig,
+                                ConversationService conversationService) {
         this.ftpFileService = ftpFileService;
         this.fileParseService = fileParseService;
         this.userFileMapper = userFileMapper;
         this.ftpConfig = ftpConfig;
+        this.conversationService = conversationService;
     }
 
     /**
@@ -97,6 +103,7 @@ public class FileUploadController {
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> upload(
             @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "conversationId", required = false) String conversationId,
             HttpServletRequest request
     ) {
         // 1. 文件基本校验
@@ -144,6 +151,18 @@ public class FileUploadController {
             // 5. 写 DB（MyBatis-Plus AUTO id 写入后回填 userFile.getId()）
             userFileMapper.insert(userFile);
 
+            // open spec: conversation-file-isolation — 上传文件自动绑定到当前会话
+            boolean autoBound = false;
+            if (conversationId != null && !conversationId.trim().isEmpty()) {
+                try {
+                    conversationService.appendEnabledFile(conversationId, userId, userFile.getId());
+                    autoBound = true;
+                } catch (Exception e) {
+                    log.warn("Auto-bind file {} to conversation {} failed: {}",
+                            userFile.getId(), conversationId, e.getMessage());
+                }
+            }
+
             // 6. 解析改为异步（关键优化点）：
             //    旧逻辑：同步等 parseAndPersist 完成（PDF/Word 大文件可能 1-3 秒），
             //           HTTP 连接挂死，前端转圈圈。
@@ -162,6 +181,8 @@ public class FileUploadController {
             body.put("fileType", userFile.getFileType());
             body.put("size", file.getSize());
             body.put("status", "PARSING");
+            body.put("conversationId", conversationId);
+            body.put("autoBound", autoBound);
             body.put("message", "File uploaded. Parse running in background; poll /api/files/" + userFile.getId());
             return ResponseEntity.accepted().body(body);
 
@@ -195,6 +216,94 @@ public class FileUploadController {
      *       实际通过 {@code parsedSummary} 是否为空判定）</li>
      * </ul>
      * </p>
+     *
+    /**
+     * 列出当前用户的所有文件（不按会话过滤，配置面板需要全量文件列表）。
+     * <p>
+     * open spec: conversation-file-isolation — 与 {@code file_list} 工具不同，
+     * 此端点不经过 {@code FileToolConversationContext}，直接读 {@code user_files}，
+     * 用于前端配置面板让用户跨会话勾选文件。
+     * </p>
+     *
+     * @param request HTTP 请求（{@code X-User-Id} 头）
+     * @return 200 + { files: [...] }
+     */
+    @GetMapping
+    public ResponseEntity<Map<String, Object>> listFiles(HttpServletRequest request) {
+        String userId;
+        try {
+            userId = AamTokenUtil.requireUserId(request);
+        } catch (IllegalArgumentException e) {
+            return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
+        }
+        List<UserFile> all = userFileMapper.findByUserId(userId);
+        List<Map<String, Object>> result = new java.util.ArrayList<>();
+        for (UserFile uf : all) {
+            Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("id", uf.getId());
+            item.put("fileName", uf.getOriginalFileName());
+            item.put("fileType", uf.getFileType());
+            item.put("fileSize", uf.getFileSize());
+            item.put("uploadTime", uf.getUploadTime() != null ? uf.getUploadTime().toString() : null);
+            result.add(item);
+        }
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("files", result);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 删除用户文件（FTP + DB + 清理 enabled_files 引用）。
+     *
+     * @param id      文件主键（{@code user_files.id}）
+     * @param request HTTP 请求（{@code X-User-Id} 头）
+     * @return 200 + 删除结果 / 404 文件不存在
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> deleteFile(
+            @PathVariable("id") Long id,
+            HttpServletRequest request
+    ) {
+        String userId;
+        try {
+            userId = AamTokenUtil.requireUserId(request);
+        } catch (IllegalArgumentException e) {
+            return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
+        }
+
+        UserFile uf = userFileMapper.selectById(id);
+        if (uf == null) {
+            return error(HttpStatus.NOT_FOUND, "FILE_NOT_FOUND", "File not found: " + id);
+        }
+        if (!userId.equals(uf.getUserId())) {
+            return error(HttpStatus.NOT_FOUND, "FILE_NOT_FOUND", "File not found: " + id);
+        }
+
+        // 1. 删 FTP
+        boolean ftpDeleted = false;
+        try {
+            ftpDeleted = ftpFileService.deleteFile(userId, uf.getFileName());
+        } catch (Exception e) {
+            log.warn("FTP delete failed for {}/{}: {}", userId, uf.getFileName(), e.getMessage());
+        }
+
+        // 2. 删 DB
+        int dbDeleted = userFileMapper.deleteById(id);
+
+        // 3. 清理 enabled_files 引用
+        int cleaned = conversationService.removeEnabledFileFromAllConversations(id, userId);
+
+        Map<String, Object> body = new LinkedHashMap<String, Object>();
+        body.put("fileId", id);
+        body.put("fileName", uf.getOriginalFileName());
+        body.put("ftpDeleted", ftpDeleted);
+        body.put("dbDeleted", dbDeleted);
+        body.put("enabledFilesCleaned", cleaned);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 取单个文件详情 + 解析状态。
      *
      * @param id      文件主键（{@code user_files.id}）
      * @param request HTTP 请求（{@code X-User-Id} 头）

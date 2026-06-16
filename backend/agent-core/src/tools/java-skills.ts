@@ -701,7 +701,7 @@ async function executeOpenClawSkill(
   return JSON.stringify({ error: "OPENCLAW skill exceeded the maximum planning steps." });
 }
 
-export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string): Record<string, string> {
+export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string, conversationId?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Agent-Token": apiToken,
     "Content-Type": "application/json",
@@ -711,6 +711,10 @@ export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, s
   }
   if (sessionId && String(sessionId).trim()) {
     headers["X-Session-Id"] = String(sessionId).trim();
+  }
+  // open spec: conversation-file-isolation — 让 gateway 知道当前会话 ID 以按 enabled_files 过滤
+  if (conversationId && String(conversationId).trim()) {
+    headers["X-Conversation-Id"] = String(conversationId).trim();
   }
   return headers;
 }
@@ -856,7 +860,8 @@ export async function loadGatewayExtendedTools(
                 ? String(options?.sessionId ?? runConfig?.configurable?.thread_id)
                 : undefined);
             const executeSessionId = sessionIdCandidate;
-            const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId);
+            // open spec: conversation-file-isolation — 把 conversationId 作为 X-Conversation-Id 传给 gateway
+            const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId, options?.conversationId);
             // Strip the `{payload: ...}` wrapper that extendedPassthroughSkillToolSchema
             // (ensureObjectType) injects for DeepSeek JSON-Schema compatibility, so the
             // Gateway never sees "payload" as a real parameter name. OPENCLAW path

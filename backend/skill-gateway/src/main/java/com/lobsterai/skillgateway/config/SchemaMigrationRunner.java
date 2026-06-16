@@ -48,6 +48,7 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
             migrateConversationMessageSummaries(conn);
+            migrateConversationEnabledFiles(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -399,5 +400,25 @@ public class SchemaMigrationRunner implements InitializingBean {
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
+    }
+
+    /**
+     * open spec: conversation-file-isolation change 配套 schema 迁移。
+     *
+     * 任务：conversations 表新增 enabled_files JSON 字段，存储该对话可操作的文件 ID 列表。
+     * 存量对话保持 NULL（不启用过滤，向后兼容）。
+     */
+    void migrateConversationEnabledFiles(Connection conn) {
+        String table = "conversations";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+
+        ensureColumn(conn, table, "enabled_files", existingColumns,
+                "ALTER TABLE conversations ADD COLUMN enabled_files JSON DEFAULT NULL " +
+                "COMMENT '该对话启用的文件ID列表，如 [1, 3, 5]；NULL=存量对话不启用过滤'");
     }
 }

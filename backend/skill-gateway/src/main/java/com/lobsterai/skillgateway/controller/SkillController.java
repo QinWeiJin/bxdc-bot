@@ -176,6 +176,7 @@ public class SkillController {
     public ResponseEntity<?> executeSkill(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestHeader(value = "X-Conversation-Id", required = false) String conversationId,
             @RequestBody Map<String, Object> body
     ) {
         try {
@@ -187,6 +188,7 @@ public class SkillController {
             req.adjustedParams = body.get("adjustedParams");
             req.userId = userId;
             req.sessionId = sessionId;
+            req.conversationId = conversationId;
 
             Object result = skillExecutionService.execute(req);
             return ResponseEntity.ok(result);

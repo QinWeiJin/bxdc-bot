@@ -25,6 +25,7 @@ import {
   getFileTypeFromName,
   validateFile,
 } from '../utils/fileValidator'
+import { useConversations } from './useConversations'
 
 /** 文件名查重：在所有已上传文件中查找同名（按 fileName 完全匹配） */
 function findDuplicateByName(
@@ -446,7 +447,8 @@ export function provideFileUpload(): FileUploadState {
     console.log('[parseFile] start', file.id, 'status=', file.status)
     try {
       const { parseDocument } = await import('../utils/fileParser')
-      const text = await parseDocument(file.file, file.fileType, controller.signal)
+      const convId = useConversations().currentConversationId.value
+      const text = await parseDocument(file.file, file.fileType, controller.signal, convId)
       console.log('[parseFile] parseDocument returned', file.id, 'len=', text.length)
       if (controller.signal.aborted) {
         file.status = 'skipped'
@@ -684,7 +686,8 @@ export function useFileUpload(): FileUploadState {
     file.status = 'parsing'
     try {
       const { parseDocument } = await import('../utils/fileParser')
-      const text = await parseDocument(file.file, file.fileType)
+      const convId = useConversations().currentConversationId.value
+      const text = await parseDocument(file.file, file.fileType, undefined, convId)
       file.parsedText = text
       file.status = 'parsed'
       return text

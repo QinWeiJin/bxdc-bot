@@ -1,14 +1,4 @@
-# Capability: file-management
-
-> **Purpose**: File management operations (list, delete, clear, view details) for user-uploaded files, with confirmation flows and conversation-level access control.
-
-## Purpose
-
-TBD - archived from delta spec intelligent-file-center.
-
-## Requirements
-
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: List User Files
 The system SHALL provide a tool that lists files in the current conversation's scope. When `enabled_files` is set, only files whose IDs appear in that list SHALL be returned. When `enabled_files` is NULL (backward-compatible), all user files SHALL be returned.
@@ -28,12 +18,7 @@ The response SHALL include filename, file size, and upload time for each file in
 - **WHEN** conversation's `enabled_files = []`
 - **THEN** the system returns an empty list with a message indicating no files are available in this conversation
 
-### Requirement: File Download URL Field
-The system SHALL include a download URL field for each file when presenting file information to the LLM.
-
-#### Scenario: File list with download URLs
-- **WHEN** the file list tool returns data
-- **THEN** each file entry includes a download_url field
+---
 
 ### Requirement: Delete File with Conversation Scope Check
 The system SHALL allow users to delete files via conversation, but the file MUST be within the current conversation's scope (present in `enabled_files` or `enabled_files` is NULL). Before deletion, the system SHALL require explicit confirmation by asking the user to verify the filename.
@@ -54,6 +39,8 @@ The system SHALL allow users to delete files via conversation, but the file MUST
 - **WHEN** user does not confirm or says "取消"
 - **THEN** no action is taken, file remains
 
+---
+
 ### Requirement: Clear All Files with Conversation Scope
 The system SHALL allow users to clear files within the current conversation's scope. When `enabled_files` is set, only those files SHALL be cleared. When `enabled_files` is NULL, all user files SHALL be cleared (backward-compatible). The confirmation flow SHALL be the same as single file deletion: explicit verification required.
 
@@ -65,6 +52,8 @@ The system SHALL allow users to clear files within the current conversation's sc
 - **WHEN** user requests to clear all files in a conversation where `enabled_files` is NULL
 - **THEN** all user files are cleared (backward-compatible behavior)
 
+---
+
 ### Requirement: View File Details with Scope Check
 The system SHALL allow users to view details of a file, but the file MUST be within the current conversation's scope. Details SHALL include: filename, file size, upload time, file type, and a content summary from the parsing result.
 
@@ -75,6 +64,8 @@ The system SHALL allow users to view details of a file, but the file MUST be wit
 #### Scenario: View file outside scope
 - **WHEN** user asks for details of a file NOT in the conversation's `enabled_files`
 - **THEN** the system returns an error: "文件不在当前会话权限内"
+
+## ADDED Requirements
 
 ### Requirement: Automatic File Binding on Upload
 When a file is uploaded with a `conversationId` parameter, the system SHALL automatically append the new file's ID to that conversation's `enabled_files` list, making the file immediately available in that conversation without requiring manual configuration.

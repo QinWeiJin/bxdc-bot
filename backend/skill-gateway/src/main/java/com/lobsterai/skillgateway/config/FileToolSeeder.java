@@ -57,7 +57,7 @@ public class FileToolSeeder implements ApplicationRunner {
                 fileListSchema());
         seedFileManage("file_delete", "删除指定文件。通过 fileRef 指定文件名或 ID。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
                 fileDeleteSchema());
-        seedFileManage("file_clear_all", "清空当前用户的所有文件。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
+        seedFileManage("file_clear_all", "清空当前会话内的所有文件（其他会话的文件不受影响）。存量未启用会话隔离的对话会清空用户全部文件。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
                 confirmedOnlySchema());
         seedFileManage("file_detail", "查看文件详情（名称、大小、类型、上传时间、downloadUrl、parsedSummary 反序列化结果）。可通过 fileId（数字）或 fileName（原始文件名）指定目标文件",
                 fileDetailSchema());

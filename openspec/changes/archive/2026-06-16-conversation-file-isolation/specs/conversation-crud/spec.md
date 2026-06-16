@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Create Conversation
 The system SHALL allow an authenticated user to create a new conversation via `POST /api/conversations`.
@@ -96,22 +96,3 @@ The system SHALL allow updating a conversation's `name`, `enabled_skills`, and/o
 #### Scenario: Update both skills and files
 - **WHEN** user sends `PUT /api/conversations/conv-abc` with `enabled_skills: [1, 3], enabled_files: [10, 12]`
 - **THEN** system updates both fields and returns the updated object
-
----
-
-### Requirement: Delete Conversation
-The system SHALL delete a conversation and all its associated messages via `DELETE /api/conversations/:id`.
-
-**Response**: `200 OK` with `{ ok: true }`.
-
-#### Scenario: Delete conversation with messages
-- **WHEN** user deletes a conversation that has 100 messages
-- **THEN** system deletes all 100 messages in `conversation_messages`, then deletes the conversation record; returns `{ ok: true }`
-
-#### Scenario: Delete non-existent conversation
-- **WHEN** user tries to delete a conversation that does not exist
-- **THEN** system returns `404 Not Found`
-
-#### Scenario: Delete another user's conversation
-- **WHEN** user tries to delete a conversation owned by another user
-- **THEN** system returns `404 Not Found`

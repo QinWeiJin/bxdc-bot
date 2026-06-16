@@ -61,9 +61,13 @@ export async function parseFileViaGateway(
   file: File,
   _fileType: FileType,
   signal?: AbortSignal,
+  conversationId?: string | null,
 ): Promise<string> {
   const form = new FormData()
   form.append('file', file)
+  if (conversationId) {
+    form.append('conversationId', conversationId)
+  }
 
   const userId = localStorage.getItem('user_id')
   if (!userId) {

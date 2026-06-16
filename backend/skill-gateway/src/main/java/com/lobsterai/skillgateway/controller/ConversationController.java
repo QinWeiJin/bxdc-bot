@@ -73,8 +73,15 @@ public class ConversationController {
                     .map(item -> ((Number) item).longValue())
                     .collect(java.util.stream.Collectors.toList())
                 : Collections.emptyList();
+        @SuppressWarnings("unchecked")
+        List<Long> enabledFiles = body.get("enabled_files") instanceof List
+                ? ((List<?>) body.get("enabled_files")).stream()
+                    .filter(item -> item instanceof Number)
+                    .map(item -> ((Number) item).longValue())
+                    .collect(java.util.stream.Collectors.toList())
+                : Collections.emptyList();
 
-        Conversation conv = conversationService.create(userId, name, enabledSkills);
+        Conversation conv = conversationService.create(userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.status(HttpStatus.CREATED).body(toConversationDto(conv));
     }
 
@@ -109,8 +116,17 @@ public class ConversationController {
                         .collect(java.util.stream.Collectors.toList())
                     : Collections.emptyList())
                 : null;
+        @SuppressWarnings("unchecked")
+        List<Long> enabledFiles = body.containsKey("enabled_files")
+                ? (body.get("enabled_files") instanceof List
+                    ? ((List<?>) body.get("enabled_files")).stream()
+                        .filter(item -> item instanceof Number)
+                        .map(item -> ((Number) item).longValue())
+                        .collect(java.util.stream.Collectors.toList())
+                    : Collections.emptyList())
+                : null;
 
-        Conversation conv = conversationService.update(conversationId, userId, name, enabledSkills);
+        Conversation conv = conversationService.update(conversationId, userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.ok(toConversationDto(conv));
     }
 
@@ -235,6 +251,7 @@ public class ConversationController {
         dto.put("conversation_id", conv.getConversationId());
         dto.put("name", conv.getName());
         dto.put("enabled_skills", conv.getEnabledSkills());
+        dto.put("enabled_files", conv.getEnabledFiles());
         dto.put("status", conv.getStatus());
         dto.put("is_published", conv.getIsPublished());
         dto.put("api_description", conv.getApiDescription());

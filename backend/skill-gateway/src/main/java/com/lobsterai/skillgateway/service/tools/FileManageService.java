@@ -6,8 +6,10 @@ import com.lobsterai.skillgateway.dto.FileParseResult;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
+import com.lobsterai.skillgateway.service.ConversationService;
 import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.FileToolService;
+import com.lobsterai.skillgateway.service.FileToolConversationContext;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,9 +21,11 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 文件管理工具（模块五 / 6.1-6.4）。
@@ -58,18 +62,21 @@ public class FileManageService {
     private final UserFileMapper userFileMapper;
     private final FileParseService fileParseService;
     private final ObjectMapper objectMapper;
+    private final ConversationService conversationService;
 
     @Autowired
     public FileManageService(FileToolService fileToolService,
                              FtpFileService ftpFileService,
                              UserFileMapper userFileMapper,
                              FileParseService fileParseService,
-                             ObjectMapper objectMapper) {
+                             ObjectMapper objectMapper,
+                             ConversationService conversationService) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
         this.userFileMapper = userFileMapper;
         this.fileParseService = fileParseService;
         this.objectMapper = objectMapper;
+        this.conversationService = conversationService;
     }
 
     /** Spring 启动后覆盖 FileToolService 中的占位实现为完整版。 */
@@ -120,6 +127,32 @@ public class FileManageService {
     public FileToolResponse fileList(Map<String, Object> params, String userId) {
         try {
             List<UserFile> allFiles = userFileMapper.findByUserId(userId);
+
+            // open spec: conversation-file-isolation
+            // 按当前会话 enabled_files 过滤（context 为 null 表示存量对话/未启用隔离，全量返回）
+            List<Long> enabledFiles = FileToolConversationContext.get();
+            if (enabledFiles != null) {
+                Set<Long> allowed = new HashSet<Long>(enabledFiles);
+                List<UserFile> scoped = new ArrayList<UserFile>();
+                for (UserFile f : allFiles) {
+                    if (allowed.contains(f.getId())) {
+                        scoped.add(f);
+                    }
+                }
+                allFiles = scoped;
+                if (allFiles.isEmpty()) {
+                    Map<String, Object> emptyResult = new LinkedHashMap<String, Object>();
+                    emptyResult.put("count", 0);
+                    emptyResult.put("totalCount", 0);
+                    emptyResult.put("page", 1);
+                    emptyResult.put("pageSize", 50);
+                    emptyResult.put("totalPages", 0);
+                    emptyResult.put("files", new ArrayList<Map<String, Object>>());
+                    emptyResult.put("message", "当前对话暂无可用文件，请先上传文件或在会话配置面板勾选文件。");
+                    return FileToolResponse.ok(emptyResult, "user:" + userId);
+                }
+            }
+
             // 过滤
             String fileTypeFilter = readStringParam(params, "fileType", "").toLowerCase();
             String keyword = readStringParam(params, "keyword", "").toLowerCase();
@@ -212,6 +245,14 @@ public class FileManageService {
      */
     public FileToolResponse fileDelete(UserFile userFile, Map<String, Object> params, String userId) {
         try {
+            // open spec: conversation-file-isolation — 校验当前文件是否在 enabled_files 中
+            List<Long> enabledFiles = FileToolConversationContext.get();
+            if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
+                return FileToolResponse.error(
+                        "文件(" + userFile.getId() + ")不在当前会话权限内，请使用 file_list 查看可用文件",
+                        userFile.getOriginalFileName());
+            }
+
             boolean confirmed = readBoolParam(params, "confirmed", false);
 
             if (!confirmed) {
@@ -228,6 +269,7 @@ public class FileManageService {
             // 用户已确认 → 真正删除
             String storageName = userFile.getFileName();
             String originalName = userFile.getOriginalFileName();
+            Long fileIdToCleanup = userFile.getId();
             // 1. 删 FTP 文件
             boolean ftpDeleted = false;
             try {
@@ -236,15 +278,18 @@ public class FileManageService {
                 log.warn("FTP delete failed for {}/{}: {}", userId, storageName, ftpEx.getMessage());
             }
             // 2. 删 DB 记录（无论 FTP 是否成功，DB 记录都要删）
-            int dbDeleted = userFileMapper.deleteById(userFile.getId());
+            int dbDeleted = userFileMapper.deleteById(fileIdToCleanup);
+            // 3. 清理所有对话 enabled_files 中的该 fileId 引用（防止孤行）
+            int cleaned = conversationService.removeEnabledFileFromAllConversations(fileIdToCleanup, userId);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "File deleted: " + originalName);
             result.put("fileName", originalName);
-            result.put("fileId", userFile.getId());
+            result.put("fileId", fileIdToCleanup);
             result.put("storageName", storageName);
             result.put("ftpDeleted", ftpDeleted);
             result.put("dbDeleted", dbDeleted);
+            result.put("enabledFilesCleaned", cleaned);
             return FileToolResponse.ok(result, originalName);
         } catch (Exception e) {
             log.error("file_delete failed for fileId={}", userFile.getId(), e);
@@ -264,7 +309,32 @@ public class FileManageService {
      */
     public FileToolResponse fileClearAll(Map<String, Object> params, String userId) {
         try {
-            List<UserFile> files = userFileMapper.findByUserId(userId);
+            List<UserFile> allFiles = userFileMapper.findByUserId(userId);
+
+            // open spec: conversation-file-isolation
+            // 仅清空当前会话 enabled_files 中的文件（context 为 null 时全量清空，向后兼容）
+            List<Long> enabledFiles = FileToolConversationContext.get();
+            List<UserFile> files = allFiles;
+            String scopeLabel;
+            if (enabledFiles == null) {
+                scopeLabel = "全部";
+                files = allFiles;
+            } else if (enabledFiles.isEmpty()) {
+                Map<String, Object> empty = new LinkedHashMap<String, Object>();
+                empty.put("message", "当前会话无文件，无需清空");
+                empty.put("fileCount", 0);
+                return FileToolResponse.ok(empty, "user:" + userId);
+            } else {
+                Set<Long> allowed = new HashSet<Long>(enabledFiles);
+                files = new ArrayList<UserFile>();
+                for (UserFile uf : allFiles) {
+                    if (allowed.contains(uf.getId())) {
+                        files.add(uf);
+                    }
+                }
+                scopeLabel = "当前会话内";
+            }
+
             boolean confirmed = readBoolParam(params, "confirmed", false);
 
             if (!confirmed) {
@@ -277,37 +347,53 @@ public class FileManageService {
                 }
                 Map<String, Object> result = new LinkedHashMap<String, Object>();
                 result.put("requiresConfirmation", true);
-                result.put("message", "请向用户确认是否清空全部 " + files.size() + " 个文件（共 " + formatSize(totalSize) + "）。"
+                result.put("message", "请向用户确认是否清空" + scopeLabel + " " + files.size() + " 个文件（共 " + formatSize(totalSize) + "）。"
                         + "用户确认后，请再次调用 file_clear_all，并设置 params.confirmed=true。");
                 result.put("fileCount", files.size());
                 result.put("totalSize", totalSize);
                 result.put("files", fileList);
-                result.put("confirmationPrompt", "确认清空全部 " + files.size() + " 个文件吗？此操作不可恢复。");
+                result.put("confirmationPrompt", "确认清空" + scopeLabel + " " + files.size() + " 个文件吗？此操作不可恢复。");
                 return FileToolResponse.ok(result, "user:" + userId);
             }
 
             // 用户已确认 → 真正清空
             int ftpDeleted = 0;
             int dbDeleted = 0;
+            int cleaned = 0;
             List<String> deletedNames = new ArrayList<String>();
-            try {
-                ftpDeleted = ftpFileService.deleteAllFiles(userId);
-            } catch (Exception ftpEx) {
-                log.warn("FTP deleteAll failed for {}: {}", userId, ftpEx.getMessage());
+            // 当仅清空会话文件时，逐个 FTP 删除；否则走全量删除
+            if (enabledFiles == null) {
+                try {
+                    ftpDeleted = ftpFileService.deleteAllFiles(userId);
+                } catch (Exception ftpEx) {
+                    log.warn("FTP deleteAll failed for {}: {}", userId, ftpEx.getMessage());
+                }
+            } else {
+                for (UserFile uf : files) {
+                    try {
+                        boolean ok = ftpFileService.deleteFile(userId, uf.getFileName());
+                        if (ok) ftpDeleted++;
+                    } catch (Exception ftpEx) {
+                        log.warn("FTP delete failed for {}/{}: {}", userId, uf.getFileName(), ftpEx.getMessage());
+                    }
+                }
             }
             for (UserFile uf : files) {
                 int r = userFileMapper.deleteById(uf.getId());
                 if (r > 0) {
                     dbDeleted++;
                     deletedNames.add(uf.getOriginalFileName());
+                    // 清理引用
+                    cleaned += conversationService.removeEnabledFileFromAllConversations(uf.getId(), userId);
                 }
             }
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("message", "All files cleared");
+            result.put("message", (enabledFiles == null ? "All files cleared" : "当前会话文件已清空"));
             result.put("fileCount", files.size());
             result.put("ftpDeleted", ftpDeleted);
             result.put("dbDeleted", dbDeleted);
+            result.put("enabledFilesCleaned", cleaned);
             result.put("deletedNames", deletedNames);
             return FileToolResponse.ok(result, "user:" + userId);
         } catch (Exception e) {
@@ -329,6 +415,9 @@ public class FileManageService {
      */
     public FileToolResponse fileDetail(UserFile userFile, Map<String, Object> params, String userId) {
         try {
+            // open spec: conversation-file-isolation — 当前 userFile 不在 enabled_files 中则拒绝
+            // (fileDetail 必须在 userFile 已解析之后做此检查)
+            // 注：保留原有的 userFile==null → 按 fileName/fileRef 查找分支
             // 当 userFile 为 null 时（通过 skill 入口直接调用，未经过 fileId/fileRef 解析），
             // 尝试从 params 中的 fileName 或 fileRef 查找文件
             if (userFile == null) {
@@ -347,6 +436,13 @@ public class FileManageService {
                 } else {
                     return FileToolResponse.error("fileId, fileName, or fileRef is required for file_detail");
                 }
+            }
+            // open spec: conversation-file-isolation — 校验文件是否在 enabled_files 中
+            List<Long> enabledFiles = FileToolConversationContext.get();
+            if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
+                return FileToolResponse.error(
+                        "文件(" + userFile.getId() + ")不在当前会话权限内，请使用 file_list 查看可用文件",
+                        userFile.getOriginalFileName());
             }
             boolean includeParse = readBoolParam(params, "includeParseResult", true);
             int previewChars = readIntParam(params, "previewChars", 500);
