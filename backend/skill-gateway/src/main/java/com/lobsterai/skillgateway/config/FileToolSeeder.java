@@ -71,7 +71,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // ===== TXT/MD 操作（5.4）=====
         seedFileOperate("txt_read", "读取 TXT/MD 文本文件（支持指定编码、行范围）", txtReadSchema());
-        seedFileOperate("txt_write", "写入 TXT/MD 文本文件（覆盖或追加，可指定编码）", txtWriteSchema());
+        seedFileOperate("txt_write", "向 TXT/MD 文本文件写入内容：① 覆盖/追加已有文件（必传 fileId/fileRef）② 创建全新文件（createNew=true + originalFileName，可不传 fileId），生成的新文件通过 downloadUrl 提供下载", txtWriteSchema());
         seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（可选上下文行）", txtKeywordLinesSchema());
         seedFileOperate("txt_regex", "用正则表达式匹配文本行，返回捕获组", txtRegexSchema());
         seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
@@ -539,6 +539,14 @@ public class FileToolSeeder implements ApplicationRunner {
         append.put("type", "boolean");
         append.put("description", "是否追加模式（false=覆盖，默认覆盖）");
         s.put("append", append);
+        Map<String, Object> createNew = new LinkedHashMap<>();
+        createNew.put("type", "boolean");
+        createNew.put("description", "true=生成新文件并返回 downloadUrl（原文件不变）；false=覆盖/追加原文件（默认 false）。当 createNew=true 时可不传 fileId/fileRef，直接用 originalFileName 创建全新文件。");
+        s.put("createNew", createNew);
+        Map<String, Object> originalFileName = new LinkedHashMap<>();
+        originalFileName.put("type", "string");
+        originalFileName.put("description", "要创建的新文件名（含扩展名，如 世界杯预测.txt），仅在 createNew=true 时生效");
+        s.put("originalFileName", originalFileName);
         return s;
     }
 

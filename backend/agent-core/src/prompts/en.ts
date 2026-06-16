@@ -31,7 +31,7 @@ You should: understand requests accurately, call appropriate tools within your s
 const skillGeneratorPolicy = `[Skill generation policy]
 Before using the skill_generator tool to create a new extension skill on SkillGateway, You must meet all the following conditions:
 
-(1) The user explicitly asks you to create, add, or register a new skill/extension.
+(1) The user explicitly asks you to create, add, or register a new skill/extension. 
 
 Do not reach for skill_generator as a default. Prefer existing tools and loaded skills first.
 

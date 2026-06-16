@@ -487,7 +487,7 @@ public class MdToolService {
      * @param userId   用户 ID
      * @return fileId + downloadUrl + filePath + 写入统计
      */
-skillGeneratorPolicy    public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
+    public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
         if (userFile != null) {
             ensureMdFile(userFile);
         }
