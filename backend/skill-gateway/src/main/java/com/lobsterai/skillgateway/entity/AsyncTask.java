@@ -105,6 +105,22 @@ public class AsyncTask {
     @TableField("request_body")
     private String requestBody;
 
+    /** bxdcbot-multi-turn-async change：父 Bxdcbot run_id（标识这是 Bxdcbot X 调的第 N 个子任务）；NULL=普通 async */
+    @TableField("parent_tool_id")
+    private String parentToolId;
+
+    /** bxdcbot-multi-turn-async change：父 Bxdcbot skill_id（冗余字段，方便按 skill 过滤） */
+    @TableField("parent_skill_id")
+    private Long parentSkillId;
+
+    /**
+     * 合成通知标记：1=这是 Bxdcbot 子任务的合成通知（sync 子任务也会被插入此表以显示在通知中心）；
+     * 0=普通 async 任务（默认）。
+     * subtask_only=1 时 poll_endpoint 必为 NULL，status 必为 COMPLETED。
+     */
+    @TableField("subtask_only")
+    private Integer subtaskOnly;
+
     public AsyncTask() {}
 
     public Long getId() { return id; }
@@ -193,4 +209,13 @@ public class AsyncTask {
 
     public String getRequestBody() { return requestBody; }
     public void setRequestBody(String requestBody) { this.requestBody = requestBody; }
+
+    public String getParentToolId() { return parentToolId; }
+    public void setParentToolId(String parentToolId) { this.parentToolId = parentToolId; }
+
+    public Long getParentSkillId() { return parentSkillId; }
+    public void setParentSkillId(Long parentSkillId) { this.parentSkillId = parentSkillId; }
+
+    public Integer getSubtaskOnly() { return subtaskOnly; }
+    public void setSubtaskOnly(Integer subtaskOnly) { this.subtaskOnly = subtaskOnly; }
 }

@@ -294,6 +294,24 @@ public class AsyncTaskPollingScheduler {
                 isFailed = pollingService.evaluateFailure(pollResponseStr, task.getCompletionJsonPath(), task.getFailedValues());
             }
 
+            // ========== Auto-detect 兜底（open spec: async-task-polling-completion）==========
+            // 用户配置的 completionJsonPath / failedValues 未命中时，从 pollEndpoint 真实响应
+            // 中按候选 status 字段路径推断终态，避免通知中心永远卡 99%。
+            // 用户配置优先（已完成 evaluateCompletion）；此处仅作 fallback。
+            boolean autoDetected = false;
+            if (!completed && !isFailed) {
+                AsyncTaskPollingService.TerminalStatus auto = pollingService.autoDetectTerminalStatus(pollResponseStr);
+                if (auto == AsyncTaskPollingService.TerminalStatus.SUCCESS) {
+                    completed = true;
+                    autoDetected = true;
+                    log.info("Async task {} auto-detected SUCCESS (user config did not match)", task.getId());
+                } else if (auto == AsyncTaskPollingService.TerminalStatus.FAILURE) {
+                    isFailed = true;
+                    autoDetected = true;
+                    log.info("Async task {} auto-detected FAILURE (user config did not match)", task.getId());
+                }
+            }
+
             if (!completed && !isFailed && task.getStartedAt() != null) {
                 expired = pollingService.isExpired(task.getStartedAt(), task.getMaxWaitSeconds());
             }
@@ -389,6 +407,15 @@ public class AsyncTaskPollingScheduler {
             AsyncTask fresh = pollingService.findById(task.getId());
             if (fresh == null) {
                 log.warn("[ChatReply] Task {} not found in DB, skip", task.getId());
+                return;
+            }
+            // bxdcbot-multi-turn-async change（漏洞 2 修复）：按 parent_tool_id 分流
+            // - 普通 async（parent_tool_id IS NULL）→ 走 echo-to-chat 路径（archive 2026-06-12 行为不变）
+            // - Bxdcbot 子 async（parent_tool_id != null）→ 不调 chatReplyService，避免对话流被 N 条单独消息淹没
+            //   （Bxdcbot 整体结果统一在 run 跑完时通过 /api/internal/bxdcbot-run/complete 回灌）
+            if (fresh.getParentToolId() != null && !fresh.getParentToolId().isEmpty()) {
+                log.info("[ChatReply] Skip echo-to-chat for Bxdcbot sub-task taskId={}, parentToolId={} (will be handled by BxdcbotRunCompletion at run-end)",
+                        fresh.getId(), fresh.getParentToolId());
                 return;
             }
             chatReplyService.onTaskTerminal(fresh);

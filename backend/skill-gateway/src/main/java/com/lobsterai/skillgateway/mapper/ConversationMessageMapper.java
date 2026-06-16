@@ -37,4 +37,16 @@ public interface ConversationMessageMapper extends BaseMapper<ConversationMessag
         return delete(new LambdaQueryWrapper<ConversationMessage>()
                 .eq(ConversationMessage::getConversationId, conversationId));
     }
+
+    /**
+     * bxdcbot-multi-turn-async change：按 conversationId + parent_tool_id 查 BXDCBOT_RUN_RESULT 消息。
+     * 用于 insertBxdcbotRunResult 幂等去重（同 run 多次调 complete 只写一次）。
+     */
+    default ConversationMessage findByParentToolId(String conversationId, String parentToolId) {
+        List<ConversationMessage> list = selectList(new LambdaQueryWrapper<ConversationMessage>()
+                .eq(ConversationMessage::getConversationId, conversationId)
+                .eq(ConversationMessage::getParentToolId, parentToolId)
+                .last("LIMIT 1"));
+        return list.isEmpty() ? null : list.get(0);
+    }
 }

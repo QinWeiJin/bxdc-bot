@@ -76,6 +76,14 @@ public class AsyncTaskChatReplyService {
             log.warn("[AsyncTaskChatReplyService] onTaskTerminal skipped: task is null");
             return;
         }
+        // Bxdcbot 自主规划的子任务：不在对话流里单独回灌 ASYNC_TASK_RESULT
+        // 由 BxdcbotRunCompletionService 统一写一条 BXDCBOT_RUN_RESULT 卡片即可
+        // 通知中心仍能看到（async_tasks 行已存在）
+        if (task.getParentToolId() != null && !task.getParentToolId().isEmpty()) {
+            log.info("[AsyncTaskChatReplyService] Skip chat reply for Bxdcbot sub-task: taskId={} parentToolId={}",
+                    task.getId(), task.getParentToolId());
+            return;
+        }
         try {
             // 1) 写一条对话消息（先 pending，等 LLM 续答再 update）
             String conversationId = task.getSessionId();
