@@ -10,7 +10,6 @@ const {
   drawerVisible,
   loadTasks,
   acknowledge,
-  deleteTask,
   batchDelete,
   openDrawer,
   closeDrawer,
@@ -127,16 +126,7 @@ const detailTask = ref<AsyncTaskNotification | null>(null)
 /** Bxdcbot run 同一 parentToolId 下的所有子任务（detail 弹窗展示用） */
 const siblingTasks = ref<AsyncTaskNotification[]>([])
 
-/** 列表里按 parentToolId 分组后，每个 parent 的子任务数（含自身） */
-const childCountByParent = computed(() => {
-  const m = new Map<string, number>()
-  for (const t of tasks.value) {
-    if (t.parentToolId) {
-      m.set(t.parentToolId, (m.get(t.parentToolId) ?? 0) + 1)
-    }
-  }
-  return m
-})
+
 
 /**
  * 分组后的列表：把同一 parentToolId 的所有子任务合并为一条「Bxdcbot run 通知」。
@@ -412,11 +402,6 @@ function groupProgressPercent(g: GroupedNotification): number {
 function displaySkillName(t: AsyncTaskNotification): string {
   if (t.parentSkillName) return t.parentSkillName
   return t.skillName || '异步任务'
-}
-
-/** 是否有子任务上下文 */
-function hasParentContext(t: AsyncTaskNotification): boolean {
-  return !!t.parentToolId
 }
 
 async function handleOpen() {

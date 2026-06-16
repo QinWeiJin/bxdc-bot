@@ -53,11 +53,6 @@ function formatPollingStatus(ps: PollingStatus): string {
   return `轮询第${count}次`
 }
 
-function formatToolSummary(summary?: string) {
-  if (!summary) return ''
-  return summary.length > 120 ? `${summary.slice(0, 117)}...` : summary
-}
-
 function formatToolArguments(args?: unknown) {
   if (args == null) return ''
   const raw = typeof args === 'string' ? args : JSON.stringify(args)
