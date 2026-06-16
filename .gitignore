@@ -51,6 +51,8 @@ frontend-react-backup/
 
 # skills
 skills/
+# .trae/skills/ 是项目 Trae AI 技能，需要提交
+!.trae/skills/
 
 # Maven
 backend/skill-gateway/apache-maven-*/
