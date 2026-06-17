@@ -251,8 +251,9 @@ public class MdToolService {
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("originalFileId", userFile.getId());
         result.put("newFileId", newFile.getId());
-        result.put("newFileName", actualFileName);
-        result.put("originalFileName", userFile.getOriginalFileName());
+        result.put("newFileName", newFile.getOriginalFileName());
+        result.put("originalFileName", newFile.getOriginalFileName());
+        result.put("sourceFileName", userFile.getOriginalFileName());
         result.put("ftpPath", fullPath);
         result.put("lineCount", content.split("\n", -1).length);
         return FileToolResponse.ok(result, userFile.getOriginalFileName());
@@ -585,6 +586,7 @@ public class MdToolService {
             tempUserFile.setFtpPath(ftpPath);
             // userFile == null 表示全新合并（md_merge），不挂 sourceFileId
             tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
+            tempUserFile.setIsToolGenerated(1);
             tempUserFile.setUploadTime(java.time.LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
 

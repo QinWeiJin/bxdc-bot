@@ -67,6 +67,13 @@ export interface UploadFileInfo {
 
   /** 上传时间戳（毫秒），用于排序与超时判断 */
   uploadedAt: number;
+
+  /**
+   * open spec: overwrite-duplicate-upload — 重名覆盖标记
+   * 用户在 TDesign 确认弹窗点"覆盖"后置 true，上传时会带 ?overwrite=true 让后端
+   * 删 FTP 旧文件 + DB 旧记录后再写新行。默认 undefined（= false，不覆盖）。
+   */
+  overwrite?: boolean;
 }
 
 // ============================================================

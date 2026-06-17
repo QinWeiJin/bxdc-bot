@@ -180,6 +180,7 @@ public class ExcelFileToolService {
             tempUserFile.setFileType(userFile.getFileType());
             tempUserFile.setFtpPath(ftpPath);
             tempUserFile.setSourceFileId(sourceFileId);
+            tempUserFile.setIsToolGenerated(1);
             tempUserFile.setUploadTime(LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
             
@@ -359,6 +360,7 @@ public class ExcelFileToolService {
                 newUserFile.setFileSize(fileSize);
                 newUserFile.setFtpPath(ftpPath);
                 newUserFile.setSourceFileId(null); // 新文件，不是临时文件
+                newUserFile.setIsToolGenerated(1); // tool 新建文件，查重/列表排除
                 newUserFile.setUploadTime(LocalDateTime.now()); // 设置上传时间
                 userFileMapper.insert(newUserFile);
                 
@@ -1412,10 +1414,7 @@ public class ExcelFileToolService {
      * @return 临时文件名（格式：原文件名_temp.扩展名）
      */
     private String getTempFileName(String originalFileName) {
-        int dotIndex = originalFileName.lastIndexOf('.');
-        String baseName = dotIndex > 0 ? originalFileName.substring(0, dotIndex) : originalFileName;
-        String extension = dotIndex > 0 ? originalFileName.substring(dotIndex) : ".xlsx";
-        return baseName + "_temp" + extension;
+        return FtpFileService.getTempDisplayFileName(originalFileName);
     }
 
     /**

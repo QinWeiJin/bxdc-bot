@@ -126,7 +126,8 @@ public class FileManageService {
      */
     public FileToolResponse fileList(Map<String, Object> params, String userId) {
         try {
-            List<UserFile> allFiles = userFileMapper.findByUserId(userId);
+            // open spec: temp-file-filtering — 只列出用户上传的文件，不展示 tool 生成的临时文件
+            List<UserFile> allFiles = userFileMapper.findByUserIdExcludeToolGenerated(userId);
 
             // open spec: conversation-file-isolation
             // 按当前会话 enabled_files 过滤（context 为 null 表示存量对话/未启用隔离，全量返回）

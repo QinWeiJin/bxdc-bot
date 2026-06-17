@@ -198,6 +198,12 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureIndex(conn, table, "idx_user_files_session", existingIndexes,
                 "ALTER TABLE user_files ADD INDEX idx_user_files_session (session_id)");
 
+        // 4. open spec: temp-file-filtering — is_tool_generated 列
+        //    0=用户上传（查重/列表展示），1=tool 操作生成（修改类带 _temp 后缀，新建类保留用户输入名）
+        ensureColumn(conn, table, "is_tool_generated", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN is_tool_generated TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '是否由工具生成（0=用户上传, 1=写文件/修改文件tool生成）'");
+
         // 4. idx_user_files_conversation 索引
         ensureIndex(conn, table, "idx_user_files_conversation", existingIndexes,
                 "ALTER TABLE user_files ADD INDEX idx_user_files_conversation (conversation_id)");

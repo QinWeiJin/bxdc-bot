@@ -37,6 +37,31 @@ public interface UserFileMapper extends BaseMapper<UserFile> {
     }
 
     /**
+     * open spec: temp-file-filtering — 按用户 ID 查用户上传的文件（排除 tool 生成文件）。
+     * 用于文件列表查询，不展示 tool 生成的临时/新建文件。
+     */
+    default List<UserFile> findByUserIdExcludeToolGenerated(String userId) {
+        return selectList(new LambdaQueryWrapper<UserFile>()
+                .eq(UserFile::getUserId, userId)
+                .eq(UserFile::getIsToolGenerated, 0)
+                .orderByDesc(UserFile::getUploadTime));
+    }
+
+    /**
+     * open spec: temp-file-filtering — 按用户 ID + 原始文件名查用户上传的文件（排除 tool 生成）。
+     * 用于 check-duplicate 校验和上传覆盖，不对 tool 生成的文件做假阳性匹配。
+     */
+    default Optional<UserFile> findByUserIdAndOriginalFileNameExcludeToolGenerated(String userId, String originalFileName) {
+        List<UserFile> list = selectList(new LambdaQueryWrapper<UserFile>()
+                .eq(UserFile::getUserId, userId)
+                .eq(UserFile::getOriginalFileName, originalFileName)
+                .eq(UserFile::getIsToolGenerated, 0)
+                .orderByDesc(UserFile::getUploadTime)
+                .last("LIMIT 1"));
+        return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
+    }
+
+    /**
      * 按用户 ID + 原始文件名查文件（支持多文件同名时取 limit 条，按上传时间倒序）。
      */
     default List<UserFile> findByUserIdAndFileNameLimit(String userId, String originalFileName, int limit) {

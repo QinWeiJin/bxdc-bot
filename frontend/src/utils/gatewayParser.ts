@@ -62,6 +62,7 @@ export async function parseFileViaGateway(
   _fileType: FileType,
   signal?: AbortSignal,
   conversationId?: string | null,
+  overwrite?: boolean,
 ): Promise<string> {
   const form = new FormData()
   form.append('file', file)
@@ -81,9 +82,14 @@ export async function parseFileViaGateway(
     ? composeAbortSignals(signal, uploadController.signal)
     : uploadController.signal
 
+  // open spec: overwrite-duplicate-upload — 同名覆盖：?overwrite=true 让后端先删旧 FTP + 旧 DB 记录
+  const uploadUrl = overwrite
+    ? apiUrl('/api/files/upload?overwrite=true')
+    : apiUrl('/api/files/upload')
+
   let response: Response
   try {
-    response = await fetch(apiUrl('/api/files/upload'), {
+    response = await fetch(uploadUrl, {
       method: 'POST',
       headers: { 'X-User-Id': userId },
       body: form,

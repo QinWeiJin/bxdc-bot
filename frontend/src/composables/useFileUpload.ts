@@ -14,7 +14,7 @@
  */
 
 import { ref, provide, inject, triggerRef, type InjectionKey, type Ref } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 import {
   PARSED_TEXT_MAX_BYTES,
@@ -61,6 +61,36 @@ async function checkBackendDuplicate(
   } catch {
     return null
   }
+}
+
+/**
+ * open spec: overwrite-duplicate-upload — TDesign 重名覆盖确认弹窗
+ * 包装 DialogPlugin.confirm() 为 Promise<boolean>，让 addFiles 异步流程可 await
+ *   true  = 用户点了"覆盖"
+ *   false = 用户点了"取消" / 关闭按钮 / 遮罩点击
+ */
+function showOverwriteConfirm(_fileName: string, message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (v: boolean) => {
+      if (settled) return
+      settled = true
+      dialog.destroy()
+      resolve(v)
+    }
+    const dialog = DialogPlugin.confirm({
+      header: '文件已存在',
+      body: message,
+      theme: 'warning',
+      confirmBtn: '覆盖',
+      cancelBtn: '取消',
+      onConfirm: () => settle(true),
+      onCancel: () => settle(false),
+      onClose: () => settle(false),
+    })
+    // 兜底：超时自动关
+    setTimeout(() => settle(false), 60_000)
+  })
 }
 
 /** 移除指定 ID 的文件（跨分组） */
@@ -246,7 +276,10 @@ export function provideFileUpload(): FileUploadState {
         }
       }
       if (existingMsg) {
-        const replace = window.confirm(existingMsg)
+        // open spec: overwrite-duplicate-upload — TDesign 弹窗替代 window.confirm
+        // 用户点"覆盖" → 让 uploadFileViaGateway 带 ?overwrite=true（删旧 FTP + 旧 DB 记录）
+        // 用户点"取消" / 关闭 → 跳过本文件
+        const replace = await showOverwriteConfirm(file.name, existingMsg)
         if (!replace) {
           continue
         }
@@ -263,6 +296,9 @@ export function provideFileUpload(): FileUploadState {
       }
 
       // 通过所有校验，构建 UploadFileInfo
+      // open spec: overwrite-duplicate-upload — 若 existingMsg 非空且 replace=true（用户点了"覆盖"），
+      // 上传时带 ?overwrite=true 让后端先删旧 FTP + 旧 DB 记录
+      const willOverwrite = existingMsg != null
       const info: UploadFileInfo = {
         id: genId(),
         file,
@@ -271,6 +307,7 @@ export function provideFileUpload(): FileUploadState {
         size: file.size,
         status: 'pending',
         uploadedAt: Date.now(),
+        overwrite: willOverwrite || undefined,
       }
 
       if (fileType === 'image') {
@@ -481,7 +518,8 @@ export function provideFileUpload(): FileUploadState {
     try {
       const { parseDocument } = await import('../utils/fileParser')
       const convId = useConversations().currentConversationId.value
-      const text = await parseDocument(file.file, file.fileType, controller.signal, convId)
+      // open spec: overwrite-duplicate-upload — file.overwrite 由 addFiles 在用户确认覆盖后置 true
+      const text = await parseDocument(file.file, file.fileType, controller.signal, convId, file.overwrite)
       console.log('[parseFile] parseDocument returned', file.id, 'len=', text.length)
       if (controller.signal.aborted) {
         file.status = 'skipped'
@@ -720,7 +758,8 @@ export function useFileUpload(): FileUploadState {
     try {
       const { parseDocument } = await import('../utils/fileParser')
       const convId = useConversations().currentConversationId.value
-      const text = await parseDocument(file.file, file.fileType, undefined, convId)
+      // open spec: overwrite-duplicate-upload — fallback 分支也透传 file.overwrite
+      const text = await parseDocument(file.file, file.fileType, undefined, convId, file.overwrite)
       file.parsedText = text
       file.status = 'parsed'
       return text
