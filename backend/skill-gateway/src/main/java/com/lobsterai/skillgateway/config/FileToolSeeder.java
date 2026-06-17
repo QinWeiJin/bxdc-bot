@@ -86,7 +86,7 @@ public class FileToolSeeder implements ApplicationRunner {
                 fileRefSchema());
         seedFileOperate("md_read", "读取 Markdown 文件全文内容。返回 fileId、downloadUrl、filePath、content（全文）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。",
                 mdReadSchema());
-        seedFileOperate("md_write", "【修改操作】覆盖写入 Markdown 文件内容。在临时文件上调用则覆盖写回同一文件（fileId 不变），在源文件上调用则自动创建临时文件并返回新 fileId。返回 fileId、downloadUrl、filePath、写入统计。需要 params.content（必填，新的 Markdown 文本）。",
+        seedFileOperate("md_write", "创建或覆盖 Markdown 文件。两种场景：1) 传入 fileId 时在临时文件上覆盖写入内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileId 时创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。",
                 mdWriteSchema());
         seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
         seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
@@ -716,10 +716,10 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> mdWriteSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。结果覆盖写入此文件。", true));
+        s.put("fileRef", stringProp("临时文件 ID（可选）。两种场景：1) 传入 fileRef 时在临时文件上覆盖写入（结果就地覆盖，fileId 不变）；2) 不传 fileRef 时创建全新 Markdown 文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId。", false));
         Map<String, Object> content = new LinkedHashMap<>();
         content.put("type", "string");
-        content.put("description", "新 Markdown 文本内容（必填）。覆盖写入到目标文件。");
+        content.put("description", "Markdown 文本内容（必填）。覆盖写入到目标文件，或作为新文件内容。");
         content.put("required", true);
         s.put("content", content);
         return s;

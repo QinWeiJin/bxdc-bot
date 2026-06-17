@@ -48,6 +48,7 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
             migrateConversationMessageSummaries(conn);
+            migrateConversationEnabledFiles(conn);
             migrateAsyncTaskParentToolId(conn);
             migrateChatMessageParentToolId(conn);
             cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
@@ -202,6 +203,12 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 3. idx_user_files_session 索引
         ensureIndex(conn, table, "idx_user_files_session", existingIndexes,
                 "ALTER TABLE user_files ADD INDEX idx_user_files_session (session_id)");
+
+        // 4. open spec: temp-file-filtering — is_tool_generated 列
+        //    0=用户上传（查重/列表展示），1=tool 操作生成（修改类带 _temp 后缀，新建类保留用户输入名）
+        ensureColumn(conn, table, "is_tool_generated", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN is_tool_generated TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '是否由工具生成（0=用户上传, 1=写文件/修改文件tool生成）'");
 
         // 4. idx_user_files_conversation 索引
         ensureIndex(conn, table, "idx_user_files_conversation", existingIndexes,
@@ -455,6 +462,26 @@ public class SchemaMigrationRunner implements InitializingBean {
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
+    }
+
+    /**
+     * open spec: conversation-file-isolation change 配套 schema 迁移。
+     *
+     * 任务：conversations 表新增 enabled_files JSON 字段，存储该对话可操作的文件 ID 列表。
+     * 存量对话保持 NULL（不启用过滤，向后兼容）。
+     */
+    void migrateConversationEnabledFiles(Connection conn) {
+        String table = "conversations";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+
+        ensureColumn(conn, table, "enabled_files", existingColumns,
+                "ALTER TABLE conversations ADD COLUMN enabled_files JSON DEFAULT NULL " +
+                "COMMENT '该对话启用的文件ID列表，如 [1, 3, 5]；NULL=存量对话不启用过滤'");
     }
 
     /**

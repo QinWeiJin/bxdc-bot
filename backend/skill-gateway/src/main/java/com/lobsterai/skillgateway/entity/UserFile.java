@@ -61,6 +61,10 @@ public class UserFile {
     @TableField("source_file_id")
     private Long sourceFileId;
 
+    /** 是否由工具生成（0=用户上传, 1=写文件/修改文件 tool 生成）。查重和列表按此字段过滤。 */
+    @TableField("is_tool_generated")
+    private Integer isToolGenerated;
+
     // ========== Getters & Setters ==========
 
     public Long getId() {
@@ -149,5 +153,13 @@ public class UserFile {
 
     public void setSourceFileId(Long sourceFileId) {
         this.sourceFileId = sourceFileId;
+    }
+
+    public Integer getIsToolGenerated() {
+        return isToolGenerated;
+    }
+
+    public void setIsToolGenerated(Integer isToolGenerated) {
+        this.isToolGenerated = isToolGenerated;
     }
 }

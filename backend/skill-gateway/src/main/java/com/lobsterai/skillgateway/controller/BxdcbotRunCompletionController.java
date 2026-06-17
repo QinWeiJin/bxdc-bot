@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -64,7 +65,7 @@ public class BxdcbotRunCompletionController {
             log.debug("[BxdcbotRunCompletion] INTERNAL_API_TOKEN not set, allowing (dev mode)");
         } else if (internalToken == null || !expected.equals(internalToken)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "invalid_internal_token"));
+                    .body(Collections.singletonMap("error", "invalid_internal_token"));
         }
 
         BxdcbotRunCompleteRequest req = new BxdcbotRunCompleteRequest();
@@ -114,10 +115,10 @@ public class BxdcbotRunCompletionController {
         }
 
         if (req.runId == null || req.runId.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "runId is required"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "runId is required"));
         }
         if (req.conversationId == null || req.conversationId.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "conversationId is required"));
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "conversationId is required"));
         }
 
         // ★ 为 subTaskResults 里没有 asyncTaskId 的 sync 子任务创建合成通知，

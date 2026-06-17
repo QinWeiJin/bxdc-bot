@@ -380,7 +380,7 @@ public class FileToolService {
     // ================================================================
 
     private FileToolResponse listFiles(String userId) {
-        List<UserFile> files = userFileMapper.findByUserId(userId);
+        List<UserFile> files = userFileMapper.findByUserIdExcludeToolGenerated(userId);
         if (files.isEmpty()) {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "No files found.");
@@ -417,7 +417,8 @@ public class FileToolService {
     }
 
     private FileToolResponse clearAllFiles(String userId) {
-        List<UserFile> files = userFileMapper.findByUserId(userId);
+        // open spec: temp-file-filtering — 只清空用户上传的文件，不影响 tool 生成的临时文件
+        List<UserFile> files = userFileMapper.findByUserIdExcludeToolGenerated(userId);
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("fileCount", files.size());
         result.put("message", "请确认是否清空所有 " + files.size() + " 个文件？");
@@ -455,7 +456,7 @@ public class FileToolService {
      * 这些工具在没有 fileId 时会创建新文件。
      */
     private boolean isOptionalFileIdTool(String toolName) {
-        return "excel_write".equals(toolName) || "word_write".equals(toolName) || "txt_write".equals(toolName);
+        return "excel_write".equals(toolName) || "word_write".equals(toolName) || "md_write".equals(toolName) || "txt_write".equals(toolName);
     }
 
     /**

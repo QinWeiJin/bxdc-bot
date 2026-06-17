@@ -34,6 +34,7 @@ export async function parseDocument(
   fileType: FileType,
   signal?: AbortSignal,
   conversationId?: string | null,
+  overwrite?: boolean,
 ): Promise<string> {
   // PPT 仍走旧的专用解析器（gateway 暂不解析 PPT）
   if (fileType === 'ppt') {
@@ -42,5 +43,5 @@ export async function parseDocument(
   }
 
   // 其他类型全部走 gateway 解析通道
-  return parseFileViaGateway(file, fileType, signal, conversationId)
+  return parseFileViaGateway(file, fileType, signal, conversationId, overwrite)
 }

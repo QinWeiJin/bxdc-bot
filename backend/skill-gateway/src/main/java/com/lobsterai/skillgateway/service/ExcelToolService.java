@@ -107,6 +107,7 @@ public class ExcelToolService {
             userFile.setFileType(extractExtension(fileName));
             userFile.setFtpPath(ftpPath);
             userFile.setUploadTime(LocalDateTime.now());
+            userFile.setIsToolGenerated(1);
             userFileMapper.insert(userFile);
 
             String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId());
@@ -614,12 +615,13 @@ public class ExcelToolService {
             // 创建 UserFile 记录
             UserFile newFile = new UserFile();
             newFile.setUserId(userId);
-            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setOriginalFileName(FtpFileService.getTempDisplayFileName(userFile.getOriginalFileName()));
             newFile.setFileName(extractStorageFileName(ftpPath));
             newFile.setFileSize((long) baos.size());
             newFile.setFileType(extractExtension(userFile.getOriginalFileName()));
             newFile.setFtpPath(ftpPath);
             newFile.setUploadTime(LocalDateTime.now());
+            newFile.setIsToolGenerated(1);
             userFileMapper.insert(newFile);
 
             String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId());

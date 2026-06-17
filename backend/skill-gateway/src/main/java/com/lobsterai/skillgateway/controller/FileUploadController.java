@@ -105,6 +105,7 @@ public class FileUploadController {
     public ResponseEntity<Map<String, Object>> upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam(value = "conversationId", required = false) String conversationId,
+            @RequestParam(value = "overwrite", required = false, defaultValue = "false") boolean overwrite,
             HttpServletRequest request
     ) {
         // 1. 文件基本校验
@@ -128,10 +129,27 @@ public class FileUploadController {
             return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
         }
 
-        log.info("File upload start: user={}, originalName={}, size={}",
-                userId, originalFileName, file.getSize());
+        log.info("File upload start: user={}, originalName={}, size={}, overwrite={}",
+                userId, originalFileName, file.getSize(), overwrite);
 
         try {
+            // open spec: overwrite-duplicate-upload — 同名覆盖：删 FTP 旧文件 → 删 DB 旧记录 → 上传新文件
+            //   FTP 删失败抛 IOException → 由下方 catch 转为 502 FTP_UNAVAILABLE，DB 旧记录保留，新文件不上传
+            if (overwrite) {
+                Optional<UserFile> oldOpt = userFileMapper.findByUserIdAndOriginalFileNameExcludeToolGenerated(userId, originalFileName);
+                if (oldOpt.isPresent()) {
+                    UserFile old = oldOpt.get();
+                    // 1. 删 FTP 旧文件（throws IOException → 自动触发下方 catch 502 回滚）
+                    ftpFileService.deleteFile(userId, old.getFileName());
+                    // 2. 清理 enabled_files JSON 引用（复用现有 delete 端点的清理逻辑）
+                    conversationService.removeEnabledFileFromAllConversations(old.getId(), userId);
+                    // 3. 删 DB 旧记录（MyBatis-Plus BaseMapper.deleteById）
+                    userFileMapper.deleteById(old.getId());
+                    log.info("File upload overwrite: user={}, oldFileId={}, oldFileName={}",
+                            userId, old.getId(), old.getFileName());
+                }
+            }
+
             // 3. 调 wgj 已有 FtpFileService — 存本地磁盘，返回 fullPath (e.g. /files/uid/abc.docx)
             //    内部用 Files.copy + 64KB 缓冲，零拷贝，大文件落盘约 80ms
             String ftpPath = ftpFileService.uploadFile(userId, originalFileName, file.getInputStream());
@@ -247,7 +265,7 @@ public class FileUploadController {
         } catch (IllegalArgumentException e) {
             return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
         }
-        Optional<UserFile> existing = userFileMapper.findByUserIdAndOriginalFileName(userId, fileName);
+        Optional<UserFile> existing = userFileMapper.findByUserIdAndOriginalFileNameExcludeToolGenerated(userId, fileName);
         Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("exists", existing.isPresent());
         body.put("uploadTime", existing.map(uf -> uf.getUploadTime() != null ? uf.getUploadTime().toString() : null).orElse(null));
@@ -273,7 +291,7 @@ public class FileUploadController {
         } catch (IllegalArgumentException e) {
             return error(HttpStatus.UNAUTHORIZED, "MISSING_USER_ID", e.getMessage());
         }
-        List<UserFile> all = userFileMapper.findByUserId(userId);
+        List<UserFile> all = userFileMapper.findByUserIdExcludeToolGenerated(userId);
         List<Map<String, Object>> result = new java.util.ArrayList<>();
         for (UserFile uf : all) {
             Map<String, Object> item = new java.util.LinkedHashMap<>();
