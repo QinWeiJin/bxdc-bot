@@ -20,7 +20,7 @@ import java.util.*;
 public class ConversationService {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationService.class);
-    private static final Set<String> VALID_ROLES = Set.of("user", "assistant", "tool", "system");
+    private static final Set<String> VALID_ROLES = new java.util.HashSet<String>(java.util.Arrays.asList("user", "assistant", "tool", "system"));
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 100;
 
@@ -52,11 +52,17 @@ public class ConversationService {
 
     @Transactional
     public Conversation create(String userId, String name, List<Long> enabledSkills) {
+        return create(userId, name, enabledSkills, Collections.<Long>emptyList());
+    }
+
+    @Transactional
+    public Conversation create(String userId, String name, List<Long> enabledSkills, List<Long> enabledFiles) {
         Conversation conv = new Conversation();
         conv.setConversationId(UUID.randomUUID().toString());
         conv.setUserId(userId);
         conv.setName(name != null ? name : "");
         conv.setEnabledSkills(skillsToJson(enabledSkills));
+        conv.setEnabledFiles(filesToJson(enabledFiles));
         conv.setStatus("active");
         conv.setCreatedAt(LocalDateTime.now());
         conv.setUpdatedAt(LocalDateTime.now());
@@ -66,6 +72,12 @@ public class ConversationService {
 
     @Transactional
     public Conversation update(String conversationId, String userId, String name, List<Long> enabledSkills) {
+        return update(conversationId, userId, name, enabledSkills, null);
+    }
+
+    @Transactional
+    public Conversation update(String conversationId, String userId, String name,
+                               List<Long> enabledSkills, List<Long> enabledFiles) {
         Conversation conv = getById(conversationId, userId);
         if (name != null) {
             conv.setName(name);
@@ -73,9 +85,52 @@ public class ConversationService {
         if (enabledSkills != null) {
             conv.setEnabledSkills(skillsToJson(enabledSkills));
         }
+        if (enabledFiles != null) {
+            conv.setEnabledFiles(filesToJson(enabledFiles));
+        }
         conv.setUpdatedAt(LocalDateTime.now());
         conversationMapper.updateById(conv);
         return conv;
+    }
+
+    /**
+     * 将 fileId 追加到指定对话的 enabled_files。
+     * 幂等：已存在则不重复添加。
+     */
+    @Transactional
+    public void appendEnabledFile(String conversationId, String userId, Long fileId) {
+        Conversation conv = getById(conversationId, userId);
+        List<Long> ids = parseFileIds(conv.getEnabledFiles());
+        if (!ids.contains(fileId)) {
+            ids.add(fileId);
+            conv.setEnabledFiles(filesToJson(ids));
+            conv.setUpdatedAt(LocalDateTime.now());
+            conversationMapper.updateById(conv);
+            log.info("appendEnabledFile: conv={}, fileId={}", conversationId, fileId);
+        }
+    }
+
+    /**
+     * 从<b>指定用户</b>的所有对话的 enabled_files 中移除指定 fileId。
+     * 用于 file_delete 成功后清理孤行引用。
+     */
+    @Transactional
+    public int removeEnabledFileFromAllConversations(Long fileId, String userId) {
+        List<Conversation> all = conversationMapper.selectByUserIdOrderByUpdatedAt(userId);
+        int updated = 0;
+        for (Conversation conv : all) {
+            List<Long> ids = parseFileIds(conv.getEnabledFiles());
+            if (ids.remove(fileId)) {
+                conv.setEnabledFiles(filesToJson(ids));
+                conv.setUpdatedAt(LocalDateTime.now());
+                conversationMapper.updateById(conv);
+                updated++;
+            }
+        }
+        if (updated > 0) {
+            log.info("removeEnabledFileFromAllConversations: fileId={}, cleaned={}", fileId, updated);
+        }
+        return updated;
     }
 
     @Transactional
@@ -144,7 +199,10 @@ public class ConversationService {
         Conversation conv = getById(conversationId, userId);
 
         if (messages == null || messages.isEmpty()) {
-            return Map.of("ok", true, "count", 0);
+            java.util.Map<String, Object> emptyResult = new java.util.LinkedHashMap<String, Object>();
+            emptyResult.put("ok", true);
+            emptyResult.put("count", 0);
+            return emptyResult;
         }
 
         int count = 0;
@@ -171,7 +229,10 @@ public class ConversationService {
         conv.setUpdatedAt(LocalDateTime.now());
         conversationMapper.updateById(conv);
 
-        return Map.of("ok", true, "count", count);
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<String, Object>();
+        result.put("ok", true);
+        result.put("count", count);
+        return result;
     }
 
     // ---- Helper methods ----
@@ -184,6 +245,38 @@ public class ConversationService {
             log.warn("Failed to serialize enabled_skills: {}", e.getMessage());
             return "[]";
         }
+    }
+
+    private String filesToJson(List<Long> fileIds) {
+        if (fileIds == null) return "[]";
+        if (fileIds.isEmpty()) return "[]";
+        try {
+            return objectMapper.writeValueAsString(fileIds);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to serialize enabled_files: {}", e.getMessage());
+            return "[]";
+        }
+    }
+
+    /**
+     * 反序列化 enabled_files JSON 字符串。
+     * - null 或空字符串 → 返回空列表
+     * - JSON 解析失败 → 返回空列表（容错）
+     */
+    private List<Long> parseFileIds(String json) {
+        List<Long> result = new ArrayList<Long>();
+        if (json == null || json.isEmpty() || "null".equals(json)) return result;
+        try {
+            Long[] arr = objectMapper.readValue(json, Long[].class);
+            if (arr != null) {
+                for (Long id : arr) {
+                    if (id != null) result.add(id);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to parse enabled_files: {}", e.getMessage());
+        }
+        return result;
     }
 
     private String toJson(Object obj) {

@@ -43,6 +43,8 @@ public class SchemaMigrationRunner implements InitializingBean {
     public void afterPropertiesSet() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             migrateAsyncTasks(conn);
+            migrateSkills(conn);
+            migrateUserFiles(conn);
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
             migrateConversationMessageSummaries(conn);
@@ -145,6 +147,65 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "request_body", existingColumns,
                 "ALTER TABLE async_tasks ADD COLUMN request_body MEDIUMTEXT DEFAULT NULL " +
                 "COMMENT 'SINGLE_CALL 模式的原始请求体（JSON 字符串）；PERIODIC 模式为 NULL'");
+    }
+
+    /**
+     * skills 表：lskrat 在 3479f7cb 加了 schema_properties 字段但没改 SQL。
+     * 之前 6-08 后启动会报 "Unknown column 'schema_properties' in 'field list'"。
+     * 这里补上 ALTER（已存在则跳过，幂等）。
+     */
+    private void migrateSkills(Connection conn) {
+        String table = "skills";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+
+        // schema_properties：lskrat 6-08 在 Skill 实体加的 @TableField，SQL 未同步
+        ensureColumn(conn, table, "schema_properties", existingColumns,
+                "ALTER TABLE skills ADD COLUMN schema_properties TEXT DEFAULT NULL " +
+                "COMMENT 'Skill 实体持久化的 JSON schema 配置（lskrat 6-08 加，未同步 SQL）'");
+        // skill_owner_type：zhangzhuang 6-16 merge 入 wuqilei PR 改的，schema-mysql.sql 已加但现有 skills 表缺列
+        // 1=用户技能 / 2=系统技能 / 0=未指定
+        ensureColumn(conn, table, "skill_owner_type", existingColumns,
+                "ALTER TABLE skills ADD COLUMN skill_owner_type TINYINT(1) DEFAULT 1 " +
+                "COMMENT '1=用户技能, 2=系统技能, 0=未指定（zhangzhuang merge wuqilei 1afb8db 引入）'");
+    }
+
+    /**
+     * user_files 表：智能文件中心预留字段（按需启用）。
+     * session_id / conversation_id 关联 agent-core 调用工具时的会话和对话，
+     * 可空（老数据不填），未来按 session / conversation 维度查询附件。
+     */
+    private void migrateUserFiles(Connection conn) {
+        String table = "user_files";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 1. session_id 列
+        ensureColumn(conn, table, "session_id", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN session_id VARCHAR(128) DEFAULT NULL " +
+                "COMMENT '预留：关联会话 ID'");
+
+        // 2. conversation_id 列
+        ensureColumn(conn, table, "conversation_id", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN conversation_id VARCHAR(128) DEFAULT NULL " +
+                "COMMENT '预留：关联对话 ID'");
+
+        // 3. idx_user_files_session 索引
+        ensureIndex(conn, table, "idx_user_files_session", existingIndexes,
+                "ALTER TABLE user_files ADD INDEX idx_user_files_session (session_id)");
+
+        // 4. idx_user_files_conversation 索引
+        ensureIndex(conn, table, "idx_user_files_conversation", existingIndexes,
+                "ALTER TABLE user_files ADD INDEX idx_user_files_conversation (conversation_id)");
     }
 
     private void migrateConversationApiColumns(Connection conn) {

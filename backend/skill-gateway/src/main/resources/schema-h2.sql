@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS skills (
     name VARCHAR(255) NOT NULL UNIQUE,
     description CLOB,
     type VARCHAR(255) NOT NULL,
+    skill_owner_type TINYINT DEFAULT 1,
     configuration CLOB,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
     enabled BOOLEAN DEFAULT TRUE,

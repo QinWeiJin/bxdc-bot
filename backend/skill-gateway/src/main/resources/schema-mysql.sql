@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS skills (
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
     type VARCHAR(255) NOT NULL,
+    skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1: 用户技能, 2: 系统技能',
     configuration TEXT,
+    schema_properties TEXT,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
     enabled TINYINT(1) DEFAULT 1,
     requires_confirmation TINYINT(1) NOT NULL DEFAULT 0,
@@ -249,9 +251,16 @@ CREATE TABLE IF NOT EXISTS user_files (
     download_url VARCHAR(512) COMMENT '文件下载 URL',
     parsed_summary LONGTEXT COMMENT '文件解析后的 JSON 摘要',
     upload_time DATETIME NOT NULL COMMENT '上传时间',
+    source_file_id BIGINT NULL COMMENT '源文件 ID（用于临时文件关联源文件）',
+    -- 预留：会话/对话 ID（关联 agent-core 调工具时的 session 和 conversation）
+    -- 可空，老数据不填；未来按 session / conversation 维度查询附件
+    session_id VARCHAR(128) NULL COMMENT '预留：关联会话 ID',
+    conversation_id VARCHAR(128) NULL COMMENT '预留：关联对话 ID',
     INDEX idx_user_files_user_id (user_id),
     INDEX idx_user_files_user_orig_name (user_id, original_file_name),
-    INDEX idx_user_files_upload_time (upload_time)
+    INDEX idx_user_files_upload_time (upload_time),
+    INDEX idx_user_files_session (session_id),
+    INDEX idx_user_files_conversation (conversation_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户文件元数据表';
 
 -- conversations（对话会话表 - 支持用户多 Session 对话管理）
@@ -262,6 +271,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     user_id VARCHAR(64) NOT NULL COMMENT '所属用户ID',
     name VARCHAR(255) DEFAULT '' COMMENT '对话名称（默认用户输入前18字）',
     enabled_skills JSON COMMENT '该对话启用的Skill ID列表，如 [1, 3, 5]',
+    enabled_files JSON DEFAULT NULL COMMENT '该对话启用的文件ID列表，如 [1, 3, 5]；NULL=存量对话不启用过滤',
     status VARCHAR(32) DEFAULT 'active' COMMENT '状态：active/archived/deleted',
     is_published TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发布为API: 0=未发布, 1=已发布',
     api_description TEXT NULL COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息',

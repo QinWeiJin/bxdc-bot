@@ -1,0 +1,25 @@
+[2m19:02:17[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:02:19[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:02:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:03:21[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:04:15[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:04:20[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:04:50[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+[2m19:05:21[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /api/async-tasks/my/unread-count[39m
+Error: connect ECONNREFUSED 127.0.0.1:18080
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1611:16)
+^C
