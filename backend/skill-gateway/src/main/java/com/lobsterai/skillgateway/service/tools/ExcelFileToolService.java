@@ -233,16 +233,17 @@ public class ExcelFileToolService {
     // ================================================================
 
     /**
-     * 读取 Excel 文件的内容。
+     * 读取 Excel 文件的内容（支持分页）。
      *
      * @param userFile 文件实体
-     * @param params   参数：maxRows（最大返回行数，默认100）
+     * @param params   参数：page（页码，从 1 开始，默认 1）、pageSize（每页行数，默认 50）
      * @param userId   用户 ID
-     * @return Excel 内容数据
+     * @return Excel 内容数据（含分页信息）
      */
     public FileToolResponse excelRead(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
-        int maxRows = readIntParam(params, "maxRows", 100);
+        int page = Math.max(1, readIntParam(params, "page", 1));
+        int pageSize = Math.max(1, readIntParam(params, "pageSize", 50));
 
         try {
             byte[] fileBytes = downloadBytes(userFile);
@@ -254,7 +255,23 @@ public class ExcelFileToolService {
             List<List<Object>> rows = new ArrayList<List<Object>>();
 
             int rowCount = sheet.getPhysicalNumberOfRows();
-            for (int i = 0; i < rowCount && i < maxRows + 1; i++) {
+            int dataRowCount = rowCount - 1; // 总数据行数（不含表头）
+            int totalPages = (int) Math.ceil((double) dataRowCount / pageSize);
+            int startRow = (page - 1) * pageSize + 1; // +1 跳过表头行
+            int endRow = Math.min(startRow + pageSize, rowCount);
+
+            // 读取表头（第 0 行）
+            Row headerRow = sheet.getRow(0);
+            if (headerRow != null) {
+                int cellCount = headerRow.getPhysicalNumberOfCells();
+                for (int j = 0; j < cellCount; j++) {
+                    Cell cell = headerRow.getCell(j);
+                    headers.add(getCellStringValue(cell));
+                }
+            }
+
+            // 只读取当前页的数据行
+            for (int i = startRow; i < endRow; i++) {
                 Row row = sheet.getRow(i);
                 if (row == null) continue;
 
@@ -262,15 +279,9 @@ public class ExcelFileToolService {
                 int cellCount = row.getPhysicalNumberOfCells();
                 for (int j = 0; j < cellCount; j++) {
                     Cell cell = row.getCell(j);
-                    if (i == 0) {
-                        headers.add(getCellStringValue(cell));
-                    } else {
-                        rowData.add(getCellValue(cell));
-                    }
+                    rowData.add(getCellValue(cell));
                 }
-                if (i > 0) {
-                    rows.add(rowData);
-                }
+                rows.add(rowData);
             }
 
             // 生成 fileId 和 downloadUrl（返回当前文件的 ID，带签名 token）
@@ -279,8 +290,12 @@ public class ExcelFileToolService {
 
             result.put("headers", headers);
             result.put("rows", rows);
-            result.put("totalRows", rowCount - 1);
+            result.put("currentPage", page);
+            result.put("pageSize", pageSize);
+            result.put("totalPages", totalPages);
+            result.put("totalRows", dataRowCount);
             result.put("totalCols", headers.size());
+            result.put("hasMore", page < totalPages);
             result.put("fileId", resultFileId);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("downloadUrl", downloadUrl);
