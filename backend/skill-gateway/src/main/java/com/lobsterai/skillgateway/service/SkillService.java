@@ -251,6 +251,9 @@ public class SkillService {
             case "template":
                 normalized.put("kind", "template");
                 return normalized;
+            case "python":
+                normalized.put("kind", "python");
+                return normalized;
             default:
                 throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
         }
@@ -300,6 +303,12 @@ public class SkillService {
                 break;
             case "template":
                 requiredText(root, "prompt");
+                break;
+            case "python":
+                requiredText(root, "sandboxName");
+                requiredText(root, "code");
+                requiredText(root, "operation");
+                optionalText(root, "interfaceDescription");
                 break;
             case "time":
             case "monitor":

@@ -18,6 +18,7 @@ import {
   isApiDraft,
   isSshDraft,
   isTemplateDraft,
+  isPythonDraft,
   isOpenClawDraft,
   parseSkillDraft,
   serializeSkillDraft,
@@ -27,6 +28,7 @@ import {
   type ApiConfigDraft,
   type SshConfigDraft,
   type TemplateConfigDraft,
+  type PythonConfigDraft,
 } from '../utils/skillEditor';
 
 const emit = defineEmits<{
@@ -57,7 +59,17 @@ interface ExecutionType {
   configSchema: ConfigSchema;
 }
 
+interface PythonSandboxItem {
+  id: number;
+  name: string;
+  endpointUrl: string;
+  httpMethod: string;
+  enabled: number;
+  description: string | null;
+}
+
 const executionTypes = ref<ExecutionType[]>([]);
+const pythonSandboxes = ref<PythonSandboxItem[]>([]);
 
 const configFormValues = ref<Record<string, unknown>>({});
 const syncingFromDraft = ref(false);
@@ -67,6 +79,13 @@ function fetchExecutionTypes() {
     .then(res => res.json())
     .then(data => { executionTypes.value = Array.isArray(data) ? data : []; })
     .catch(() => { executionTypes.value = []; });
+}
+
+function fetchPythonSandboxes() {
+  fetch(apiUrl('/api/python-sandbox?enabled=true'))
+    .then(res => res.json())
+    .then(data => { pythonSandboxes.value = Array.isArray(data) ? data : []; })
+    .catch(() => { pythonSandboxes.value = []; });
 }
 
 function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
@@ -110,6 +129,14 @@ function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
       prompt: draft.prompt,
     };
   }
+  if (isPythonDraft(draft)) {
+    return {
+      sandboxName: draft.sandboxName,
+      code: draft.code,
+      operation: draft.operation,
+      interfaceDescription: draft.interfaceDescription,
+    };
+  }
   return {};
 }
 
@@ -148,6 +175,12 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
   } else if (isTemplateDraft(configDraft.value)) {
     const d = configDraft.value as TemplateConfigDraft;
     d.prompt = (values.prompt as string) ?? d.prompt;
+  } else if (isPythonDraft(configDraft.value)) {
+    const d = configDraft.value as PythonConfigDraft;
+    d.sandboxName = (values.sandboxName as string) ?? d.sandboxName;
+    d.code = (values.code as string) ?? d.code;
+    d.operation = (values.operation as string) ?? d.operation;
+    d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
   }
 }
 
@@ -167,7 +200,25 @@ const currentExecutionType = computed(() => {
 });
 
 const currentConfigSchema = computed<ConfigSchema | null>(() => {
-  return currentExecutionType.value?.configSchema ?? null;
+  const schema = currentExecutionType.value?.configSchema;
+  if (!schema) return null;
+  // 动态注入 python 的 sandboxName enum 候选（从 /api/python-sandbox 拉）
+  if (currentConfigKind.value === 'python') {
+    const sandboxProp = schema.properties?.sandboxName;
+    if (sandboxProp) {
+      return {
+        ...schema,
+        properties: {
+          ...schema.properties,
+          sandboxName: {
+            ...sandboxProp,
+            enum: pythonSandboxes.value.map((s) => s.name),
+          },
+        },
+      };
+    }
+  }
+  return schema;
 });
 
 const optimizeVisible = ref(false);
@@ -218,6 +269,7 @@ const configKindOptions = computed(() => {
 const currentConfigKind = computed<ConfigKind>(() => {
   if (isApiDraft(configDraft.value)) return 'api';
   if (isTemplateDraft(configDraft.value)) return 'template';
+  if (isPythonDraft(configDraft.value)) return 'python';
   return 'ssh';
 });
 
@@ -258,6 +310,7 @@ function openCreateForm() {
   isEditMode.value = false;
   resetForm();
   if (executionTypes.value.length === 0) fetchExecutionTypes();
+  fetchPythonSandboxes();
   isFormVisible.value = true;
 }
 
@@ -265,6 +318,7 @@ async function openEditForm(skillSummary: Skill) {
   try {
     isLoading.value = true;
     if (executionTypes.value.length === 0) await fetchExecutionTypes();
+    fetchPythonSandboxes();
     const skill = await fetchSkill(skillSummary.id);
     isEditMode.value = true;
     currentId.value = skill.id;

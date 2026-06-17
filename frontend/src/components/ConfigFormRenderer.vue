@@ -166,6 +166,7 @@ function handleOptimize(key: string) {
         :model-value="prop.ui === 'jsonEditor' || prop.ui === 'keyValue' ? formatJsonValue(getFieldValue(key)) : String(getFieldValue(key) ?? '')"
         :placeholder="prop.placeholder"
         :autosize="{ minRows: 3, maxRows: 8 }"
+        :maxlength="prop.ui === 'textarea' ? 1000000 : undefined"
         @change="(val: string) => prop.ui === 'jsonEditor' || prop.ui === 'keyValue' ? handleJsonChange(key, val) : setFieldValue(key, val)"
       />
       <t-button

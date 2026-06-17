@@ -1,5 +1,5 @@
 export type ExecutionMode = 'CONFIG' | 'OPENCLAW'
-export type ConfigKind = 'api' | 'ssh' | 'template'
+export type ConfigKind = 'api' | 'ssh' | 'template' | 'python'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
@@ -65,6 +65,18 @@ export interface TemplateConfigDraft {
   prompt: string
 }
 
+export interface PythonConfigDraft {
+  kind: 'python'
+  /** 引用 python_sandbox.name，运行时由 admin 配置 */
+  sandboxName: string
+  /** 用户写死的 Python 源码；调用时由 Gateway 注入出站 body 的 code 字段（覆盖 LLM 误传） */
+  code: string
+  /** LLM 工具名后缀 */
+  operation: string
+  /** LLM-facing 中文说明 */
+  interfaceDescription: string
+}
+
 export interface OpenClawConfigDraft {
   kind: 'openclaw'
   systemPromptMarkdown: string
@@ -72,7 +84,7 @@ export interface OpenClawConfigDraft {
   orchestrationMode: 'serial'
 }
 
-export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | TemplateConfigDraft | OpenClawConfigDraft
+export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | TemplateConfigDraft | PythonConfigDraft | OpenClawConfigDraft
 
 export interface ParseSkillDraftResult {
   draft: SkillConfigDraft | null
@@ -85,6 +97,7 @@ const CONFIG_KIND_LABELS: Record<ConfigKind, string> = {
   api: 'API',
   ssh: 'SSH',
   template: '模板',
+  python: 'Python 沙箱',
 }
 
 const API_ALLOWED_KEYS = [
@@ -118,6 +131,8 @@ const SSH_ALLOWED_KEYS = [
 ]
 
 const TEMPLATE_ALLOWED_KEYS = ['kind', 'prompt']
+
+const PYTHON_ALLOWED_KEYS = ['kind', 'sandboxName', 'code', 'operation', 'interfaceDescription']
 
 const OPENCLAW_ALLOWED_KEYS = ['kind', 'systemPrompt', 'allowedTools', 'orchestration']
 
@@ -307,6 +322,17 @@ function parseTemplateDraft(configuration: JsonRecord): TemplateConfigDraft {
   }
 }
 
+function parsePythonDraft(configuration: JsonRecord): PythonConfigDraft {
+  ensureNoUnknownKeys(configuration, PYTHON_ALLOWED_KEYS)
+  return {
+    kind: 'python',
+    sandboxName: readString(configuration, 'sandboxName'),
+    code: readString(configuration, 'code'),
+    operation: readString(configuration, 'operation'),
+    interfaceDescription: readString(configuration, 'interfaceDescription'),
+  }
+}
+
 function parseOpenClawDraft(configuration: JsonRecord): OpenClawConfigDraft {
   ensureNoUnknownKeys(configuration, OPENCLAW_ALLOWED_KEYS)
   const allowedTools = configuration.allowedTools
@@ -359,6 +385,16 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
     }
   }
 
+  if (configKind === 'python') {
+    return {
+      kind: 'python',
+      sandboxName: '',
+      code: '',
+      operation: '',
+      interfaceDescription: '',
+    }
+  }
+
     return {
       kind: 'api',
       preset: 'none',
@@ -405,6 +441,8 @@ export function parseSkillDraft(executionMode: ExecutionMode, configuration: str
         return { draft: parseSshDraft(parsed), error: null }
       case 'template':
         return { draft: parseTemplateDraft(parsed), error: null }
+      case 'python':
+        return { draft: parsePythonDraft(parsed), error: null }
       case 'openclaw':
         throw new Error('CONFIG Skill 不能使用 openclaw 配置')
       default:
@@ -497,6 +535,16 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
     })
   }
 
+  if (draft.kind === 'python') {
+    return JSON.stringify({
+      kind: 'python',
+      sandboxName: requireNonEmpty(draft.sandboxName, 'Python 沙箱'),
+      code: requireNonEmpty(draft.code, 'Python 脚本'),
+      operation: requireNonEmpty(draft.operation, '操作标识'),
+      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
+    })
+  }
+
   throw new Error('CONFIG Skill 不能序列化为 openclaw 配置')
 }
 
@@ -514,6 +562,9 @@ export function getPresetLabel(kind: ConfigKind, preset: string): string {
   if (kind === 'template') {
     return '提示词模板'
   }
+  if (kind === 'python') {
+    return 'Python 沙箱'
+  }
   return '服务器状态巡检'
 }
 
@@ -527,6 +578,10 @@ export function isSshDraft(draft: SkillConfigDraft | null): draft is SshConfigDr
 
 export function isTemplateDraft(draft: SkillConfigDraft | null): draft is TemplateConfigDraft {
   return draft?.kind === 'template'
+}
+
+export function isPythonDraft(draft: SkillConfigDraft | null): draft is PythonConfigDraft {
+  return draft?.kind === 'python'
 }
 
 export function isOpenClawDraft(draft: SkillConfigDraft | null): draft is OpenClawConfigDraft {

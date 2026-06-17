@@ -62,6 +62,11 @@ export function getConfigSummary(configuration: string): ConfigSummary {
         kindLabel: '模板',
       }
     }
+    if (rawKind === 'python') {
+      return {
+        kindLabel: 'Python 脚本执行',
+      }
+    }
     if (rawKind === 'time') {
       return {
         kindLabel: 'API',

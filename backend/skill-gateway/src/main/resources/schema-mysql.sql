@@ -316,3 +316,17 @@ CREATE TABLE IF NOT EXISTS api_call_logs (
     INDEX idx_acl_user_id (user_id),
     INDEX idx_acl_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API调用记录表';
+
+-- python_sandbox（Python 沙箱配置表 - 第三方 Python 沙箱服务注册表，由 admin 维护）
+CREATE TABLE IF NOT EXISTS python_sandbox (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE COMMENT '沙箱引用名，Skill.configuration.sandboxName 引用此字段',
+    endpoint_url VARCHAR(1024) NOT NULL COMMENT '完整 URL（含 scheme + host + path），如 http://python-svc:9000/execute',
+    http_method VARCHAR(8) NOT NULL DEFAULT 'POST' COMMENT 'POST | PUT 等；首版建议固定 POST',
+    service_params TEXT NOT NULL COMMENT '第三方服务的 LLM 入参 JSON Schema（JSON 对象，含 type=object / properties / required）；决定 LLM 调用时传什么字段、出站 body 长什么样。MySQL TEXT 不允许 DEFAULT，缺省值由 Java 端 PythonSandboxService.toEntity 兜底为 "{}"',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '状态：0=禁用 / 1=启用；禁用后 listExecutionTypes 不返回，Skill 执行时返回 400',
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_python_sandbox_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Python 沙箱注册表';

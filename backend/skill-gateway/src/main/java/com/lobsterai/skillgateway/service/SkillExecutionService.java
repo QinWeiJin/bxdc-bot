@@ -6,8 +6,10 @@ import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
 import com.lobsterai.skillgateway.config.DedupConfig;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.AsyncTask;
+import com.lobsterai.skillgateway.entity.PythonSandbox;
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.util.JsonSchemaValidator;
 import com.lobsterai.skillgateway.util.RequestSignatureUtil;
 import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
@@ -41,6 +43,8 @@ public class SkillExecutionService {
     private final PendingConfirmationStore confirmationStore;
     private final AsyncTaskPollingService asyncTaskPollingService;
     private final AsyncTaskPollingScheduler asyncTaskPollingScheduler;
+    private final PythonSandboxService pythonSandboxService;
+    private final JsonSchemaValidator jsonSchemaValidator;
     private final ObjectMapper objectMapper;
     private final FileToolService fileToolService;
 
@@ -56,7 +60,9 @@ public class SkillExecutionService {
             AsyncTaskPollingService asyncTaskPollingService,
             AsyncTaskPollingScheduler asyncTaskPollingScheduler,
             ObjectMapper objectMapper,
-            FileToolService fileToolService
+            FileToolService fileToolService,
+            PythonSandboxService pythonSandboxService,
+            JsonSchemaValidator jsonSchemaValidator
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -68,6 +74,8 @@ public class SkillExecutionService {
         this.confirmationStore = confirmationStore;
         this.asyncTaskPollingService = asyncTaskPollingService;
         this.asyncTaskPollingScheduler = asyncTaskPollingScheduler;
+        this.pythonSandboxService = pythonSandboxService;
+        this.jsonSchemaValidator = jsonSchemaValidator;
         this.objectMapper = objectMapper;
         this.fileToolService = fileToolService;
     }
@@ -151,6 +159,8 @@ public class SkillExecutionService {
                 return executeTemplateSkill(config, effectiveParameters);
             case "file_tool":
                 return executeFileToolSkill(config, effectiveParameters, request.userId, request.conversationId);
+            case "python":
+                return executePythonSkill(skill, config, effectiveParameters, request.userId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }
@@ -379,6 +389,65 @@ public class SkillExecutionService {
             "Use the rendered content above as your system prompt to generate a response. "
             + "Do NOT call this tool again for the same request.");
         return result;
+    }
+
+    /**
+     * Python Skill: 把 LLM 透传参数（payload 整体）作为 script_args + Skill config.code 拼装为 body 转发到 python_sandbox.endpoint_url。
+     * 入参校验：按 sandbox.service_params (JSON Schema) 校验 script_args 字段。
+     * 响应透传整 body（不做 JsonPath 提取）。详见 docs/python-execution-skill-design.md §5.2 / §5.3。
+     */
+    @SuppressWarnings("unchecked")
+    private Object executePythonSkill(Skill skill, Map<String, Object> config, Object parameters, String userId) throws Exception {
+        String sandboxName = (String) config.get("sandboxName");
+        if (StringUtils.isBlank(sandboxName)) {
+            throw new IllegalArgumentException("Python skill missing sandboxName");
+        }
+        Object code = config.get("code");
+        if (code == null || (code instanceof String && StringUtils.isBlank((String) code))) {
+            throw new IllegalArgumentException("Python skill missing code");
+        }
+        PythonSandbox sandbox = pythonSandboxService.getByNameOrThrow(sandboxName.trim());
+        if (sandbox.getEnabled() == null || sandbox.getEnabled() != 1) {
+            throw new IllegalArgumentException("Python sandbox disabled: " + sandbox.getName());
+        }
+        // 1. 解析 service_params 为 schema；非 JSON 对象抛 IllegalArgumentException
+        Map<String, Object> schema;
+        try {
+            schema = pythonSandboxService.parseServiceParams(sandbox);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid service_params JSON for sandbox: "
+                    + sandbox.getName() + " — " + e.getMessage(), e);
+        }
+        // 2. 把 LLM 透传的 payload 整体作为 script_args；按 service_params schema 校验 script_args
+        //    （service_params 描述的是 script_args 这个值的结构，不是 LLM 整个入参）
+        Map<String, Object> scriptArgs = asMap(parameters);
+        if (scriptArgs == null) {
+            scriptArgs = new LinkedHashMap<>();
+        }
+        jsonSchemaValidator.validate(objectMapper.writeValueAsString(schema), scriptArgs);
+
+        // 3. 拼装出站请求
+        String method = sandbox.getHttpMethod() == null ? "POST" : sandbox.getHttpMethod();
+        String url = sandbox.getEndpointUrl();
+        Map<String, Object> requestHeaders = new LinkedHashMap<>();
+        requestHeaders.put("Content-Type", MediaType.APPLICATION_JSON_VALUE);
+
+        // 4. 拼装 body：code 来自 Skill config（用户写死的脚本）；script_args 来自 LLM 透传整体。
+        //    code / script_args 字段名硬编码（沙箱协议约定）。
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("code", code);
+        body.put("script_args", scriptArgs);
+
+        // 诊断日志：记录 code 长度 + sha256 前 8 位，方便核对「出站 code 是不是用户写的 code」
+        if (code instanceof String) {
+            String codeStr = (String) code;
+            String digest = Integer.toHexString(codeStr.hashCode());
+            log.info("PythonSkill outbound: code length={}, sha256[0:8]={}, sandbox={}, skill={}",
+                    codeStr.length(), digest, sandbox.getName(), skill.getId());
+        }
+
+        return apiProxyService.callApi(url, method.toUpperCase(), requestHeaders, body,
+                HttpClientAuditMode.SKILL_OUTBOUND);
     }
 
     private String renderTemplate(String template, Map<String, Object> params) {

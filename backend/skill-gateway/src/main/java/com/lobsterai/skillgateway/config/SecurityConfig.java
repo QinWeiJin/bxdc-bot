@@ -117,12 +117,14 @@ public class SecurityConfig {
             String method = request.getMethod();
             boolean isSkillRoute = uri.startsWith("/api/skills");
             boolean isSystemSkillRoute = uri.startsWith("/api/system-skills");
+            boolean isPythonSandboxRoute = uri.startsWith("/api/python-sandbox");
             boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(method);
             boolean isEnumSource = uri.equals("/api/skills/enum-source") && "POST".equalsIgnoreCase(method);
             boolean internalAuditPost = uri.startsWith("/api/internal/llm-http-audit") && "POST".equalsIgnoreCase(method);
             boolean isPollingAudit = uri.startsWith("/api/internal/polling-audit") && "POST".equalsIgnoreCase(method);
             boolean needsToken = ((isSkillRoute && !isReadOnlySkillRequest) && !isEnumSource)
                     || (isSystemSkillRoute && !isReadOnlySkillRequest)
+                    || (isPythonSandboxRoute && !isReadOnlySkillRequest)
                     || internalAuditPost
                     || isPollingAudit;
             if (!needsToken) {

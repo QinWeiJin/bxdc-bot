@@ -262,3 +262,16 @@ VALUES
   ('api_caller', 'Calls an external API via the Java gateway (url, method, headers, body).', 'API_PROXY', NULL, TRUE, 1),
   ('compute', 'Math and date operations via Skill Gateway (operation, operands).', 'COMPUTE', NULL, TRUE, 1),
   ('ssh_executor', 'Executes a shell command on a remote server via SSH (host, port, username, command, privateKey or password).', 'SSH_EXECUTOR', NULL, TRUE, 1);
+
+-- python_sandbox（Python 沙箱配置表 - 第三方 Python 沙箱服务注册表，由 admin 维护）
+CREATE TABLE IF NOT EXISTS python_sandbox (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE,
+    endpoint_url VARCHAR(1024) NOT NULL,
+    http_method VARCHAR(8) NOT NULL DEFAULT 'POST',
+    service_params CLOB NOT NULL,
+    enabled TINYINT NOT NULL DEFAULT 1,
+    description CLOB,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
