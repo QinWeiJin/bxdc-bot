@@ -250,6 +250,7 @@ public class TxtToolService {
                 newFile.setFileType(extractExtension(baseName));
                 newFile.setFtpPath(fullPath);
                 newFile.setUploadTime(java.time.LocalDateTime.now());
+                newFile.setIsToolGenerated(1);
                 if (userFile != null) {
                     newFile.setSourceFileId(userFile.getId());
                 }
@@ -687,13 +688,14 @@ public class TxtToolService {
 
             UserFile newFile = new UserFile();
             newFile.setUserId(userId);
-            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setOriginalFileName(FtpFileService.getTempDisplayFileName(userFile.getOriginalFileName()));
             newFile.setFileName(actualFileName);
             newFile.setFileSize((long) bytes.length);
             newFile.setFileType(userFile.getFileType());
             newFile.setFtpPath(fullPath);
             newFile.setUploadTime(java.time.LocalDateTime.now());
             newFile.setSourceFileId(userFile.getId());
+            newFile.setIsToolGenerated(1);
             userFileMapper.insert(newFile);
 
             // 写入绝对路径 downloadUrl 到 DB
@@ -704,8 +706,9 @@ public class TxtToolService {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("originalFileId", userFile.getId());
             result.put("newFileId", newFile.getId());
-            result.put("newFileName", actualFileName);
-            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("newFileName", newFile.getOriginalFileName());
+            result.put("originalFileName", newFile.getOriginalFileName());
+            result.put("sourceFileName", userFile.getOriginalFileName());
             result.put("downloadUrl", downloadUrl);
             result.put("originalLines", original);
             result.put("distinctLines", dedup.size());
@@ -771,12 +774,14 @@ public class TxtToolService {
 
             UserFile newFile = new UserFile();
             newFile.setUserId(userId);
-            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setOriginalFileName(FtpFileService.getTempDisplayFileName(userFile.getOriginalFileName()));
             newFile.setFileName(actualFileName);
             newFile.setFileSize((long) bytes.length);
             newFile.setFileType(userFile.getFileType());
             newFile.setFtpPath(fullPath);
             newFile.setUploadTime(java.time.LocalDateTime.now());
+            newFile.setSourceFileId(userFile.getId());
+            newFile.setIsToolGenerated(1);
             userFileMapper.insert(newFile);
 
             // 写入绝对路径 downloadUrl 到 DB
@@ -787,8 +792,9 @@ public class TxtToolService {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("originalFileId", userFile.getId());
             result.put("newFileId", newFile.getId());
-            result.put("newFileName", actualFileName);
-            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("newFileName", newFile.getOriginalFileName());
+            result.put("originalFileName", newFile.getOriginalFileName());
+            result.put("sourceFileName", userFile.getOriginalFileName());
             result.put("downloadUrl", downloadUrl);
             result.put("order", asc ? "asc" : "desc");
             result.put("numeric", numeric);

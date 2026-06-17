@@ -380,7 +380,7 @@ public class FileToolService {
     // ================================================================
 
     private FileToolResponse listFiles(String userId) {
-        List<UserFile> files = userFileMapper.findByUserId(userId);
+        List<UserFile> files = userFileMapper.findByUserIdExcludeToolGenerated(userId);
         if (files.isEmpty()) {
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "No files found.");
@@ -417,7 +417,8 @@ public class FileToolService {
     }
 
     private FileToolResponse clearAllFiles(String userId) {
-        List<UserFile> files = userFileMapper.findByUserId(userId);
+        // open spec: temp-file-filtering — 只清空用户上传的文件，不影响 tool 生成的临时文件
+        List<UserFile> files = userFileMapper.findByUserIdExcludeToolGenerated(userId);
         Map<String, Object> result = new LinkedHashMap<String, Object>();
         result.put("fileCount", files.size());
         result.put("message", "请确认是否清空所有 " + files.size() + " 个文件？");

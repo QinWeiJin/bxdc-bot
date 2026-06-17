@@ -993,7 +993,7 @@ async function resumeBxdcbotPlannerImpl(run: BxdcbotRun): Promise<string> {
   return await runSubPlanner(run, planner, parentToolName, input, config, availableTools, allowedTools, parentToolId);
 }
 
-export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string): Record<string, string> {
+export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string, conversationId?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Agent-Token": apiToken,
     "Content-Type": "application/json",

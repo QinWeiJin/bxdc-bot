@@ -351,6 +351,24 @@ public class FtpFileService {
         return shortUuid;
     }
 
+    /**
+     * 生成临时文件的显示名称（原文件名_temp.扩展名）。
+     * <p>
+     * open spec: temp-file-filtering — 统一所有文件工具的临时文件命名规则
+     * 供 Excel/Word 工具调用，确保临时文件在列表和查重中可被 source_file_id 过滤。
+     * </p>
+     *
+     * @param originalFileName 原始文件名，如 "report.docx"
+     * @return 临时文件名，如 "report_temp.docx"
+     */
+    public static String getTempDisplayFileName(String originalFileName) {
+        if (originalFileName == null) return null;
+        int dotIndex = originalFileName.lastIndexOf('.');
+        String baseName = dotIndex > 0 ? originalFileName.substring(0, dotIndex) : originalFileName;
+        String extension = dotIndex > 0 ? originalFileName.substring(dotIndex) : "";
+        return baseName + "_temp" + extension;
+    }
+
     // ========== 内部方法 ==========
 
     /**
