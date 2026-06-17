@@ -22,7 +22,7 @@
     "axios": "^1.6.0",
     "js-yaml": "^4.1.1",
     "langchain": "^1.2.29",
-    "pinyin-pro": "^3.28.0",
+    "pinyin-pro": "^3.28.1",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.0",
     "uuid": "9.0.1"

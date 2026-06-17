@@ -808,6 +808,8 @@ public class SkillExecutionService {
         public String parentToolId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot skill_id (NULL=非 Bxdcbot 调起) */
         public Long parentSkillId;
+        /** conversation-file-isolation: 当前会话 ID（用于 file_tool 按 enabled_files 过滤） */
+        public String conversationId;
 
         public boolean isConfirmed() {
             return confirmed;

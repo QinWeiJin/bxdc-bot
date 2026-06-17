@@ -36,6 +36,12 @@ const router = createRouter({
       name: 'file-parser-test',
       component: FileParserTest,
     },
+    {
+      path: '/file-manager',
+      name: 'file-manager',
+      component: () => import('../views/FileManagerView.vue'),
+      meta: { requiresAuth: true }
+    },
   ],
 })
 

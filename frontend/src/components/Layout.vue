@@ -11,7 +11,7 @@ import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import TaskNotificationBell from './TaskNotificationBell.vue';
 import ConversationSidebar from './ConversationSidebar.vue';
-import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
+import { AppIcon, FolderOpenIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
 const router = useRouter();
 const { currentUser, logout } = useUser();
@@ -49,6 +49,10 @@ onBeforeUnmount(() => {
         <div class="layout-header">
           <div class="layout-spacer"></div>
           <div class="layout-actions">
+            <t-button theme="default" variant="text" @click="router.push('/file-manager')">
+              <template #icon><FolderOpenIcon /></template>
+              文件管理
+            </t-button>
             <t-button theme="default" variant="text" @click="toggleServerLedger" v-if="currentUser">
               <template #icon><ServerIcon /></template>
               Servers

@@ -128,7 +128,7 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
     if (!m) return null
     const fileNameMatch = raw.match(/"originalFileName"\s*:\s*"([^"]+)"/)
       || raw.match(/"newFileName"\s*:\s*"([^"]+)"/)
-    return { url: m[1], fileName: fileNameMatch ? fileNameMatch[1] : 'download' }
+    return { url: m[1]!, fileName: fileNameMatch ? fileNameMatch[1]! : 'download' }
   }
   // 解包 { success, output: {...} } 或 { output: "..." }
   if (payload && typeof payload === 'object') {

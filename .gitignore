@@ -37,6 +37,7 @@ backend/skill-gateway/src/main/resources/application-local.properties
 
 # Database & runtime data
 backend/skill-gateway/data/
+backend/skill-gateway/ftp_root/
 # Maven 本地 repo（100MB+，离线 build 用，不进 git；拷贝到内网用 Desktop 上的 m2-offline-bundle.tar.*）
 backend/skill-gateway/.m2/
 backend/skill-gateway/.m2-test

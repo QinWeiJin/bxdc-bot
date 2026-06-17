@@ -282,3 +282,34 @@ export const FILE_TYPE_ICONS: Record<FileType, string> = {
 export const FILE_INPUT_ACCEPT: string = Array.from(
   new Set(Object.values(FILE_UPLOAD_CONFIG.ACCEPTED_EXTENSIONS).flat()),
 ).join(',');
+
+// ============================================================
+// 8. 后端 UserFile 实体对应的前端接口
+// ============================================================
+
+/**
+ * 后端 user_files 表对应的前端记录。
+ * 用于文件管理页面的列表展示。
+ */
+export interface UserFileRecord {
+  /** 数据库主键 */
+  id: number;
+  /** 用户 ID */
+  userId: string;
+  /** 原始文件名（用户上传时看到的） */
+  originalFileName: string;
+  /** 存储文件名（UUID + 扩展名） */
+  fileName: string;
+  /** 文件字节数 */
+  fileSize: number;
+  /** 文件扩展名（小写） */
+  fileType: string;
+  /** FTP 存储路径 */
+  ftpPath?: string;
+  /** 下载 URL */
+  downloadUrl?: string;
+  /** 解析摘要（JSON 字符串，异步解析完成后填充） */
+  parsedSummary?: string;
+  /** 上传时间（ISO 8601 字符串或时间戳） */
+  uploadTime: string;
+}
