@@ -110,7 +110,7 @@ public class FileToolSeeder implements ApplicationRunner {
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
-        seedFileOperate("excel_read", "读取 Excel/CSV 文件内容，返回表头和数据行。支持 .xlsx、.xls、.csv 三种格式。支持分页返回，默认最多返回 100 行。返回结果包含 headers（列头列表）和 rows（数据行列表）。", excelReadSchema());
+        seedFileOperate("excel_read", "分页读取 Excel/CSV 文件内容。支持 .xlsx、.xls、.csv 三种格式。返回表头（headers）和当前页数据（rows），默认每页 50 行。通过 page 参数切换页码。大文件请逐页读取，避免 token 超限。返回结果包含 headers、rows、currentPage、pageSize、totalPages、totalRows、totalCols、hasMore 等分页信息。", excelReadSchema());
         seedFileOperate("excel_write", "创建或覆盖 Excel 文件。两种场景：1) 传入 fileId 时在临时文件基础上写入数据；2) 不传 fileId 时根据 headers 和 rows 创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新的 fileId 供后续操作使用。需提供 headers（列头数组，必填）和 rows（数据行数组）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelWriteSchema());
         seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", fileRefSchema());
         seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelFilterSchema());
@@ -251,10 +251,12 @@ public class FileToolSeeder implements ApplicationRunner {
                 if (prev == null || !prev.equals(schemaJson)) {
                     existing.setSchemaPropertiesJson(schemaJson);
                     existing.setDescription(description);
+                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
                     skillMapper.updateById(existing);
                     log.info("Updated family skill schema: {} (id={})", familyName, existing.getId());
                 } else if (descChanged) {
                     existing.setDescription(description);
+                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
                     skillMapper.updateById(existing);
                     log.info("Updated family skill description: {} (id={})", familyName, existing.getId());
                 } else {
@@ -274,6 +276,7 @@ public class FileToolSeeder implements ApplicationRunner {
             skill.setName(familyName);
             skill.setDescription(description);
             skill.setType(SKILL_TYPE);
+            skill.setSkillOwnerType(2); // 系统技能
             skill.setConfiguration(configJson);
             skill.setExecutionMode("CONFIG");
             skill.setEnabled(true);
@@ -354,10 +357,12 @@ public class FileToolSeeder implements ApplicationRunner {
                 if (prev == null || !prev.equals(schemaJson)) {
                     existing.setSchemaPropertiesJson(schemaJson);
                     existing.setDescription(description);
+                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
                     skillMapper.updateById(existing);
                     log.info("Updated existing skill schema: {} (id={})", toolName, existing.getId());
                 } else if (descChanged) {
                     existing.setDescription(description);
+                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
                     skillMapper.updateById(existing);
                     log.info("Updated existing skill description: {} (id={})", toolName, existing.getId());
                 } else {
@@ -376,6 +381,7 @@ public class FileToolSeeder implements ApplicationRunner {
             skill.setName(toolName);
             skill.setDescription(description);
             skill.setType(SKILL_TYPE);
+            skill.setSkillOwnerType(2); // 系统技能
             skill.setConfiguration(configJson);
             skill.setExecutionMode("CONFIG");
             skill.setEnabled(true);
@@ -776,7 +782,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
-        s.put("maxRows", intProp("最大返回行数，默认 100", false));
+        s.put("page", intProp("页码，从 1 开始，默认 1", false));
+        s.put("pageSize", intProp("每页行数，默认 50，建议 20~100 之间", false));
         return s;
     }
 

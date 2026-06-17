@@ -23,7 +23,12 @@
 import { config } from 'dotenv';
 import { NestFactory } from '@nestjs/core';
 import { resolve } from 'path';
+import { setDefaultResultOrder } from 'node:dns';
 import { AppModule } from './app.module';
+
+// 强制 Node.js DNS 解析优先使用 IPv4，避免 OpenAI API 等外部服务
+// 通过 IPv6 连接超时（当前网络环境不支持 IPv6）
+setDefaultResultOrder('ipv4first');
 
 // 尽早加载 .env 文件，确保环境变量在模块导入前可用
 // 这对于 prompts 模块在启动时正确选择语言至关重要

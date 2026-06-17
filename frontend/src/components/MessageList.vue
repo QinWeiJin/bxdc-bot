@@ -314,6 +314,7 @@ const logViewerRows = computed<LogViewerRow[]>(() => {
 
 const expandedLogs = ref<Set<string>>(new Set())
 const expandedResultKeys = ref<Set<string>>(new Set())
+const expandedChildKeys = ref<Set<string>>(new Set())
 
 function toggleResultExpansion(toolId: string) {
   const next = new Set(expandedResultKeys.value)
@@ -323,6 +324,16 @@ function toggleResultExpansion(toolId: string) {
     next.add(toolId)
   }
   expandedResultKeys.value = next
+}
+
+function toggleChildExpansion(childId: string) {
+  const next = new Set(expandedChildKeys.value)
+  if (next.has(childId)) {
+    next.delete(childId)
+  } else {
+    next.add(childId)
+  }
+  expandedChildKeys.value = next
 }
 
 function toggleLogExpand(id: string) {
@@ -898,6 +909,34 @@ async function copyContent(text: string) {
                   <pre class="tool-status-result-body">{{ formatToolResultText(tool.result) }}</pre>
                 </div>
               </div>
+              <div v-if="tool.children?.length" class="tool-children-list">
+                <div
+                  v-for="child in tool.children"
+                  :key="child.id"
+                  class="tool-child-block"
+                >
+                  <div
+                    class="tool-child-item"
+                    :class="`tool-child-item--${child.status}`"
+                    @click="toggleChildExpansion(child.id)"
+                  >
+                    <span class="tool-child-arrow">{{ expandedChildKeys.has(child.id) ? '▼' : '▶' }}</span>
+                    <span class="tool-child-name">{{ child.displayName }}</span>
+                    <span class="tool-status-separator">·</span>
+                    <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
+                    <span v-if="child.summary" class="tool-status-separator">·</span>
+                    <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
+                    <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
+                    <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
+                  </div>
+                  <div
+                    v-if="expandedChildKeys.has(child.id) && formatToolResultText(child.result)"
+                    class="tool-child-result"
+                  >
+                    <pre class="tool-status-result-body">{{ formatToolResultText(child.result) }}</pre>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1317,6 +1356,17 @@ async function copyContent(text: string) {
   align-items: center;
   gap: 6px;
   color: var(--td-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-child-item:hover {
+  opacity: 0.85;
+}
+
+.tool-child-arrow {
+  font-size: 10px;
+  flex-shrink: 0;
 }
 
 .tool-child-item--running {

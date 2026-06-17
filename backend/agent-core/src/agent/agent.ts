@@ -106,7 +106,7 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string, streamCallback?: (event: any) => void },
+    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string },
     userId?: string
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
@@ -152,7 +152,7 @@ export class AgentFactory {
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
-      }, userId, config?.streamCallback),
+      }, userId),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, config?.conversationId, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),

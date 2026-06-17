@@ -683,9 +683,6 @@ export class AgentController {
               callbacks: [llmCallbackHandler], 
               sessionId, 
               conversationId,
-              streamCallback: (event) => {
-                subject.next({ data: JSON.stringify({ type: 'sub_agent_event', ...event }) });
-              }
             },
             userId,
           );
@@ -818,9 +815,14 @@ export class AgentController {
                           .filter((message) => isAssistantMessage(message))
                           .at(-1);
                         const nextContent = getMessageContent(lastAssistantMessage);
-                        if (nextContent) {
-                          fullAssistantResponse = nextContent;
-                          subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                        if (nextContent && nextContent.length > 0) {
+                          const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
+                            ? nextContent.slice(fullAssistantResponse.length)
+                            : nextContent;
+                          if (newContent.length > 0) {
+                            fullAssistantResponse = nextContent;
+                            subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
+                          }
                         }
                       }
                     }

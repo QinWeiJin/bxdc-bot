@@ -24,8 +24,16 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import { AgentFactory } from "../agent/agent";
 import { HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
-import { buildStaticSystemPrompt, Prompts } from "../prompts";
+import { buildStaticSystemPrompt } from "../prompts";
 import { unwrapLangGraphStreamPayload } from "../controller/agent.controller";
+import {
+  emitToolTraceEvent,
+  getActiveParentToolId,
+  sanitizeToolTraceArguments,
+  sanitizeToolResultForTrace,
+  type ToolTraceStatus,
+} from "./tool-trace-context";
+import { describeGatewayExtendedTool } from "./java-skills";
 
 const executeSkillInputSchema = z.object({
   skillIds: z
@@ -45,14 +53,6 @@ const executeSkillInputSchema = z.object({
       "When true, the sub-agent will reuse the previous conversation history. " +
       "When false (default), a new conversation will start."),
 });
-
-export type SubAgentStreamCallback = (event: {
-  type: 'tool_call_start' | 'tool_call_end' | 'thinking' | 'error';
-  toolName?: string;
-  input?: any;
-  output?: string;
-  message?: string;
-}) => void;
 
 interface CachedSubAgent {
   agent: any;
@@ -93,7 +93,6 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
     private readonly openAiApiKey: string,
     private readonly llmConfig?: { modelName?: string; baseUrl?: string },
     private readonly userId?: string,
-    private readonly streamCallback?: SubAgentStreamCallback
   ) {
     super({
       name: "execute_skill_with_context",
@@ -121,10 +120,6 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             agent = cached.agent;
             messages = [...cached.messages];
             messages.push(new HumanMessage(userInput));
-            this.streamCallback?.({
-              type: 'thinking',
-              message: `Reusing cached sub-agent with skillIds: ${skillIds.join(', ')}`,
-            });
           } else {
             const { agent: newAgent } = await AgentFactory.createSubAgent(
               gatewayUrl,
@@ -138,8 +133,17 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               userId
             );
             agent = newAgent;
+            // 子 Agent 负责调用工具完成操作，描述每步执行结果，但不做总结
+            // 所有总结和概括由主 Agent 统一完成
+            const subAgentSystemInstruction =
+              "【重要输出规范】\n" +
+              "• 你的工作是调用工具完成操作。每步工具调用完成后，简要描述执行了什么操作以及结果。\n" +
+              "• 不要做总结、推测或概括性陈述——所有总结由主 Agent 负责。\n" +
+              "• 不要在中间步骤说「现在进行下一步」「接下来...」等引导性文字。\n" +
+              "• 工具返回的结果中的详细数据和表格由主 Agent 后续呈现，你无需重复大段数据。\n\n";
+            const baseSystemPrompt = buildStaticSystemPrompt();
             messages = [
-              new SystemMessage(buildStaticSystemPrompt()),
+              new SystemMessage(subAgentSystemInstruction + baseSystemPrompt),
               new HumanMessage(userInput),
             ];
             subAgentCache.set(cacheKey, {
@@ -148,10 +152,6 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               createdAt: Date.now(),
               skillIds,
             });
-            this.streamCallback?.({
-              type: 'thinking',
-              message: `Created new sub-agent with skillIds: ${skillIds.join(', ')}`,
-            });
           }
 
           const toolCalls: Array<{
@@ -159,10 +159,16 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             input: any;
             output: string;
             timestamp: string;
+            toolId?: string;
           }> = [];
 
           let output = "";
           let lastPayload: any = null;
+
+          // 获取主 Agent 中 execute_skill_with_context 父工具调用的 ID，
+          // 使子 Agent 的工具调用作为该父调用的子项显示
+          const parentToolId = getActiveParentToolId('execute_skill_with_context');
+          const parentToolName = parentToolId ? 'execute_skill_with_context' : undefined;
 
           const stream = await agent.stream({ messages });
           const iterator = stream[Symbol.asyncIterator]();
@@ -181,46 +187,74 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               if (type === "ai" || type === "AIMessageChunk") {
                 const calls = (msg as any).tool_calls ?? [];
                 for (const call of calls) {
+                  const toolId: string =
+                    typeof (call as any).id === 'string' ? (call as any).id
+                    : `${call.name}:${Date.now()}`;
                   toolCalls.push({
                     toolName: call.name,
                     input: call.args,
                     output: "",
                     timestamp: new Date().toISOString(),
+                    toolId,
                   });
-                  this.streamCallback?.({
-                    type: 'tool_call_start',
+
+                  const gatewayInfo = describeGatewayExtendedTool(call.name);
+                  emitToolTraceEvent({
+                    type: 'tool_status',
+                    toolId,
                     toolName: call.name,
-                    input: call.args,
+                    displayName: gatewayInfo?.displayName || call.name,
+                    kind: gatewayInfo?.kind || 'tool',
+                    status: 'running',
+                    ...(parentToolId ? { parentToolId, parentToolName } : {}),
+                    arguments: sanitizeToolTraceArguments(call.args),
+                    executionMode: gatewayInfo?.executionMode,
+                    executionLabel: gatewayInfo?.executionLabel,
                   });
                 }
               }
 
               if (type === "tool") {
                 const toolName = (msg as any).name;
+                const toolCallId = (msg as any).tool_call_id;
                 const toolContent = (msg as any).content;
                 const toolOutput = typeof toolContent === "string" ? toolContent : JSON.stringify(toolContent);
 
-                const lastCall = toolCalls.find(tc => tc.toolName === toolName && tc.output === "");
+                const lastCall = toolCalls.find(
+                  tc => tc.toolName === toolName && tc.output === ""
+                );
                 if (lastCall) {
                   lastCall.output = toolOutput;
                 }
 
-                this.streamCallback?.({
-                  type: 'tool_call_end',
-                  toolName: toolName,
-                  input: lastCall?.input,
-                  output: toolOutput,
+                const toolId = (typeof toolCallId === 'string' && toolCallId)
+                  ? toolCallId
+                  : lastCall?.toolId || `${toolName}:${Date.now()}`;
+                const gatewayInfo = describeGatewayExtendedTool(toolName);
+
+                const status: ToolTraceStatus =
+                  toolOutput.includes('CANCELLED') || toolOutput.includes('Error') ? 'failed' : 'completed';
+
+                emitToolTraceEvent({
+                  type: 'tool_status',
+                  toolId,
+                  toolName,
+                  displayName: gatewayInfo?.displayName || toolName,
+                  kind: gatewayInfo?.kind || 'tool',
+                  status,
+                  ...(parentToolId ? { parentToolId, parentToolName } : {}),
+                  arguments: lastCall?.input !== undefined
+                    ? sanitizeToolTraceArguments(lastCall.input)
+                    : undefined,
+                  result: sanitizeToolResultForTrace(toolOutput),
+                  executionMode: gatewayInfo?.executionMode,
+                  executionLabel: gatewayInfo?.executionLabel,
                 });
               }
 
+              // 子 Agent 的 AI 文本不向前台转发（总结由主 Agent 负责）
               if ((type === "ai" || type === "AIMessageChunk") && !((msg as any).tool_calls?.length > 0)) {
-                const content = typeof msg.content === "string" ? msg.content : "";
-                if (content) {
-                  this.streamCallback?.({
-                    type: 'thinking',
-                    message: content,
-                  });
-                }
+                // 中间 AI 文本不输出到前台，避免干扰主 Agent 的总结
               }
             }
           }
@@ -260,22 +294,34 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             }
           }
 
+          // 只返回精简结果给主 Agent——详细工具执行过程已通过 tool_status 事件流式推送到前台
           return JSON.stringify({
             status: "SUCCESS",
             message: "Sub-agent execution completed successfully",
             executedSkillIds: skillIds,
             result: output || "No output generated",
-            toolCalls,
             conversationCached: subAgentCache.has(cacheKey),
           });
         } catch (error) {
-          this.streamCallback?.({
-            type: 'error',
-            message: `Error executing skill: ${error instanceof Error ? error.message : String(error)}`,
-          });
+          const errMsg = `Error executing skill: ${error instanceof Error ? error.message : String(error)}`;
+          try {
+            const parentToolId = getActiveParentToolId('execute_skill_with_context');
+            emitToolTraceEvent({
+              type: 'tool_status',
+              toolId: `sub_error_${Date.now()}`,
+              toolName: 'execute_skill_with_context',
+              displayName: '子Agent 执行错误',
+              kind: 'tool',
+              status: 'failed',
+              ...(parentToolId ? { parentToolId, parentToolName: 'execute_skill_with_context' } : {}),
+              result: sanitizeToolResultForTrace(errMsg),
+            });
+          } catch {
+            // trace context may not be available at this point
+          }
           return JSON.stringify({
             status: "ERROR",
-            message: `Error executing skill: ${error instanceof Error ? error.message : String(error)}`,
+            message: errMsg,
             executedSkillIds: args.skillIds,
             result: "",
           });
