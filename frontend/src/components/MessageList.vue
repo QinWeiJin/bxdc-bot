@@ -105,6 +105,56 @@ function formatToolResultText(result?: string) {
   return String(result)
 }
 
+interface DownloadInfo {
+  url: string
+  fileName: string
+  size?: number
+}
+
+/**
+ * 从 tool.result 字符串中提取 downloadUrl 信息（兼容 JSON / 嵌套 output / 字符串化）。
+ * 返回 null 表示没有下载链接。
+ */
+function parseDownloadInfo(result?: string): DownloadInfo | null {
+  if (result == null) return null
+  const raw = String(result)
+  // 优先尝试解析为 JSON
+  let payload: any = null
+  try {
+    payload = JSON.parse(raw)
+  } catch {
+    // 尝试从纯文本里用正则抓 downloadUrl（兜底）
+    const m = raw.match(/"downloadUrl"\s*:\s*"([^"]+)"/)
+    if (!m) return null
+    const fileNameMatch = raw.match(/"originalFileName"\s*:\s*"([^"]+)"/)
+      || raw.match(/"newFileName"\s*:\s*"([^"]+)"/)
+    return { url: m[1], fileName: fileNameMatch ? fileNameMatch[1] : 'download' }
+  }
+  // 解包 { success, output: {...} } 或 { output: "..." }
+  if (payload && typeof payload === 'object') {
+    if (payload.output && typeof payload.output === 'object') {
+      payload = payload.output
+    } else if (typeof payload.output === 'string') {
+      try { payload = JSON.parse(payload.output) } catch { payload = null }
+    }
+  }
+  if (!payload || typeof payload !== 'object') return null
+  const url = typeof payload.downloadUrl === 'string' ? payload.downloadUrl : null
+  if (!url) return null
+  const fileName = (typeof payload.originalFileName === 'string' && payload.originalFileName)
+    || (typeof payload.newFileName === 'string' && payload.newFileName)
+    || 'download'
+  const size = typeof payload.size === 'number' ? payload.size : undefined
+  return { url, fileName, size }
+}
+
+function formatSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1024 / 1024).toFixed(2) + ' MB'
+}
+
 function formatTime(timestamp: number) {
   return new Intl.DateTimeFormat('zh-CN', {
     hour: '2-digit',
@@ -263,6 +313,17 @@ const logViewerRows = computed<LogViewerRow[]>(() => {
 })
 
 const expandedLogs = ref<Set<string>>(new Set())
+const expandedResultKeys = ref<Set<string>>(new Set())
+
+function toggleResultExpansion(toolId: string) {
+  const next = new Set(expandedResultKeys.value)
+  if (next.has(toolId)) {
+    next.delete(toolId)
+  } else {
+    next.add(toolId)
+  }
+  expandedResultKeys.value = next
+}
 
 function toggleLogExpand(id: string) {
   if (expandedLogs.value.has(id)) {
@@ -812,8 +873,30 @@ async function copyContent(text: string) {
                 v-if="formatToolResultText(tool.result)"
                 class="tool-status-result"
               >
-                <div class="tool-status-result-label">返回</div>
-                <pre class="tool-status-result-body">{{ formatToolResultText(tool.result) }}</pre>
+                <div
+                  v-if="parseDownloadInfo(tool.result)"
+                  class="tool-download-card"
+                >
+                  <div class="tool-download-info">
+                    <div class="tool-download-name">📎 {{ parseDownloadInfo(tool.result)!.fileName }}</div>
+                    <div v-if="formatSize(parseDownloadInfo(tool.result)!.size)" class="tool-download-size">
+                      {{ formatSize(parseDownloadInfo(tool.result)!.size) }}
+                    </div>
+                  </div>
+                  <a
+                    :href="parseDownloadInfo(tool.result)!.url"
+                    target="_blank"
+                    rel="noopener"
+                    class="tool-download-btn"
+                  >下载</a>
+                </div>
+                <div class="tool-result-header" @click="toggleResultExpansion(tool.id)">
+                  <span class="tool-result-arrow">{{ expandedResultKeys.has(tool.id) ? '▼' : '▶' }}</span>
+                  <span class="tool-status-result-label">查看返回内容</span>
+                </div>
+                <div v-if="expandedResultKeys.has(tool.id)">
+                  <pre class="tool-status-result-body">{{ formatToolResultText(tool.result) }}</pre>
+                </div>
               </div>
             </div>
           </div>
@@ -1093,6 +1176,35 @@ async function copyContent(text: string) {
   color: var(--td-text-color-placeholder);
 }
 
+.tool-result-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: var(--td-brand-color-light, #e7f1ff);
+  border: 1px solid var(--td-brand-color-focus, #b0c8f0);
+  font-size: 12px;
+  color: var(--td-brand-color, #0052d9);
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.tool-result-header:hover {
+  background: var(--td-brand-color-light-hover, #d6e6ff);
+  border-color: var(--td-brand-color, #0052d9);
+}
+
+.tool-result-arrow {
+  font-size: 10px;
+  color: inherit;
+  width: 10px;
+  display: inline-block;
+  text-align: center;
+}
+
 .tool-status-result-body {
   margin: 0;
   padding: 6px 8px;
@@ -1106,6 +1218,54 @@ async function copyContent(text: string) {
   border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tool-download-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+}
+
+.tool-download-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tool-download-name {
+  font-size: 12px;
+  color: var(--td-text-color-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-download-size {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+}
+
+.tool-download-btn {
+  flex-shrink: 0;
+  padding: 4px 14px;
+  font-size: 12px;
+  color: #fff;
+  background: var(--td-brand-color, #0052d9);
+  border-radius: 4px;
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+
+.tool-download-btn:hover {
+  opacity: 0.85;
 }
 
 .tool-child-block {

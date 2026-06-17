@@ -85,9 +85,22 @@ public class SkillController {
 
     @GetMapping
     public List<Skill> getAllSkills(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestParam(value = "ownerType", required = false) Integer ownerType
+    ) {
+        return skillService.listSkillsForUser(userId, ownerType);
+    }
+
+    /**
+     * 按技能所有者类型查询技能
+     * @param ownerType 1: 用户技能, 2: 系统技能
+     */
+    @GetMapping("/by-owner-type")
+    public List<Skill> getSkillsByOwnerType(
+            @RequestParam Integer ownerType,
             @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
-        return skillService.listSkillsForUser(userId);
+        return skillService.listSkillsByOwnerType(ownerType);
     }
 
     @GetMapping("/{id}")
@@ -176,6 +189,7 @@ public class SkillController {
     public ResponseEntity<?> executeSkill(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestHeader(value = "X-Conversation-Id", required = false) String conversationId,
             @RequestBody Map<String, Object> body
     ) {
         try {

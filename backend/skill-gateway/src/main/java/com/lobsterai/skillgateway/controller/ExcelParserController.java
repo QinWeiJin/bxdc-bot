@@ -1,9 +1,11 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.dto.ExcelMetadataResponse;
 import com.lobsterai.skillgateway.dto.ExcelParseErrorResponse;
 import com.lobsterai.skillgateway.dto.ExcelParseResponse;
 import com.lobsterai.skillgateway.exception.ExcelParseException;
 import com.lobsterai.skillgateway.service.ExcelParserService;
+import com.lobsterai.skillgateway.dto.ExcelMetadata;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -53,6 +55,38 @@ public class ExcelParserController {
             byte[] fileBytes = file.getBytes();
             ExcelParserService.ExcelParseResult result = excelParserService.parse(fileBytes, fileName);
             return ResponseEntity.ok(new ExcelParseResponse(result.text, result.sheetCount));
+        } catch (ExcelParseException e) {
+            return ResponseEntity.badRequest()
+                    .body(new ExcelParseErrorResponse(e.getCode(), e.getMessage()));
+        } catch (IOException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ExcelParseErrorResponse("EXCEL_READ_ERROR", "文件读取失败：" + e.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/parse-excel-metadata", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> parseExcelMetadata(@RequestParam("file") MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(new ExcelParseErrorResponse("EXCEL_EMPTY", "请选择要解析的 Excel 文件"));
+        }
+
+        if (file.getSize() > MAX_FILE_SIZE) {
+            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                    .body(new ExcelParseErrorResponse("EXCEL_TOO_LARGE",
+                            "文件大小超过限制（最大 1 MiB）", MAX_FILE_SIZE));
+        }
+
+        String fileName = file.getOriginalFilename();
+        if (fileName == null || (!fileName.toLowerCase().endsWith(".xls") && !fileName.toLowerCase().endsWith(".xlsx"))) {
+            return ResponseEntity.badRequest()
+                    .body(new ExcelParseErrorResponse("EXCEL_UNSUPPORTED_TYPE", "仅支持 .xls 和 .xlsx 格式"));
+        }
+
+        try {
+            byte[] fileBytes = file.getBytes();
+            ExcelMetadata metadata = excelParserService.extractMetadata(fileBytes, fileName);
+            return ResponseEntity.ok(new ExcelMetadataResponse(metadata));
         } catch (ExcelParseException e) {
             return ResponseEntity.badRequest()
                     .body(new ExcelParseErrorResponse(e.getCode(), e.getMessage()));

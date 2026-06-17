@@ -54,6 +54,10 @@ skills/
 # .trae/skills/ 是项目 Trae AI 技能，需要提交
 !.trae/skills/
 
+# Local dev tools (per-developer, not committed)
+# e.g. .dev-ftp-test/ — 本地测试用 FTP + 启动/停止/状态脚本
+.dev-*/
+
 # Maven
 backend/skill-gateway/apache-maven-*/
 

@@ -30,10 +30,30 @@ public class SkillService {
     }
 
     public List<Skill> listSkillsForUser(String userId) {
+        return listSkillsForUser(userId, null);
+    }
+
+    /**
+     * 按用户可见性 + 可选所有者类型查询技能
+     * @param userId 当前用户 ID
+     * @param ownerType 可选，1: 用户技能, 2: 系统技能；null=不过滤
+     */
+    public List<Skill> listSkillsForUser(String userId, Integer ownerType) {
+        if (ownerType != null) {
+            return skillMapper.findVisibleSummaryForUserByOwnerType(userId, ownerType);
+        }
         if (userId == null || StringUtils.isBlank(userId)) {
             return skillMapper.findAllPublicSummary();
         }
         return skillMapper.findVisibleSummaryForUser(userId);
+    }
+
+    /**
+     * 按技能所有者类型查询技能
+     * @param ownerType 1: 用户技能, 2: 系统技能
+     */
+    public List<Skill> listSkillsByOwnerType(Integer ownerType) {
+        return skillMapper.findBySkillOwnerTypeAndEnabledIsTrue(ownerType);
     }
 
     public Optional<Skill> getSkillByIdForUser(Long id, String userId) {

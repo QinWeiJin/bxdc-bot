@@ -8,6 +8,7 @@ import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.service.parser.FileParserRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -60,6 +61,31 @@ public class FileParseService {
      * @throws Exception 下载或解析失败
      */
     public FileParseResult parseAndPersist(UserFile userFile) throws Exception {
+        return parseAndPersistInternal(userFile);
+    }
+
+    /**
+     * 异步执行 {@link #parseAndPersistInternal}。
+     * <p>
+     * 优化点：上传接口在文件落盘 + DB 写入后立即返回，不等解析。
+     * 解析在独立线程池（默认 {@code SimpleAsyncTaskExecutor}）执行，
+     * 完成后通过 DB 回写 + 通知中心（如有）告知前端。
+     * </p>
+     * <p>
+     * 注意：{@code UserFile} 实体是 Spring 注入的 mapper 创建的同实例，
+     * 异步线程读它的 {@code id/fileName/userId} 字段是安全的。
+     * </p>
+     */
+    @Async
+    public void parseAndPersistAsync(UserFile userFile) {
+        try {
+            parseAndPersistInternal(userFile);
+        } catch (Exception e) {
+            log.error("Async parse failed for file id={}: {}", userFile.getId(), e.getMessage(), e);
+        }
+    }
+
+    private FileParseResult parseAndPersistInternal(UserFile userFile) throws Exception {
         // 1. 从 FTP 下载文件
         ByteArrayOutputStream baos = ftpFileService.downloadFile(userFile.getUserId(), userFile.getFileName());
         byte[] fileBytes = baos.toByteArray();
@@ -77,6 +103,7 @@ public class FileParseService {
         }
 
         // 3. 填充基础字段
+        result.setFileId(userFile.getId());
         result.setOriginalFileName(userFile.getOriginalFileName());
         result.setFileSize(userFile.getFileSize());
 
@@ -107,6 +134,7 @@ public class FileParseService {
         byte[] fileBytes = baos.toByteArray();
 
         FileParseResult result = parserRouter.parse(fileBytes, userFile.getOriginalFileName());
+        result.setFileId(userFile.getId());
         result.setOriginalFileName(userFile.getOriginalFileName());
         result.setFileSize(userFile.getFileSize());
         if (userFile.getDownloadUrl() != null) {

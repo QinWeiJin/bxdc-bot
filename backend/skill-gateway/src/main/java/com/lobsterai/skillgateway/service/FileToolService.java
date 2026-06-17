@@ -1,7 +1,9 @@
 package com.lobsterai.skillgateway.service;
 
+import com.lobsterai.skillgateway.dto.ExcelOperationResult;
 import com.lobsterai.skillgateway.dto.FileToolRequest;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
+import com.lobsterai.skillgateway.entity.Conversation;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.util.AamTokenUtil;
@@ -36,14 +38,23 @@ public class FileToolService {
     private final FileRefResolver fileRefResolver;
     private final UserFileMapper userFileMapper;
     private final FileParseService fileParseService;
+    private final ExcelToolService excelToolService;
+    private final ConversationService conversationService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final Map<String, ToolHandler> handlers = new ConcurrentHashMap<String, ToolHandler>();
 
     public FileToolService(FileRefResolver fileRefResolver,
                            UserFileMapper userFileMapper,
-                           FileParseService fileParseService) {
+                           FileParseService fileParseService,
+                           ExcelToolService excelToolService,
+                           ConversationService conversationService,
+                           com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         this.fileRefResolver = fileRefResolver;
         this.userFileMapper = userFileMapper;
         this.fileParseService = fileParseService;
+        this.excelToolService = excelToolService;
+        this.conversationService = conversationService;
+        this.objectMapper = objectMapper;
         initHandlers();
     }
 
@@ -74,11 +85,81 @@ public class FileToolService {
             }
         });
 
-        // ===== 占位：后续任务实现 =====
-        // Word 操作（task 5.3）— 后续注册
-        // TXT 操作（task 5.4）— 后续注册
-        // Excel 操作（task 5.2）— 启雷注册
-        // MD 操作（task 5.5）— 壮注册
+        // ===== Excel 操作（task 5.2）=====
+        handlers.put("excel_read", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                return excelToolResultToResponse(excelToolService.read(userFile.getId(), userId));
+            }
+        });
+        handlers.put("excel_filter", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                List<ExcelOperationResult.FilterCriteria> criteria = parseFilterCriteria(params);
+                return excelToolResultToResponse(excelToolService.filter(userFile.getId(), userId, criteria));
+            }
+        });
+        handlers.put("excel_sort", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                List<ExcelOperationResult.SortSpec> sortSpecs = parseSortSpecs(params);
+                return excelToolResultToResponse(excelToolService.sort(userFile.getId(), userId, sortSpecs));
+            }
+        });
+        handlers.put("excel_aggregate", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                String groupBy = (String) params.get("groupBy");
+                List<ExcelOperationResult.AggregationSpec> aggs = parseAggregationSpecs(params);
+                return excelToolResultToResponse(excelToolService.aggregate(userFile.getId(), userId, groupBy, aggs));
+            }
+        });
+        handlers.put("excel_pivot", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                String rowField = (String) params.get("rowField");
+                String colField = (String) params.get("colField");
+                String valueField = (String) params.get("valueField");
+                return excelToolResultToResponse(excelToolService.pivot(userFile.getId(), userId, rowField, colField, valueField));
+            }
+        });
+        handlers.put("excel_calculate", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                List<ExcelOperationResult.CalculateExpression> exprs = parseExpressions(params);
+                return excelToolResultToResponse(excelToolService.calculate(userFile.getId(), userId, exprs));
+            }
+        });
+        handlers.put("excel_select_columns", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                @SuppressWarnings("unchecked")
+                List<String> columns = (List<String>) params.get("columns");
+                return excelToolResultToResponse(excelToolService.selectColumns(userFile.getId(), userId, columns));
+            }
+        });
+        handlers.put("excel_clean", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                String strategy = (String) params.get("strategy");
+                return excelToolResultToResponse(excelToolService.clean(userFile.getId(), userId, strategy));
+            }
+        });
+        handlers.put("excel_convert_format", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                String format = (String) params.get("targetFormat");
+                return excelToolResultToResponse(excelToolService.convertFormat(userFile.getId(), userId, format));
+            }
+        });
+        handlers.put("excel_validate", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> rules = (List<Map<String, Object>>) params.get("rules");
+                return excelToolResultToResponse(excelToolService.validate(userFile.getId(), userId, rules));
+            }
+        });
     }
 
     /**
@@ -105,6 +186,23 @@ public class FileToolService {
      * @return 统一响应
      */
     public FileToolResponse execute(String userId, String toolName, Map<String, Object> arguments) {
+        return execute(userId, toolName, arguments, null);
+    }
+
+    /**
+     * 带 conversationId 的执行入口。
+     * <p>
+     * open spec: conversation-file-isolation — 在执行上下文设置 enabled_files，
+     * FileManageService 通过 {@link FileToolConversationContext} 读取并按会话过滤。
+     * </p>
+     *
+     * @param userId         用户 ID
+     * @param toolName       工具名
+     * @param arguments      请求参数
+     * @param conversationId 会话 ID（可空）；非空时从 Conversation.enabled_files 解析权限列表
+     */
+    public FileToolResponse execute(String userId, String toolName,
+                                    Map<String, Object> arguments, String conversationId) {
         if (toolName == null || toolName.trim().isEmpty()) {
             return FileToolResponse.error("toolName is required");
         }
@@ -117,18 +215,57 @@ public class FileToolService {
 
         Map<String, Object> args = arguments != null ? arguments : Collections.<String, Object>emptyMap();
         String fileRef = args.get("fileRef") instanceof String ? (String) args.get("fileRef") : null;
+        Long fileId = args.get("fileId") instanceof Number ? ((Number) args.get("fileId")).longValue() : null;
+        String fileName = args.get("fileName") instanceof String ? (String) args.get("fileName") : null;
 
         try {
             UserFile userFile = null;
             if (!isManagementTool(toolName)) {
-                if (fileRef == null || fileRef.trim().isEmpty()) {
-                    return FileToolResponse.error("fileRef is required for tool: " + toolName);
+                // 优先使用 fileId
+                if (fileId != null) {
+                    userFile = userFileMapper.selectById(fileId);
+                    if (userFile == null) {
+                        return FileToolResponse.error("File not found by id: " + fileId);
+                    }
+                    // 验证文件归属
+                    if (!userId.equals(userFile.getUserId())) {
+                        return FileToolResponse.error("Access denied: file does not belong to current user");
+                    }
+                } else if (fileRef != null && !fileRef.trim().isEmpty()) {
+                    userFile = fileRefResolver.resolve(userId, fileRef);
+                } else if (fileName != null && !fileName.trim().isEmpty()) {
+                    userFile = fileRefResolver.resolve(userId, fileName);
+                } else if (!isOptionalFileIdTool(toolName)) {
+                    // 非 OptionalFileId 工具必须提供 fileId 或 fileRef
+                    return FileToolResponse.error("fileId or fileRef is required for tool: " + toolName);
                 }
-                userFile = fileRefResolver.resolve(userId, fileRef);
+                // OptionalFileId 工具允许 fileId 和 fileRef 都为空，userFile 保持 null
             }
-            // 从 arguments 提取工具特定 params（排除 fileRef）
-            Map<String, Object> toolParams = extractToolParams(args);
-            return handler.handle(userFile, toolParams, userId);
+            // 设置当前会话 enabled_files 上下文（FileManageService 会读取并按会话过滤）
+            List<Long> enabledFiles = resolveEnabledFiles(conversationId, userId);
+            FileToolConversationContext.set(enabledFiles);
+
+            // open spec: conversation-file-isolation — 操作类工具统一校验：
+            // 非管理类工具（Excel/Word/Txt/MD 等必须有 userFile 的工具）需校验文件是否在 enabled_files 内
+            if (!isManagementTool(toolName) && enabledFiles != null && userFile != null
+                    && !enabledFiles.contains(userFile.getId())) {
+                return FileToolResponse.error(
+                        "文件(ID=" + userFile.getId() + ")不在当前会话权限内，请先确认文件已上传并在会话配置面板中勾选，或使用 file_list 查看可用文件",
+                        userFile.getOriginalFileName());
+            }
+
+            try {
+                // 从 arguments 提取工具特定 params（排除 fileId、fileRef、fileName）
+                Map<String, Object> toolParams = extractToolParams(args);
+                FileToolResponse response = handler.handle(userFile, toolParams, userId);
+
+                // open spec: conversation-file-isolation — 工具操作产生的新文件自动绑定到当前会话
+                autoBindCreatedFiles(response, conversationId, userId);
+
+                return response;
+            } finally {
+                FileToolConversationContext.clear();
+            }
         } catch (IllegalArgumentException e) {
             log.warn("File tool '{}' error: {}", toolName, e.getMessage());
             return FileToolResponse.error(e.getMessage(), fileRef);
@@ -139,11 +276,82 @@ public class FileToolService {
     }
 
     /**
+     * 解析会话的 enabled_files。
+     * <ul>
+     *   <li>conversationId 为 null → 返回 null（表示不启用过滤，向后兼容）</li>
+     *   <li>对话的 enabled_files 为 NULL → 返回 null（存量对话，向后兼容）</li>
+     *   <li>对话的 enabled_files 为空数组 [] → 返回空列表（启用隔离但权限为空）</li>
+     *   <li>解析为 JSON 数组 → 返回 Long 列表</li>
+     * </ul>
+     */
+    private List<Long> resolveEnabledFiles(String conversationId, String userId) {
+        if (conversationId == null || conversationId.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            Conversation conv = conversationService.getById(conversationId, userId);
+            if (conv == null || conv.getEnabledFiles() == null || "null".equals(conv.getEnabledFiles())) {
+                return null;
+            }
+            Long[] arr = objectMapper.readValue(conv.getEnabledFiles(), Long[].class);
+            List<Long> result = new ArrayList<Long>();
+            if (arr != null) {
+                for (Long id : arr) {
+                    if (id != null) result.add(id);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("resolveEnabledFiles failed for conv={}: {}", conversationId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * open spec: conversation-file-isolation
+     * 工具操作产生的文件（临时/下载/新建）自动绑定到当前会话的 enabled_files。
+     * <p>
+     * 从响应 output 中提取 fileId / newFileId / resultFileId，验证文件存在且归属当前用户后
+     * 调用 {@link ConversationService#appendEnabledFile} 写入（幂等，重复调用无副作用）。
+     * </p>
+     */
+    private void autoBindCreatedFiles(FileToolResponse response, String conversationId, String userId) {
+        if (conversationId == null || conversationId.trim().isEmpty()) return;
+        if (response == null || !response.isSuccess()) return;
+        if (!(response.getOutput() instanceof Map)) return;
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> output = (Map<String, Object>) response.getOutput();
+        String[] keys = {"fileId", "newFileId", "resultFileId"};
+
+        for (String key : keys) {
+            Object val = output.get(key);
+            if (val == null) continue;
+            long fileId = val instanceof Number ? ((Number) val).longValue() : -1;
+            if (fileId <= 0) continue;
+
+            try {
+                UserFile uf = userFileMapper.selectById(fileId);
+                if (uf != null && userId.equals(uf.getUserId())) {
+                    conversationService.appendEnabledFile(conversationId, userId, fileId);
+                    log.debug("autoBindCreatedFiles: bound fileId={} to conv={}", fileId, conversationId);
+                }
+            } catch (Exception e) {
+                log.warn("autoBindCreatedFiles failed for fileId={}: {}", fileId, e.getMessage());
+            }
+        }
+    }
+
+    /**
      * 调度文件工具请求（通过 FileToolController 直接调用，保留兼容）。
      */
     public FileToolResponse execute(HttpServletRequest request, FileToolRequest body) {
         String userId = AamTokenUtil.requireUserId(request);
         Map<String, Object> arguments = new LinkedHashMap<String, Object>();
+        // 优先使用 fileId
+        if (body.getFileId() != null) {
+            arguments.put("fileId", body.getFileId());
+        }
         arguments.put("fileRef", body.getFileRef());
         if (body.getParams() != null) {
             arguments.putAll(body.getParams());
@@ -243,12 +451,22 @@ public class FileToolService {
     }
 
     /**
-     * 从 arguments map 提取工具特定参数（排除 fileRef 等通用字段）。
+     * 判断工具是否允许不传 fileId（fileId 可选）。
+     * 这些工具在没有 fileId 时会创建新文件。
+     */
+    private boolean isOptionalFileIdTool(String toolName) {
+        return "excel_write".equals(toolName) || "word_write".equals(toolName) || "txt_write".equals(toolName);
+    }
+
+    /**
+     * 从 arguments map 提取工具特定参数（排除 fileId、fileRef 等通用字段）。
      */
     private Map<String, Object> extractToolParams(Map<String, Object> arguments) {
         Map<String, Object> params = new LinkedHashMap<String, Object>();
         for (Map.Entry<String, Object> entry : arguments.entrySet()) {
+            if ("fileId".equals(entry.getKey())) continue;
             if ("fileRef".equals(entry.getKey())) continue;
+            if ("fileName".equals(entry.getKey())) continue;
             params.put(entry.getKey(), entry.getValue());
         }
         return params;
@@ -271,5 +489,81 @@ public class FileToolService {
          * @throws Exception 处理异常
          */
         FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception;
+    }
+
+    // ================================================================
+    // Excel 工具辅助方法
+    // ================================================================
+
+    private FileToolResponse excelToolResultToResponse(ExcelOperationResult result) {
+        Map<String, Object> data = new LinkedHashMap<String, Object>();
+        data.put("success", result.isSuccess());
+        data.put("operation", result.getOperation());
+        
+        if (result.getResult() != null) {
+            data.put("columns", result.getResult().getColumns());
+            data.put("rows", result.getResult().getRows());
+            data.put("rowCount", result.getRowCount());
+            data.put("colCount", result.getColCount());
+        }
+        
+        if (result.getDownloadUrl() != null) {
+            data.put("downloadUrl", result.getDownloadUrl());
+        }
+        
+        if (result.getMessage() != null) {
+            data.put("message", result.getMessage());
+        }
+        
+        return FileToolResponse.ok(data, "excel_tool");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ExcelOperationResult.FilterCriteria> parseFilterCriteria(Map<String, Object> params) {
+        List<Map<String, Object>> criteriaList = (List<Map<String, Object>>) params.get("criteria");
+        List<ExcelOperationResult.FilterCriteria> criteria = new ArrayList<ExcelOperationResult.FilterCriteria>();
+        for (Map<String, Object> c : criteriaList) {
+            criteria.add(new ExcelOperationResult.FilterCriteria(
+                    (String) c.get("column"),
+                    (String) c.get("operator"),
+                    c.get("value")));
+        }
+        return criteria;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ExcelOperationResult.SortSpec> parseSortSpecs(Map<String, Object> params) {
+        List<Map<String, Object>> sortList = (List<Map<String, Object>>) params.get("sortSpecs");
+        List<ExcelOperationResult.SortSpec> sortSpecs = new ArrayList<ExcelOperationResult.SortSpec>();
+        for (Map<String, Object> s : sortList) {
+            sortSpecs.add(new ExcelOperationResult.SortSpec(
+                    (String) s.get("column"),
+                    (String) s.get("order")));
+        }
+        return sortSpecs;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ExcelOperationResult.AggregationSpec> parseAggregationSpecs(Map<String, Object> params) {
+        List<Map<String, Object>> aggList = (List<Map<String, Object>>) params.get("aggregations");
+        List<ExcelOperationResult.AggregationSpec> aggs = new ArrayList<ExcelOperationResult.AggregationSpec>();
+        for (Map<String, Object> a : aggList) {
+            aggs.add(new ExcelOperationResult.AggregationSpec(
+                    (String) a.get("column"),
+                    (String) a.get("function")));
+        }
+        return aggs;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ExcelOperationResult.CalculateExpression> parseExpressions(Map<String, Object> params) {
+        List<Map<String, Object>> exprList = (List<Map<String, Object>>) params.get("expressions");
+        List<ExcelOperationResult.CalculateExpression> exprs = new ArrayList<ExcelOperationResult.CalculateExpression>();
+        for (Map<String, Object> e : exprList) {
+            exprs.add(new ExcelOperationResult.CalculateExpression(
+                    (String) e.get("newColumn"),
+                    (String) e.get("expression")));
+        }
+        return exprs;
     }
 }

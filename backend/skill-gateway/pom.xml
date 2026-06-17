@@ -80,6 +80,35 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- flexmark-java 0.62.2: GFM 解析（模块四 §4 md_* 9 个 tool 用）。
+             注意：0.62.2 时代核心 jar 叫 "flexmark"（不是 0.64.8 的 "flexmark-core"），
+             任务列表 ext 叫 "flexmark-ext-gfm-tasklist"（不是 0.64.8 的 "flexmark-ext-tasklist"）。
+             5 个 dependency 共同驱动 flexmark Parser + GFM 扩展。 -->
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark</artifactId>
+            <version>0.62.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-ext-tables</artifactId>
+            <version>0.62.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-ext-gfm-tasklist</artifactId>
+            <version>0.62.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-ext-yaml-front-matter</artifactId>
+            <version>0.62.2</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vladsch.flexmark</groupId>
+            <artifactId>flexmark-ext-gfm-strikethrough</artifactId>
+            <version>0.62.2</version>
+        </dependency>
     </dependencies>
 
     <build>
