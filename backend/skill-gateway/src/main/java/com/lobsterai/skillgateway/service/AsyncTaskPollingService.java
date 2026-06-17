@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.dto.AsyncTaskNotificationDto;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.event.UserEventBus;
 import com.lobsterai.skillgateway.mapper.AsyncTaskMapper;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -86,12 +88,14 @@ public class AsyncTaskPollingService {
     private final AsyncTaskMapper asyncTaskMapper;
     private final ObjectMapper objectMapper;
     private final SkillService skillService;
+    private final UserEventBus userEventBus;
 
     public AsyncTaskPollingService(AsyncTaskMapper asyncTaskMapper, ObjectMapper objectMapper,
-                                   SkillService skillService) {
+                                   SkillService skillService, UserEventBus userEventBus) {
         this.asyncTaskMapper = asyncTaskMapper;
         this.objectMapper = objectMapper;
         this.skillService = skillService;
+        this.userEventBus = userEventBus;
     }
 
     public AsyncTask createTask(AsyncTask task) {
@@ -99,6 +103,8 @@ public class AsyncTaskPollingService {
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
         asyncTaskMapper.insert(task);
+        // 新任务默认 unread：推 SSE 让通知中心 badge 实时 +1
+        notifyUnreadCountChanged(task.getUserId());
         return task;
     }
 
@@ -140,6 +146,8 @@ public class AsyncTaskPollingService {
         task.setUpdatedAt(LocalDateTime.now());
         // 默认未读：notified_at = NULL
         asyncTaskMapper.insert(task);
+        // Bxdcbot 子任务通知：推 SSE 让通知中心 badge 实时 +1
+        notifyUnreadCountChanged(userId);
         return task;
     }
 
@@ -403,7 +411,9 @@ public class AsyncTaskPollingService {
     }
 
     public int markRead(Long taskId, String userId) {
-        return asyncTaskMapper.markRead(taskId, userId);
+        int affected = asyncTaskMapper.markRead(taskId, userId);
+        if (affected > 0) notifyUnreadCountChanged(userId);
+        return affected;
     }
 
     public int autoMarkStaleAsRead() {
@@ -411,12 +421,35 @@ public class AsyncTaskPollingService {
     }
 
     public int deleteByIdAndUser(Long taskId, String userId) {
-        return asyncTaskMapper.deleteByIdAndUser(taskId, userId);
+        int affected = asyncTaskMapper.deleteByIdAndUser(taskId, userId);
+        if (affected > 0) notifyUnreadCountChanged(userId);
+        return affected;
     }
 
     public int deleteByIdsAndUser(String userId, java.util.List<Long> ids) {
         if (ids == null || ids.isEmpty()) return 0;
-        return asyncTaskMapper.deleteByIdsAndUser(userId, ids);
+        int affected = asyncTaskMapper.deleteByIdsAndUser(userId, ids);
+        if (affected > 0) notifyUnreadCountChanged(userId);
+        return affected;
+    }
+
+    /**
+     * 推 "unread_count_changed" 事件到该 user 的所有 SSE 订阅者。
+     * 前端收到后主动调 fetchUnreadCount() 拿最新值。
+     *
+     * 为啥不直接在 payload 附 count：createTask 立即调 count 时 Hikari 连接可能拿到未提交
+     * 新行的 stale snapshot，导致 SSE 推的 count 落后于真实值。让 frontend re-fetch 是最稳的。
+     *
+     * 触发点（影响 unread count 的所有操作）：
+     * - createTask / createBxdcbotSubtaskNotification（新任务默认 unread，count +1）
+     * - markRead（已读，count -1）
+     * - deleteByIdAndUser / deleteByIdsAndUser（删除，count -N）
+     * 注意：updatePollResult（任务转到终态）不会改 count —— 任务创建时已经计数。
+     */
+    private void notifyUnreadCountChanged(String userId) {
+        if (userId == null || userId.isEmpty()) return;
+        userEventBus.publish(userId, "unread_count_changed", java.util.Collections.emptyMap());
+        log.debug("[AsyncTaskPollingService] push unread_count_changed userId={}", userId);
     }
 
     private String buildPreview(AsyncTask t) {
