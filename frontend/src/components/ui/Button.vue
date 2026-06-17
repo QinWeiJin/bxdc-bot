@@ -4,6 +4,7 @@ interface Props {
   size?: 'sm' | 'md' | 'lg'
   disabled?: boolean
   loading?: boolean
+  dataRef?: string
 }
 
 withDefaults(defineProps<Props>(), {
@@ -20,6 +21,7 @@ const emit = defineEmits<{
 
 <template>
   <button
+    :data-ref="dataRef"
     class="inline-flex items-center justify-center rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
     :class="[
       // Variants

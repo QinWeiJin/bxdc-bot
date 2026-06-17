@@ -1,6 +1,8 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.entity.PythonSandbox;
 import com.lobsterai.skillgateway.entity.SystemSkill;
+import com.lobsterai.skillgateway.service.PythonSandboxService;
 import com.lobsterai.skillgateway.service.SystemSkillService;
 import com.lobsterai.skillgateway.util.StringUtils;
 import org.springframework.http.ResponseEntity;
@@ -23,9 +25,12 @@ import java.util.stream.Collectors;
 public class SystemSkillController {
 
     private final SystemSkillService systemSkillService;
+    private final PythonSandboxService pythonSandboxService;
 
-    public SystemSkillController(SystemSkillService systemSkillService) {
+    public SystemSkillController(SystemSkillService systemSkillService,
+                                 PythonSandboxService pythonSandboxService) {
         this.systemSkillService = systemSkillService;
+        this.pythonSandboxService = pythonSandboxService;
     }
 
     /**
@@ -56,7 +61,65 @@ public class SystemSkillController {
         templateType.put("configSchema", buildTemplateConfigSchema());
         types.add(templateType);
 
+        // Python Skill（动态从 python_sandbox 表加载；每行 enabled=true 一项）
+        for (PythonSandbox sandbox : pythonSandboxService.listEnabled()) {
+            Map<String, Object> pythonType = new LinkedHashMap<>();
+            pythonType.put("type", "python");
+            pythonType.put("label", sandbox.getName()
+                    + (StringUtils.isBlank(sandbox.getDescription()) ? "" : ": " + sandbox.getDescription()));
+            pythonType.put("configSchema", buildPythonConfigSchema());
+            types.add(pythonType);
+        }
+
         return types;
+    }
+
+    /**
+     * Python Skill 配置 schema —— 与 api/ssh 同形，靠 ConfigFormRenderer 动态渲染。
+     * sandboxName 用 select 渲染（候选由前端另外拉 /api/python-sandbox?enabled=true）。
+     * code 是用户写死的 Python 源码，调用时由 Gateway 注入到出站 body（覆盖 LLM 误传）。
+     * operation 决定 LLM 工具名后缀。
+     */
+    private Map<String, Object> buildPythonConfigSchema() {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        Map<String, Object> props = new LinkedHashMap<>();
+
+        Map<String, Object> sandboxName = new LinkedHashMap<>();
+        sandboxName.put("type", "string");
+        sandboxName.put("label", "Python 沙箱");
+        sandboxName.put("required", true);
+        sandboxName.put("ui", "select");
+        sandboxName.put("aiHint", "引用 python_sandbox 表里的外部沙箱服务名（由 admin 配置）");
+        props.put("sandboxName", sandboxName);
+
+        Map<String, Object> code = new LinkedHashMap<>();
+        code.put("type", "string");
+        code.put("label", "Python 脚本");
+        code.put("required", true);
+        code.put("ui", "textarea");
+        code.put("placeholder", "print('hello')\nimport sys\nprint(sys.version)");
+        code.put("aiHint", "用户写死的 Python 源码。调用时由 Gateway 注入到出站 body 的 code 字段（覆盖 LLM 误传），由沙箱服务执行");
+        props.put("code", code);
+
+        Map<String, Object> operation = new LinkedHashMap<>();
+        operation.put("type", "string");
+        operation.put("label", "操作标识");
+        operation.put("required", true);
+        operation.put("ui", "input");
+        operation.put("placeholder", "例如：run-python");
+        operation.put("aiHint", "唯一标识该 Skill 操作的 key（LLM 工具名后缀）");
+        props.put("operation", operation);
+
+        Map<String, Object> iface = new LinkedHashMap<>();
+        iface.put("type", "string");
+        iface.put("label", "接口功能描述");
+        iface.put("ui", "textarea");
+        iface.put("aiHint", "向 LLM 解释这个 Python Skill 的用途和入参约束");
+        props.put("interfaceDescription", iface);
+
+        schema.put("properties", props);
+        return schema;
     }
 
     private Map<String, Object> buildApiConfigSchema() {

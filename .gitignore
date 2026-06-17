@@ -4,6 +4,9 @@ node_modules/
 # Build outputs
 # dist/ 在部署环境（内网）从源码 npm run build 生成，不进 git
 dist-ssr/
+
+# E2E test reports (generated artifacts)
+tests/e2e/reports/
 target/
 frontend/dist/
 backend/agent-core/dist/
@@ -48,6 +51,8 @@ frontend-react-backup/
 
 # skills
 skills/
+# .trae/skills/ 是项目 Trae AI 技能，需要提交
+!.trae/skills/
 
 # Local dev tools (per-developer, not committed)
 # e.g. .dev-ftp-test/ — 本地测试用 FTP + 启动/停止/状态脚本

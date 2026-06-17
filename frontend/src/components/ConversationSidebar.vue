@@ -196,7 +196,7 @@ function handleEditKeydown(event: KeyboardEvent) {
 
     <template v-if="!collapsed">
       <!-- New conversation button -->
-      <div class="sidebar-header">
+      <div class="sidebar-header" data-ref="new-conversation-btn">
         <t-button
           block
           theme="primary"

@@ -208,6 +208,8 @@ public class ChatMessageService {
         m.put("skill_outputs", msg.getSkillOutputs());
         m.put("source", msg.getSource());
         m.put("async_task_id", msg.getAsyncTaskId());
+        m.put("parent_tool_id", msg.getParentToolId());
+        m.put("parent_skill_id", msg.getParentSkillId());
         m.put("summary_pending", msg.getSummaryPending());
         m.put("summary_text", msg.getSummaryText());
         m.put("summary_generated_at", msg.getSummaryGeneratedAt() != null ? msg.getSummaryGeneratedAt().toString() : null);

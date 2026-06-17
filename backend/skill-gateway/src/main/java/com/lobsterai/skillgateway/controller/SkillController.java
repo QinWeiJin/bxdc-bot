@@ -201,7 +201,9 @@ public class SkillController {
             req.adjustedParams = body.get("adjustedParams");
             req.userId = userId;
             req.sessionId = sessionId;
-            req.conversationId = conversationId;
+            // conversation-file-isolation: zhangzhuang merge 后 153 行引用 req.conversationId
+            // 兼容 X-Conversation-Id header（zhangzhuang 新增），X-Session-Id 兜底
+            req.conversationId = conversationId != null && !conversationId.isEmpty() ? conversationId : sessionId;
             // bxdcbot-multi-turn-async：父任务标识
             req.parentToolId = (String) body.get("parentToolId");
             req.parentSkillId = body.get("parentSkillId") instanceof Number

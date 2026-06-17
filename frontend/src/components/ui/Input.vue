@@ -6,6 +6,7 @@ interface Props {
   label?: string
   error?: string
   disabled?: boolean
+  dataRef?: string
 }
 
 withDefaults(defineProps<Props>(), {
@@ -29,6 +30,7 @@ const emit = defineEmits<{
       :type="type"
       :placeholder="placeholder"
       :disabled="disabled"
+      :data-ref="dataRef"
       class="flex h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-white file:border-0:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200"
       :class="{ 'border-red-500 focus-visible:ring-red-500': error }"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"

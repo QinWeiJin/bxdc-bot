@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { Chat as TChat, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest, type PollingStatus } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
+import { useConversations } from '../composables/useConversations'
 import { useSkillHub } from '../composables/useSkillHub'
 import { useThinkingMode } from '../composables/useThinkingMode'
 import UserAvatar from './UserAvatar.vue'
@@ -16,11 +17,41 @@ import { MessagePlugin } from 'tdesign-vue-next'
 
 const { messages, isThinking, confirmSkillAction, updateConfirmationArguments } = useChat()
 const { currentUser } = useUser()
+const conversations = useConversations()
 const { skills, fetchSkills } = useSkillHub()
 const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 const downloadLoading = ref(false)
+
+// Scroll-to-top pagination for conversation history
+const messageListRef = ref<HTMLElement | null>(null)
+let chatListEl: HTMLElement | null = null
+
+function ensureScrollListener() {
+  if (chatListEl) return
+  const list = messageListRef.value?.querySelector('.t-chat__list') as HTMLElement | null
+  if (list) {
+    chatListEl = list
+    list.addEventListener('scroll', handleChatScroll)
+  }
+}
+
+async function handleChatScroll() {
+  const el = chatListEl
+  if (!el) return
+  if (el.scrollTop >= 50) return
+  if (!conversations.hasMoreHistory.value) return
+  if (conversations.isLoadingHistory.value) return
+  if (conversations.isProcessing.value) return
+
+  const oldScrollHeight = el.scrollHeight
+  await conversations.loadMoreMessages(currentUser.value!.id)
+  await nextTick()
+  if (chatListEl) {
+    chatListEl.scrollTop = chatListEl.scrollHeight - oldScrollHeight
+  }
+}
 
 // 从通知中心跳转标记：进入页面时显示一个"已从通知进入"的 banner，几秒后自动消失
 const showFromNotificationBanner = ref(false)
@@ -37,7 +68,15 @@ try {
   // ignore
 }
 
-onMounted(() => { fetchSkills() })
+onMounted(() => {
+  fetchSkills()
+  nextTick(() => ensureScrollListener())
+})
+
+onUnmounted(() => {
+  chatListEl?.removeEventListener('scroll', handleChatScroll)
+  chatListEl = null
+})
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   if (status === 'completed') return '已完成'
@@ -586,6 +625,18 @@ const chatItems = computed(() =>
   } as any)),
 )
 
+// Set up scroll listener when chat items first appear (initial history load)
+watch(chatItems, (items) => {
+  if (items.length > 0) {
+    nextTick(() => ensureScrollListener())
+  } else {
+    if (chatListEl) {
+      chatListEl.removeEventListener('scroll', handleChatScroll)
+      chatListEl = null
+    }
+  }
+})
+
 async function handleDownload(format: 'md' | 'pdf', msg: Message) {
   downloadLoading.value = true
   try {
@@ -613,7 +664,7 @@ async function copyContent(text: string) {
 </script>
 
 <template>
-  <div class="message-list">
+  <div class="message-list" ref="messageListRef">
     <div v-if="latestAssistantMessage" class="message-list-toolbar">
       <t-button size="small" variant="outline" @click="openLatestLogViewer">
         日志查看
@@ -640,6 +691,10 @@ async function copyContent(text: string) {
           </span>
         </div>
       </transition>
+
+      <div v-if="conversations.isLoadingHistory.value" class="load-more-indicator">
+        <t-loading size="small" /> 加载历史消息...
+      </div>
 
       <TChat
       class="chat-panel"
@@ -1042,6 +1097,16 @@ async function copyContent(text: string) {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.load-more-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--td-text-color-placeholder);
+  font-size: 13px;
 }
 
 @media (min-width: 768px) {
