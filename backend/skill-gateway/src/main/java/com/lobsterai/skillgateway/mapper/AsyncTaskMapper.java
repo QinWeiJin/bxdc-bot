@@ -24,7 +24,13 @@ public interface AsyncTaskMapper extends BaseMapper<AsyncTask> {
                 .in(AsyncTask::getStatus, "PENDING", "POLLING")
                 .and(w -> w.isNull(AsyncTask::getLastPolledAt)
                         .or()
-                        .apply("TIMESTAMPDIFF(SECOND, last_polled_at, UTC_TIMESTAMP()) >= poll_interval_seconds"))
+                        // 用 UNIX_TIMESTAMP() 不用 NOW()/UTC_TIMESTAMP()：
+                        //   - gateway JVM 时区是 Asia/Shanghai，写入 last_polled_at 用 LocalDateTime（也是 Asia/Shanghai）
+                        //   - MySQL 容器时区是 UTC（docker 容器默认），所以 NOW() 返回 UTC，跟 last_polled_at 差 8 小时
+                        //   - UTC_TIMESTAMP() 也返回 UTC，同样差 8 小时
+                        // UNIX_TIMESTAMP(NOW()) 和 UNIX_TIMESTAMP(last_polled_at) 都返回 epoch 秒（绝对值），
+                        // 两者做差是 timezone-independent 的，无论 MySQL session timezone 怎么设都正确。
+                        .apply("(UNIX_TIMESTAMP() - UNIX_TIMESTAMP(last_polled_at)) >= poll_interval_seconds"))
                 .orderByAsc(AsyncTask::getCreatedAt)
                 .last("LIMIT " + limit));
     }

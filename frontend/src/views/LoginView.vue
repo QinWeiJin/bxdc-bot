@@ -26,17 +26,18 @@ async function handleLogin() {
 <template>
   <div class="min-h-screen flex items-center justify-center bg-slate-50 p-4">
     <Card class="w-full max-w-md shadow-lg border-0" title="欢迎回来" description="输入您的 ID 以访问账户">
-      <form @submit.prevent="handleLogin" class="space-y-6">
+      <form @submit.prevent="handleLogin" class="space-y-6" data-ref="login-form">
         <Input
           v-model="userId"
           label="用户 ID"
           placeholder="请输入 6 位数字 ID"
           :error="error"
           :disabled="loading"
+          data-ref="login-user-id"
         />
-        
+
         <div class="pt-2">
-          <Button type="submit" class="w-full" :loading="loading">
+          <Button type="submit" class="w-full" :loading="loading" data-ref="login-submit-btn">
             登录
           </Button>
         </div>

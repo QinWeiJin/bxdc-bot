@@ -122,6 +122,9 @@ public class ConversationService {
             m.put("source", msg.getSource());
             // async-task-result-echo-to-chat: 异步任务结果消息专用字段
             m.put("async_task_id", msg.getAsyncTaskId());
+            // bxdcbot-multi-turn-async change: BXDCBOT_RUN_RESULT 消息的 parent_tool_id=runId, parent_skill_id=skillId
+            m.put("parent_tool_id", msg.getParentToolId());
+            m.put("parent_skill_id", msg.getParentSkillId());
             m.put("summary_pending", msg.getSummaryPending());
             m.put("summary_text", msg.getSummaryText());
             m.put("summary_generated_at", msg.getSummaryGeneratedAt() != null ? msg.getSummaryGeneratedAt().toString() : null);

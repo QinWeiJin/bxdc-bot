@@ -749,6 +749,8 @@ export function provideChat() {
     addMessage(userMessage)
     isThinking.value = true
     error.value = null
+    // Prevent switching conversations mid-stream
+    try { useConversations().isProcessing.value = true } catch { /* fail-safe */ }
 
     try {
       // Get recent history (e.g., last 10 messages) to provide short-term context
@@ -810,6 +812,7 @@ export function provideChat() {
       if (!response.ok) {
         console.error('[skill] Failed to connect to agent:', response.statusText)
         isThinking.value = false
+        try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
         error.value = 'Failed to connect to agent'
         return
       }
@@ -818,6 +821,7 @@ export function provideChat() {
       if (!reader) {
         console.error('[skill] No response body')
         isThinking.value = false
+        try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
         return
       }
 
@@ -831,6 +835,7 @@ export function provideChat() {
           console.log('Stream complete')
           settleLastToolInvocations('completed')
           isThinking.value = false
+          try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
           // 完成思考模式会话
           if (activeSessionId.value) {
             completeSession(activeSessionId.value)
@@ -972,6 +977,7 @@ export function provideChat() {
                 error.value = data.error
                 settleLastToolInvocations('failed')
                 isThinking.value = false
+                try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
                 return
               }
 
@@ -992,6 +998,7 @@ export function provideChat() {
       console.error('[skill] Failed to send message:', err)
       error.value = err instanceof Error ? err.message : 'Failed to send message'
       isThinking.value = false
+      try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
       activeSessionId.value = null
     } finally {
       // 发送完成后清空文件状态（任务 8.4）

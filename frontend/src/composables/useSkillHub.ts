@@ -86,6 +86,7 @@ const isSkillManagementVisible = ref(false);
 const skills = ref<Skill[]>([]);
 const isLoading = ref(false);
 const error = ref<string | null>(null);
+const nicknameByUserId = ref<Record<string, string>>({});
 
 export const BUILT_IN_SKILLS = [
   {
@@ -192,6 +193,23 @@ export function useSkillHub() {
         throw new Error('Failed to fetch skills');
       }
       skills.value = await res.json();
+      // 获取 Skill 作者昵称映射
+      const uniqueUsers = [...new Set(skills.value.map(s => s.createdBy).filter(Boolean) as string[])];
+      for (const uid of uniqueUsers) {
+        if (nicknameByUserId.value[uid] === undefined) {
+          try {
+            const userRes = await fetch(apiUrl(`/api/user/${uid}`));
+            if (userRes.ok) {
+              const user = await userRes.json();
+              nicknameByUserId.value[uid] = user.nickname || uid;
+            } else {
+              nicknameByUserId.value[uid] = uid;
+            }
+          } catch {
+            nicknameByUserId.value[uid] = uid;
+          }
+        }
+      }
     } catch (e) {
       console.error(e);
       error.value = e instanceof Error ? e.message : 'Unknown error';
@@ -303,6 +321,7 @@ export function useSkillHub() {
     skills,
     isLoading,
     error,
+    nicknameByUserId,
     toggleSkillHub,
     openSkillHub,
     closeSkillHub,

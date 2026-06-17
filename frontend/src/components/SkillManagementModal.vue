@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch, nextTick } from 'vue';
-import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next';
+import { AddIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import TextOptimizeModal from './TextOptimizeModal.vue';
 import ConfigFormRenderer from './ConfigFormRenderer.vue';
@@ -9,9 +9,6 @@ import {
   BUILT_IN_SKILLS,
   type Skill,
   useSkillHub,
-  getExecutionModeLabel,
-  getConfigSummary,
-  canManageGatewaySkill,
 } from '../composables/useSkillHub';
 import { useUser } from '../composables/useUser';
 import { useConversations } from '../composables/useConversations';
@@ -32,24 +29,20 @@ import {
   type TemplateConfigDraft,
 } from '../utils/skillEditor';
 
+const emit = defineEmits<{
+  (e: 'saved'): void
+}>()
+
 const {
-  isSkillManagementVisible,
   skills,
   isLoading,
-  error,
-  closeSkillManagement,
   createSkill,
   updateSkill,
   deleteSkill,
-  toggleSkillEnabled,
   fetchSkill,
 } = useSkillHub();
 
 const { currentUser } = useUser();
-
-function canManageRow(row: Skill): boolean {
-  return canManageGatewaySkill(row, currentUser.value?.id);
-}
 
 const isFormVisible = ref(false);
 const isEditMode = ref(false);
@@ -352,6 +345,7 @@ async function handleSubmit() {
     if (isEditMode.value && currentId.value != null) {
       await updateSkill(currentId.value, payload);
       MessagePlugin.success('Skill 更新成功');
+      emit('saved')
     } else {
       const newSkill = await createSkill(payload);
       // 将新创建的 Skill 自动加入当前对话
@@ -360,6 +354,7 @@ async function handleSubmit() {
         await useConversations().addEnabledSkillToConversation(cid, currentUser.value.id, newSkill.id);
       }
       MessagePlugin.success('Skill 创建成功');
+      emit('saved')
     }
     isFormVisible.value = false;
     resetForm();
@@ -377,141 +372,10 @@ async function handleDelete(id: number) {
   }
 }
 
-async function handleEnabledChange(skill: Skill, value: boolean) {
-  try {
-    await toggleSkillEnabled(skill, value);
-  } catch (err) {
-    MessagePlugin.error(err instanceof Error ? err.message : '状态更新失败');
-  }
-}
-
-// ── Search & Filter (Management) ──
-const managementSearchQuery = ref('')
-const managementStatusFilter = ref<'all' | 'active' | 'inactive'>('all')
-
-const managementFilterOptions = [
-  { label: '全量', value: 'all' },
-  { label: '已激活', value: 'active' },
-  { label: '未激活', value: 'inactive' },
-]
-
-const filteredSkills = computed(() => {
-  let result = skills.value
-
-  // 搜索
-  if (managementSearchQuery.value.trim()) {
-    const q = managementSearchQuery.value.trim().toLowerCase()
-    result = result.filter((s) => s.name.toLowerCase().includes(q))
-  }
-
-  // 激活状态筛选
-  if (managementStatusFilter.value === 'active') result = result.filter((s) => s.enabled)
-  else if (managementStatusFilter.value === 'inactive') result = result.filter((s) => !s.enabled)
-
-  return result
-})
+defineExpose({ openCreateForm, openEditForm, handleDelete })
 </script>
 
 <template>
-  <t-dialog
-    v-model:visible="isSkillManagementVisible"
-    header="Extended Skill 管理"
-    width="760px"
-    :confirm-btn="null"
-    :cancel-btn="null"
-    @close="closeSkillManagement"
-  >
-    <div class="skill-management-content">
-      <div class="actions">
-        <t-button theme="primary" @click="openCreateForm">
-          <template #icon><AddIcon /></template>
-          新增 Skill
-        </t-button>
-      </div>
-
-      <!-- Search & Filter -->
-      <div class="mgmt-filters-row">
-        <t-input
-          v-model="managementSearchQuery"
-          placeholder="搜索 Skill 名称..."
-          clearable
-          class="mgmt-search-input"
-        >
-          <template #prefix-icon>
-            <span class="mgmt-search-icon">🔍</span>
-          </template>
-        </t-input>
-        <t-select
-          v-model="managementStatusFilter"
-          :options="managementFilterOptions"
-          size="small"
-          class="mgmt-filter-select"
-        />
-      </div>
-
-      <div v-if="isLoading" class="loading-state">
-        <t-loading text="Loading skills..." />
-      </div>
-      <div v-else-if="error" class="error-state">
-        <t-alert theme="error" :message="error" />
-      </div>
-      <div v-else-if="filteredSkills.length === 0" class="empty-state">
-        <p>{{ managementSearchQuery || managementStatusFilter !== 'all' ? '没有匹配的 Skill' : '暂无 Extended Skill' }}</p>
-      </div>
-
-      <t-table
-        v-else
-        :data="filteredSkills"
-        row-key="id"
-        :columns="[
-          { colKey: 'name', title: '名称' },
-          { colKey: 'description', title: '技能介绍' },
-          { colKey: 'visibility', title: '可见性', width: 88 },
-          { colKey: 'executionMode', title: '类型', width: 120 },
-          { colKey: 'enabled', title: 'Enabled' },
-          { colKey: 'operations', title: '操作', width: 160 }
-        ]"
-        size="small"
-      >
-        <template #visibility="{ row }">
-          <t-tag size="small" variant="light" :theme="row.visibility === 'PUBLIC' ? 'success' : 'default'">
-            {{ row.visibility === 'PUBLIC' ? '公共' : '私人' }}
-          </t-tag>
-        </template>
-        <template #executionMode="{ row }">
-          <t-space>
-            <t-tag :theme="row.executionMode === 'OPENCLAW' ? 'warning' : 'primary'" variant="light" size="small">
-              {{ getExecutionModeLabel(row.executionMode) }}
-            </t-tag>
-            <t-tag v-if="row.executionMode === 'CONFIG' && getConfigSummary(row.configuration).kindLabel" variant="light" size="small">
-              {{ getConfigSummary(row.configuration).kindLabel }}
-            </t-tag>
-          </t-space>
-        </template>
-        <template #enabled="{ row }">
-          <t-switch
-            :disabled="!canManageRow(row)"
-            :model-value="row.enabled"
-            @update:model-value="(value: boolean) => handleEnabledChange(row, value)"
-          />
-        </template>
-        <template #operations="{ row }">
-          <t-space v-if="canManageRow(row)">
-            <t-button variant="text" shape="square" @click="openEditForm(row)">
-              <EditIcon />
-            </t-button>
-            <t-popconfirm content="确认删除该 Skill 吗？" @confirm="handleDelete(row.id)">
-              <t-button variant="text" theme="danger" shape="square">
-                <DeleteIcon />
-              </t-button>
-            </t-popconfirm>
-          </t-space>
-          <span v-else class="skill-mgmt-readonly">—</span>
-        </template>
-      </t-table>
-    </div>
-  </t-dialog>
-
   <t-dialog
     v-model:visible="isFormVisible"
     :header="isEditMode ? '编辑 Skill' : '新增 Skill'"
