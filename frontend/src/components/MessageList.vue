@@ -1301,6 +1301,15 @@ async function copyContent(text: string) {
   flex-shrink: 0;
 }
 
+/* 把 TChat 内置的"回到底部"按钮挪到聊天框右侧底部（消息操作图标行右边） */
+:deep(.t-chat__to-bottom) {
+  left: auto !important;
+  right: 12px !important;
+  margin-left: 0 !important;
+  top: auto !important;
+  bottom: 20px !important;
+}
+
 .tool-polling-elapsed {
   font-size: 12px;
   color: var(--td-text-color-placeholder);

@@ -733,6 +733,8 @@ public class SkillExecutionService {
         public String userId;
         public Object adjustedParams;
         public String sessionId;
+
+        /** open spec: fix-pre-existing-build-errors — 让 SkillExecutionService.executeFileToolSkill 拿得到 conversationId */
         public String conversationId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot run_id (NULL=普通 async) */
         public String parentToolId;

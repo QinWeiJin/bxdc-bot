@@ -252,6 +252,7 @@ CREATE TABLE IF NOT EXISTS user_files (
     parsed_summary LONGTEXT COMMENT '文件解析后的 JSON 摘要',
     upload_time DATETIME NOT NULL COMMENT '上传时间',
     source_file_id BIGINT NULL COMMENT '源文件 ID（用于临时文件关联源文件）',
+    is_tool_generated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否由工具生成（0=用户上传, 1=写文件/修改文件tool生成）',
     -- 预留：会话/对话 ID（关联 agent-core 调工具时的 session 和 conversation）
     -- 可空，老数据不填；未来按 session / conversation 维度查询附件
     session_id VARCHAR(128) NULL COMMENT '预留：关联会话 ID',
