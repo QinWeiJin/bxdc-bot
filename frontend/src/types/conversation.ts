@@ -3,6 +3,11 @@ export interface Conversation {
   conversation_id: string
   name: string
   enabled_skills: string // JSON string from backend, e.g. "[1, 3, 5]"
+  /**
+   * open spec: conversation-file-isolation — 该对话可操作的文件 ID 列表
+   * null = 存量对话（不启用文件隔离，向后兼容）
+   */
+  enabled_files?: string | null
   status: string
   is_published?: boolean
   api_description?: string | null

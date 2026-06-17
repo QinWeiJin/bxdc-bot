@@ -993,7 +993,7 @@ async function resumeBxdcbotPlannerImpl(run: BxdcbotRun): Promise<string> {
   return await runSubPlanner(run, planner, parentToolName, input, config, availableTools, allowedTools, parentToolId);
 }
 
-export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string): Record<string, string> {
+export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, sessionId?: string, conversationId?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Agent-Token": apiToken,
     "Content-Type": "application/json",
@@ -1003,6 +1003,10 @@ export function gatewaySkillMutationHeaders(apiToken: string, userId?: string, s
   }
   if (sessionId && String(sessionId).trim()) {
     headers["X-Session-Id"] = String(sessionId).trim();
+  }
+  // open spec: conversation-file-isolation — 让 gateway 知道当前会话 ID 以按 enabled_files 过滤
+  if (conversationId && String(conversationId).trim()) {
+    headers["X-Conversation-Id"] = String(conversationId).trim();
   }
   return headers;
 }
@@ -1048,13 +1052,25 @@ export async function loadGatewayExtendedTools(
     conversationId?: string;
     /** 对话级别 Skill 过滤：有值时仅加载匹配 ID 的 Extension Skill，undefined 或 [] 时全量加载 */
     enabledSkillIds?: number[];
+    /** 技能所有者类型过滤：1=用户技能, 2=系统技能, undefined=全部 */
+    skillOwnerType?: number;
   },
 ): Promise<StructuredTool[]> {
   try {
     const listHeaders = gatewaySkillReadHeaders(apiToken, userId);
-    const response = await axios.get(`${gatewayUrl}/api/skills`, {
-      headers: listHeaders,
-    });
+    
+    // 根据 skillOwnerType 决定调用哪个端点
+    let response;
+    if (options?.skillOwnerType !== undefined) {
+      response = await axios.get(`${gatewayUrl}/api/skills/by-owner-type`, {
+        headers: listHeaders,
+        params: { ownerType: options.skillOwnerType },
+      });
+    } else {
+      response = await axios.get(`${gatewayUrl}/api/skills`, {
+        headers: listHeaders,
+      });
+    }
 
     const skills = Array.isArray(response.data) ? response.data as GatewaySkill[] : [];
     const extensionSkills = skills.filter(
@@ -1179,7 +1195,8 @@ export async function loadGatewayExtendedTools(
                 ? String(options?.sessionId ?? runConfig?.configurable?.thread_id)
                 : undefined);
             const executeSessionId = sessionIdCandidate;
-            const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId);
+            // open spec: conversation-file-isolation — 把 conversationId 作为 X-Conversation-Id 传给 gateway
+            const executeHeaders = gatewaySkillMutationHeaders(apiToken, userId, executeSessionId, options?.conversationId);
             // Strip the `{payload: ...}` wrapper that extendedPassthroughSkillToolSchema
             // (ensureObjectType) injects for DeepSeek JSON-Schema compatibility, so the
             // Gateway never sees "payload" as a real parameter name. OPENCLAW path

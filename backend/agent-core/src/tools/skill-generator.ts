@@ -540,7 +540,8 @@ export class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof skillGe
     super({
       name: "skill_generator",
       description:
-        "Creates a NEW extension skill on SkillGateway—use ONLY after you have confirmed no existing tool (built-in, gateway extensions, or loadable filesystem skills) can fulfill the request, OR the user explicitly asked to add/create a new skill. " +
+        "Creates a NEW extension skill on SkillGateway—use ONLY when the user EXPLICITLY asks to create/add a new skill. " +
+        "Do NOT use this tool if you cannot find a suitable skill for the user's task—instead, inform the user that no suitable skill is available and ask them to provide more details or create a new skill if needed. " +
         "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template) as structured tool arguments. " +
         "For API skills, headers, query, testInput, and parameterContract may be sent either as objects or as JSON strings; booleans may be true/false strings. " +
         "Generated POST/PUT/PATCH/DELETE API skills default `parameterBinding` to jsonBody so flat contract fields map to the JSON request body; use `formBody` in configuration for `application/x-www-form-urlencoded` POST APIs, and `query` for URL-only APIs. " +

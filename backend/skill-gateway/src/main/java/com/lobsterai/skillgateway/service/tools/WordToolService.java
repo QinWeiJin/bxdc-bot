@@ -1,12 +1,15 @@
 package com.lobsterai.skillgateway.service.tools;
 
+import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.dto.FileParseResult;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
+import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import com.lobsterai.skillgateway.service.parser.FileParserRouter;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.poi.hwpf.HWPFDocument;
 import org.apache.poi.hwpf.usermodel.Paragraph;
 import org.apache.poi.hwpf.usermodel.Range;
@@ -57,16 +60,22 @@ public class WordToolService {
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
     private final FileParserRouter parserRouter;
+    private final UserFileMapper userFileMapper;
+    private final FtpConfig ftpConfig;
 
     @Autowired
     public WordToolService(FileToolService fileToolService,
                            FtpFileService ftpFileService,
                            FileParseService fileParseService,
-                           FileParserRouter parserRouter) {
+                           FileParserRouter parserRouter,
+                           UserFileMapper userFileMapper,
+                           FtpConfig ftpConfig) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
         this.fileParseService = fileParseService;
         this.parserRouter = parserRouter;
+        this.userFileMapper = userFileMapper;
+        this.ftpConfig = ftpConfig;
     }
 
     /** Spring 启动后自动注册到 FileToolService。 */
@@ -159,14 +168,13 @@ public class WordToolService {
     // ================================================================
 
     /**
-     * 创建一个新的 Word 文档（docx），覆盖式写入。
+     * 创建一个新的 Word 文档（docx）。**不覆盖原文件**，写入新文件，返回下载链接。
      * <p>
      * params.title — 文档标题（可选）
      * params.content — 段落内容（多行字符串，\n 分隔）
-     * params.overwrite — 是否覆盖同名文件（默认 true）
      * </p>
      * <p>
-     * 注：必须传 fileRef（原始文件名），最终保存为该文件名到用户 FTP 目录。
+     * 注：fileRef 用于继承原文件的 user_id / context；最终保存为新文件。
      * </p>
      */
     public FileToolResponse wordWrite(UserFile userFile, Map<String, Object> params, String userId) {
@@ -175,24 +183,50 @@ public class WordToolService {
 
         try {
             byte[] bytes = buildDocxBytes(title, content);
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
-            // 同步更新 UserFile 元数据
-            userFile.setFtpPath(fullPath);
-            userFile.setFileSize((long) bytes.length);
-            userFile.setFileType("docx");
+            // 写新文件（原文件保持不变），返回新文件 id + 下载链接
+            String originalFileName;
+            if (userFile != null) {
+                originalFileName = userFile.getOriginalFileName();
+            } else if (title != null && !title.isEmpty()) {
+                originalFileName = title + ".docx";
+            } else {
+                originalFileName = "untitled.docx";
+            }
+            String fullPath = ftpFileService.uploadFile(userId, originalFileName,
+                    new ByteArrayInputStream(bytes));
+            String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+            UserFile newFile = new UserFile();
+            newFile.setUserId(userId);
+            newFile.setOriginalFileName(originalFileName);
+            newFile.setFileName(actualFileName);
+            newFile.setFileSize((long) bytes.length);
+            newFile.setFileType("docx");
+            newFile.setFtpPath(fullPath);
+            newFile.setUploadTime(java.time.LocalDateTime.now());
+            if (userFile != null) {
+                newFile.setSourceFileId(userFile.getId());
+            }
+            userFileMapper.insert(newFile);
+
+            // 写入绝对路径 downloadUrl 到 DB
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+            newFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(newFile);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("message", "Word document written");
-            result.put("fileName", userFile.getOriginalFileName());
-            result.put("storageName", newStorageName);
+            result.put("message", "Word document created");
+            result.put("originalFileId", userFile != null ? userFile.getId() : null);
+            result.put("newFileId", newFile.getId());
+            result.put("newFileName", actualFileName);
+            result.put("originalFileName", originalFileName);
+            result.put("downloadUrl", downloadUrl);
             result.put("size", bytes.length);
             result.put("paragraphs", content.split("\n", -1).length);
-            result.put("downloadUrl", userFile.getDownloadUrl());
-            return FileToolResponse.ok(result, userFile.getOriginalFileName());
+            return FileToolResponse.ok(result, originalFileName);
         } catch (Exception e) {
-            log.error("word_write failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("word_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+            log.error("word_write failed", e);
+            return FileToolResponse.error("word_write failed: " + e.getMessage(), null);
         }
     }
 
@@ -340,13 +374,14 @@ public class WordToolService {
      */
     public FileToolResponse wordReplaceText(UserFile userFile, Map<String, Object> params, String userId) {
         ensureWordFile(userFile);
-        String find = readStringParam(params, "find", null);
-        String replace = readStringParam(params, "replace", null);
+        // 字段名与 skills.schema_properties 一致（oldText/newText），让 LLM 传过来的字段直接命中
+        String find = readStringParam(params, "oldText", null);
+        String replace = readStringParam(params, "newText", null);
         if (find == null || find.isEmpty()) {
-            return FileToolResponse.error("params.find is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.oldText is required", userFile.getOriginalFileName());
         }
         if (replace == null) {
-            return FileToolResponse.error("params.replace is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.newText is required", userFile.getOriginalFileName());
         }
         boolean replaceAll = readBoolParam(params, "replaceAll", true);
         boolean caseSensitive = readBoolParam(params, "caseSensitive", false);
@@ -354,8 +389,7 @@ public class WordToolService {
         try {
             byte[] bytes = downloadBytes(userFile);
             String ext = extractExtension(userFile.getOriginalFileName());
-            // 读取全文 → 替换 → 写回（docx 段落 + 表格都替换）
-            String newContent;
+            // 读取全文 → 替换（docx 段落 + 表格都替换）
             int replaceCount;
             if ("docx".equals(ext)) {
                 DocxReplacer replacer = replaceInDocx(bytes, find, replace, replaceAll, caseSensitive);
@@ -367,19 +401,37 @@ public class WordToolService {
                 replaceCount = replacer.count;
             }
 
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
-            userFile.setFtpPath(fullPath);
-            userFile.setFileSize((long) bytes.length);
-            userFile.setFileType(ext);
+            // 写新文件（原文件保持不变），返回新文件 id + 下载链接
+            String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
+                    new ByteArrayInputStream(bytes));
+            String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+            UserFile newFile = new UserFile();
+            newFile.setUserId(userId);
+            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setFileName(actualFileName);
+            newFile.setFileSize((long) bytes.length);
+            newFile.setFileType(ext);
+            newFile.setFtpPath(fullPath);
+            newFile.setUploadTime(java.time.LocalDateTime.now());
+            newFile.setSourceFileId(userFile.getId());
+            userFileMapper.insert(newFile);
+
+            // 写入绝对路径 downloadUrl 到 DB
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+            newFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(newFile);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Replacement complete");
-            result.put("fileName", userFile.getOriginalFileName());
+            result.put("originalFileId", userFile.getId());
+            result.put("newFileId", newFile.getId());
+            result.put("newFileName", actualFileName);
+            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("downloadUrl", downloadUrl);
             result.put("find", find);
             result.put("replace", replace);
             result.put("replaceCount", replaceCount);
-            result.put("storageName", newStorageName);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("word_replace_text failed for {}", userFile.getOriginalFileName(), e);
@@ -402,7 +454,21 @@ public class WordToolService {
         ensureWordFile(userFile);
         Object valuesObj = params != null ? params.get("values") : null;
         if (!(valuesObj instanceof Map)) {
-            return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+            // values 可能以 JSON 字符串传入（agent-core 的 buildSkillZodSchema 未支持 object 类型，
+            // 导致 LLM 将 values 序列化为字符串传递），在此尝试解析 JSON 字符串
+            if (valuesObj instanceof String) {
+                try {
+                    ObjectMapper mapper = new ObjectMapper();
+                    valuesObj = mapper.readValue((String) valuesObj, Map.class);
+                } catch (Exception e) {
+                    return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+                }
+                if (!(valuesObj instanceof Map)) {
+                    return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+                }
+            } else {
+                return FileToolResponse.error("params.values (Map<String, String>) is required", userFile.getOriginalFileName());
+            }
         }
         Map<String, Object> values = (Map<String, Object>) valuesObj;
         boolean fillMissing = readBoolParam(params, "fillMissingWithEmpty", true);
@@ -438,19 +504,37 @@ public class WordToolService {
                 }
             }
 
-            String newStorageName = generateNewStorageName(userFile.getOriginalFileName());
-            String fullPath = uploadBytes(userFile.getUserId(), newStorageName, bytes);
-            userFile.setFtpPath(fullPath);
-            userFile.setFileSize((long) bytes.length);
-            userFile.setFileType(ext);
+            // 写新文件（原文件保持不变），返回新文件 id + 下载链接
+            String fullPath = ftpFileService.uploadFile(userId, userFile.getOriginalFileName(),
+                    new ByteArrayInputStream(bytes));
+            String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+
+            UserFile newFile = new UserFile();
+            newFile.setUserId(userId);
+            newFile.setOriginalFileName(userFile.getOriginalFileName());
+            newFile.setFileName(actualFileName);
+            newFile.setFileSize((long) bytes.length);
+            newFile.setFileType(ext);
+            newFile.setFtpPath(fullPath);
+            newFile.setUploadTime(java.time.LocalDateTime.now());
+            newFile.setSourceFileId(userFile.getId());
+            userFileMapper.insert(newFile);
+
+            // 写入绝对路径 downloadUrl 到 DB
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
+            newFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(newFile);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Template fill complete");
-            result.put("fileName", userFile.getOriginalFileName());
+            result.put("originalFileId", userFile.getId());
+            result.put("newFileId", newFile.getId());
+            result.put("newFileName", actualFileName);
+            result.put("originalFileName", userFile.getOriginalFileName());
+            result.put("downloadUrl", downloadUrl);
             result.put("filledCount", filledCount);
             result.put("missingCount", missingCount);
             result.put("missingKeys", missingKeys);
-            result.put("storageName", newStorageName);
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
         } catch (Exception e) {
             log.error("word_template_fill failed for {}", userFile.getOriginalFileName(), e);
@@ -514,6 +598,18 @@ public class WordToolService {
         String tempPath = ftpFileService.uploadFile(userId, storageName, bais);
         // tempPath 的最后一段就是 storageName
         return tempPath;
+    }
+
+    /**
+     * 用原 storageName 覆盖写回文件（保留文件名不生成新 UUID）。
+     * <p>
+     * 用于 word_replace_text / word_template_fill 的"原文件被修改"语义——
+     * fileRef 仍然是同一个，user_files 行的 file_name 不变，DB 与磁盘一致。
+     * </p>
+     */
+    private String overwriteBytes(String userId, String storageName, byte[] bytes) throws IOException {
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        return ftpFileService.uploadFile(userId, storageName, bais);
     }
 
     /**
@@ -674,13 +770,17 @@ public class WordToolService {
                 org.apache.poi.xwpf.usermodel.XWPFRun run = titlePara.createRun();
                 run.setBold(true);
                 run.setFontSize(18);
+                run.setFontFamily("SimSun");
                 run.setText(title);
             }
             if (content != null && !content.isEmpty()) {
                 String[] lines = content.split("\n", -1);
                 for (String line : lines) {
                     XWPFParagraph p = doc.createParagraph();
-                    p.createRun().setText(line);
+                    org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+                    r.setFontFamily("SimSun");
+                    r.setFontSize(12);
+                    r.setText(line);
                 }
             }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -757,12 +857,11 @@ public class WordToolService {
         for (int i = runCount - 1; i >= 0; i--) {
             p.removeRun(i);
         }
-        // 写入新 run
-        if (runCount > 0) {
-            p.createRun().setText(replaced);
-        } else {
-            p.createRun().setText(replaced);
-        }
+        // 写入新 run（保留 SimSun 字体以支持中文）
+        org.apache.poi.xwpf.usermodel.XWPFRun newRun = p.createRun();
+        newRun.setFontFamily("SimSun");
+        newRun.setFontSize(12);
+        newRun.setText(replaced);
         return hitCount;
     }
 

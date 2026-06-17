@@ -115,7 +115,7 @@ export async function fetchConversation(
 export async function updateConversation(
   userId: string,
   conversationId: string,
-  data: { name?: string; enabled_skills?: number[] },
+  data: { name?: string; enabled_skills?: number[]; enabled_files?: number[] },
 ): Promise<Conversation> {
   const response = await fetch(apiUrl(`/api/conversations/${conversationId}`), {
     method: 'PUT',

@@ -24,6 +24,9 @@ public class Skill {
     @TableField("type")
     private String type; // SSH, API, COMPUTE
 
+    @TableField("skill_owner_type")
+    private Integer skillOwnerType = 1; // 1: 用户技能, 2: 系统技能
+
     @TableField("configuration")
     private String configuration; // JSON string for configuration
 
@@ -87,6 +90,14 @@ public class Skill {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public Integer getSkillOwnerType() {
+        return skillOwnerType;
+    }
+
+    public void setSkillOwnerType(Integer skillOwnerType) {
+        this.skillOwnerType = skillOwnerType;
     }
 
     public String getConfiguration() {

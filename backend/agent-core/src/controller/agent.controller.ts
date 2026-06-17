@@ -79,7 +79,7 @@ type SkillInterruptPayload = {
   parametersPreview?: unknown;
 };
 
-function unwrapLangGraphStreamPayload(raw: unknown): any {
+export function unwrapLangGraphStreamPayload(raw: unknown): any {
   if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
     return raw[1];
   }
@@ -671,14 +671,23 @@ export class AgentController {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });
           });
-          const { agent } = await AgentFactory.createAgent(
+          // 使用主 Agent（仅携带基础工具，不加载扩展技能）
+          // 具体技能执行由主 Agent 通过 search_tools + execute_skill_with_context 创建子 Agent 完成
+          const { agent } = await AgentFactory.createMainAgent(
             gatewayUrl,
             apiToken,
             openAiApiKey,
-            { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId, conversationId },
-            this.skillManager,
+            { 
+              modelName, 
+              baseUrl, 
+              callbacks: [llmCallbackHandler], 
+              sessionId, 
+              conversationId,
+              streamCallback: (event) => {
+                subject.next({ data: JSON.stringify({ type: 'sub_agent_event', ...event }) });
+              }
+            },
             userId,
-            enabledSkillIds,
           );
 
           const memories = await this.memoryService.searchMemories(instruction, userId, 10);
@@ -722,7 +731,7 @@ export class AgentController {
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
 
-          const graphConfig = { configurable: { thread_id: sessionId } };
+          const graphConfig = { configurable: { thread_id: sessionId }, recursionLimit: 50 };
           let stream: AsyncIterable<any> = await agent.stream({ messages }, graphConfig);
           let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
 
@@ -830,7 +839,7 @@ export class AgentController {
 
                 const resumeStream = await agent.stream(
                   new Command({ resume: { confirmed: true, adjustedParams: confirmedResult.adjustedParams } }),
-                  graphConfig,
+                  { ...graphConfig, recursionLimit: 50 },
                 );
                 iterator = resumeStream[Symbol.asyncIterator]();
                 continue outer;

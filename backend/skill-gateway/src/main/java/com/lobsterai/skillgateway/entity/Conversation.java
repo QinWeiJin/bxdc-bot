@@ -31,6 +31,13 @@ public class Conversation {
     @TableField("enabled_skills")
     private String enabledSkills;
 
+    /**
+     * 该对话可操作的文件 ID 列表（JSON 数组，如 [1, 3, 5]）。
+     * NULL 表示存量对话（不启用过滤，向后兼容）。
+     */
+    @TableField("enabled_files")
+    private String enabledFiles;
+
     @TableField("status")
     private String status;
 
@@ -92,6 +99,14 @@ public class Conversation {
 
     public void setEnabledSkills(String enabledSkills) {
         this.enabledSkills = enabledSkills;
+    }
+
+    public String getEnabledFiles() {
+        return enabledFiles;
+    }
+
+    public void setEnabledFiles(String enabledFiles) {
+        this.enabledFiles = enabledFiles;
     }
 
     public String getStatus() {

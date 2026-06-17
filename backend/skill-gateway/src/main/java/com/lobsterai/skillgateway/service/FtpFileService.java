@@ -12,7 +12,6 @@ import org.springframework.stereotype.Service;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -39,7 +38,6 @@ public class FtpFileService {
 
     /**
      * 确保用户 FTP 目录存在，不存在则创建。
-     * 任务 2.2：首次操作时自动创建。
      *
      * @param userId AAM 用户 ID
      * @return true 如果目录已存在或创建成功
@@ -49,17 +47,10 @@ public class FtpFileService {
         FTPClient ftp = connect();
         try {
             String userPath = ftpConfig.buildUserPath(userId);
-            boolean exists = directoryExists(ftp, userPath);
-            if (exists) {
-                log.debug("User directory already exists: {}", userPath);
+            if (directoryExists(ftp, userPath)) {
                 return true;
             }
-            // 逐级创建目录
-            boolean created = makeDirectories(ftp, userPath);
-            if (created) {
-                log.info("Created user directory: {}", userPath);
-            }
-            return created;
+            return makeDirectories(ftp, userPath);
         } finally {
             disconnect(ftp);
         }
@@ -87,11 +78,11 @@ public class FtpFileService {
                 makeDirectories(ftp, userPath);
             }
             if (!ftp.changeWorkingDirectory(userPath)) {
-                throw new IOException("Cannot change to user directory: " + userPath);
+                throw new IOException("Cannot enter user directory: " + userPath);
             }
             ftp.setFileType(FTP.BINARY_FILE_TYPE);
             if (!ftp.storeFile(storageFileName, inputStream)) {
-                throw new IOException("FTP storeFile failed for: " + storageFileName + ", reply: " + ftp.getReplyString());
+                throw new IOException("FTP storeFile failed: " + storageFileName);
             }
             String fullPath = userPath + "/" + storageFileName;
             log.info("File uploaded: {} (user={}, original={})", fullPath, userId, originalFileName);
@@ -102,11 +93,46 @@ public class FtpFileService {
     }
 
     /**
-     * 从用户 FTP 目录下载文件。
+     * 上传文件到用户 FTP 目录，使用指定的存储文件名（覆盖写入）。
+     * <p>
+     * 用于临时文件操作时覆盖写入已存在的文件，节省存储空间。
+     * </p>
+     *
+     * @param userId      AAM 用户 ID
+     * @param fileName    存储文件名（UUID 文件名，如 a1b2c3d4.xlsx）
+     * @param inputStream 文件输入流
+     * @return 上传后的 FTP 完整路径
+     * @throws IOException FTP 操作失败
+     */
+    public String uploadFileWithFileName(String userId, String fileName, InputStream inputStream) throws IOException {
+        FTPClient ftp = connect();
+        try {
+            String userPath = ftpConfig.buildUserPath(userId);
+            if (!directoryExists(ftp, userPath)) {
+                makeDirectories(ftp, userPath);
+            }
+            if (!ftp.changeWorkingDirectory(userPath)) {
+                throw new IOException("Cannot enter user directory: " + userPath);
+            }
+            ftp.setFileType(FTP.BINARY_FILE_TYPE);
+            // 使用指定的文件名上传（覆盖已存在的文件）
+            if (!ftp.storeFile(fileName, inputStream)) {
+                throw new IOException("FTP storeFile failed: " + fileName);
+            }
+            String fullPath = userPath + "/" + fileName;
+            log.info("File overwritten: {} (user={}, fileName={})", fullPath, userId, fileName);
+            return fullPath;
+        } finally {
+            disconnect(ftp);
+        }
+    }
+
+    /**
+     * 下载文件内容到内存字节流。
      *
      * @param userId   AAM 用户 ID
      * @param fileName 文件名
-     * @return 文件字节数组输出流
+     * @return 文件内容的字节流
      * @throws IOException FTP 操作失败或文件不存在
      */
     public ByteArrayOutputStream downloadFile(String userId, String fileName) throws IOException {
@@ -119,12 +145,34 @@ public class FtpFileService {
             ftp.setFileType(FTP.BINARY_FILE_TYPE);
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             if (!ftp.retrieveFile(fileName, baos)) {
-                throw new IOException("FTP retrieveFile failed for: " + fileName + ", reply: " + ftp.getReplyString());
+                throw new IOException("File not found or download failed: " + fileName);
             }
-            log.debug("File downloaded: {}/{} (user={})", userPath, fileName, userId);
             return baos;
         } finally {
             disconnect(ftp);
+        }
+    }
+
+    /**
+     * 打开文件读取流（用于流式下载，避免全量加载到堆）。
+     * <p>
+     * 调用方必须 {@code try-with-resources} 关闭。
+     * 注意：Stream 关闭时 FTP 连接不会自动断开（独立连接），
+     * 大文件场景建议用 downloadFile 走 ByteArrayOutputStream。
+     * </p>
+     */
+    public InputStream openForDownload(String userId, String fileName) throws IOException {
+        FTPClient ftp = connect();
+        try {
+            String userPath = ftpConfig.buildUserPath(userId);
+            if (!ftp.changeWorkingDirectory(userPath)) {
+                throw new IOException("User directory not found: " + userPath);
+            }
+            ftp.setFileType(FTP.BINARY_FILE_TYPE);
+            return ftp.retrieveFileStream(fileName);
+        } catch (IOException e) {
+            disconnect(ftp);
+            throw e;
         }
     }
 
@@ -166,14 +214,11 @@ public class FtpFileService {
         try {
             String userPath = ftpConfig.buildUserPath(userId);
             if (!ftp.changeWorkingDirectory(userPath)) {
-                log.warn("User directory not found for delete: {}", userPath);
                 return false;
             }
             boolean deleted = ftp.deleteFile(fileName);
             if (deleted) {
                 log.info("File deleted: {}/{} (user={})", userPath, fileName, userId);
-            } else {
-                log.warn("File not found or delete failed: {}/{} (user={})", userPath, fileName, userId);
             }
             return deleted;
         } finally {
@@ -193,17 +238,16 @@ public class FtpFileService {
         try {
             String userPath = ftpConfig.buildUserPath(userId);
             if (!ftp.changeWorkingDirectory(userPath)) {
-                log.debug("User directory not found for list: {}", userPath);
                 return Collections.emptyList();
             }
             FTPFile[] files = ftp.listFiles();
-            if (files == null || files.length == 0) {
+            if (files == null) {
                 return Collections.emptyList();
             }
             List<FTPFile> fileList = new ArrayList<FTPFile>();
-            for (FTPFile file : files) {
-                if (file.isFile()) {
-                    fileList.add(file);
+            for (FTPFile f : files) {
+                if (f.isFile()) {
+                    fileList.add(f);
                 }
             }
             return fileList;
@@ -307,20 +351,6 @@ public class FtpFileService {
         return shortUuid;
     }
 
-    /**
-     * 提取文件扩展名（小写，不含点）。
-     */
-    private static String extractExtension(String fileName) {
-        if (fileName == null) {
-            return "";
-        }
-        int dotIndex = fileName.lastIndexOf('.');
-        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
-            return "";
-        }
-        return fileName.substring(dotIndex + 1).toLowerCase();
-    }
-
     // ========== 内部方法 ==========
 
     /**
@@ -342,7 +372,6 @@ public class FtpFileService {
         }
         ftp.enterLocalPassiveMode();
         ftp.setFileType(FTP.BINARY_FILE_TYPE);
-        log.debug("FTP connected to {}:{}", ftpConfig.getHost(), ftpConfig.getPort());
         return ftp;
     }
 
@@ -353,13 +382,9 @@ public class FtpFileService {
         if (ftp != null && ftp.isConnected()) {
             try {
                 ftp.logout();
-            } catch (IOException ignored) {
-                // ignore logout errors
-            }
-            try {
                 ftp.disconnect();
-            } catch (IOException ignored) {
-                // ignore disconnect errors
+            } catch (IOException e) {
+                log.warn("FTP disconnect error: {}", e.getMessage());
             }
         }
     }
@@ -368,43 +393,43 @@ public class FtpFileService {
      * 检查 FTP 目录是否存在。
      */
     private boolean directoryExists(FTPClient ftp, String path) throws IOException {
-        String originalDir = ftp.printWorkingDirectory();
-        try {
-            return ftp.changeWorkingDirectory(path);
-        } finally {
-            // 恢复到原始目录
-            try {
-                ftp.changeWorkingDirectory(originalDir);
-            } catch (IOException ignored) {
-                // ignore
-            }
-        }
+        String cwd = ftp.printWorkingDirectory();
+        return ftp.changeWorkingDirectory(path) && ftp.changeWorkingDirectory(cwd);
     }
 
     /**
-     * 逐级创建 FTP 目录（类似 mkdir -p）。
+     * 递归创建 FTP 目录。
      */
     private boolean makeDirectories(FTPClient ftp, String path) throws IOException {
-        if (path == null || path.isEmpty()) {
-            return false;
-        }
-        // 处理路径分隔符
-        String normalizedPath = path.replace('\\', '/');
-        String[] parts = normalizedPath.split("/");
-        StringBuilder current = new StringBuilder();
+        String[] parts = path.split("/");
+        StringBuilder current = new StringBuilder("/");
         for (String part : parts) {
             if (part.isEmpty()) {
                 continue;
             }
-            current.append("/").append(part);
-            String currentPath = current.toString();
-            if (!directoryExists(ftp, currentPath)) {
-                if (!ftp.makeDirectory(currentPath)) {
-                    log.warn("Failed to create FTP directory: {}", currentPath);
+            current.append(part);
+            if (!directoryExists(ftp, current.toString())) {
+                if (!ftp.makeDirectory(current.toString())) {
+                    log.error("FTP mkdir failed: {}", current);
                     return false;
                 }
             }
+            current.append("/");
         }
         return true;
+    }
+
+    /**
+     * 提取文件扩展名（小写，不含点）。
+     */
+    private static String extractExtension(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
+            return "";
+        }
+        return fileName.substring(dotIndex + 1).toLowerCase();
     }
 }

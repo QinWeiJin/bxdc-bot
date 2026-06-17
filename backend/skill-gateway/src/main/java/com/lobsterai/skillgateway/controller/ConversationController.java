@@ -56,7 +56,9 @@ public class ConversationController {
         for (Conversation conv : conversations) {
             result.add(toConversationDto(conv));
         }
-        return ResponseEntity.ok(Map.of("conversations", result));
+        java.util.Map<String, Object> convBody = new java.util.LinkedHashMap<String, Object>();
+        convBody.put("conversations", result);
+        return ResponseEntity.ok(convBody);
     }
 
     @PostMapping
@@ -69,10 +71,17 @@ public class ConversationController {
                 ? ((List<?>) body.get("enabled_skills")).stream()
                     .filter(item -> item instanceof Number)
                     .map(item -> ((Number) item).longValue())
-                    .toList()
+                    .collect(java.util.stream.Collectors.toList())
+                : Collections.emptyList();
+        @SuppressWarnings("unchecked")
+        List<Long> enabledFiles = body.get("enabled_files") instanceof List
+                ? ((List<?>) body.get("enabled_files")).stream()
+                    .filter(item -> item instanceof Number)
+                    .map(item -> ((Number) item).longValue())
+                    .collect(java.util.stream.Collectors.toList())
                 : Collections.emptyList();
 
-        Conversation conv = conversationService.create(userId, name, enabledSkills);
+        Conversation conv = conversationService.create(userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.status(HttpStatus.CREATED).body(toConversationDto(conv));
     }
 
@@ -104,11 +113,20 @@ public class ConversationController {
                     ? ((List<?>) body.get("enabled_skills")).stream()
                         .filter(item -> item instanceof Number)
                         .map(item -> ((Number) item).longValue())
-                        .toList()
+                        .collect(java.util.stream.Collectors.toList())
+                    : Collections.emptyList())
+                : null;
+        @SuppressWarnings("unchecked")
+        List<Long> enabledFiles = body.containsKey("enabled_files")
+                ? (body.get("enabled_files") instanceof List
+                    ? ((List<?>) body.get("enabled_files")).stream()
+                        .filter(item -> item instanceof Number)
+                        .map(item -> ((Number) item).longValue())
+                        .collect(java.util.stream.Collectors.toList())
                     : Collections.emptyList())
                 : null;
 
-        Conversation conv = conversationService.update(conversationId, userId, name, enabledSkills);
+        Conversation conv = conversationService.update(conversationId, userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.ok(toConversationDto(conv));
     }
 
@@ -117,7 +135,9 @@ public class ConversationController {
             @RequestHeader("X-User-Id") String userId,
             @PathVariable("id") String conversationId) {
         conversationService.delete(conversationId, userId);
-        return ResponseEntity.ok(Map.of("ok", true));
+        java.util.Map<String, Object> okBody = new java.util.LinkedHashMap<String, Object>();
+        okBody.put("ok", true);
+        return ResponseEntity.ok(okBody);
     }
 
     // ---- SSE: 对话级别实时事件订阅 ----
@@ -195,7 +215,7 @@ public class ConversationController {
             log.debug("[ConversationController.compact] INTERNAL_API_TOKEN not set, allowing (dev mode)");
         } else if (internalToken == null || !expected.equals(internalToken)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                    .body(Map.of("error", "invalid_internal_token"));
+                    .body(Collections.singletonMap("error", "invalid_internal_token"));
         }
 
         String userId = body.get("userId") instanceof String ? (String) body.get("userId") : null;
@@ -231,6 +251,7 @@ public class ConversationController {
         dto.put("conversation_id", conv.getConversationId());
         dto.put("name", conv.getName());
         dto.put("enabled_skills", conv.getEnabledSkills());
+        dto.put("enabled_files", conv.getEnabledFiles());
         dto.put("status", conv.getStatus());
         dto.put("is_published", conv.getIsPublished());
         dto.put("api_description", conv.getApiDescription());

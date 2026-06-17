@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
 import com.lobsterai.skillgateway.config.DedupConfig;
+import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.AsyncTask;
 import com.lobsterai.skillgateway.entity.ServerLedger;
 import com.lobsterai.skillgateway.entity.Skill;
@@ -41,6 +42,7 @@ public class SkillExecutionService {
     private final AsyncTaskPollingService asyncTaskPollingService;
     private final AsyncTaskPollingScheduler asyncTaskPollingScheduler;
     private final ObjectMapper objectMapper;
+    private final FileToolService fileToolService;
 
     public SkillExecutionService(
             SkillService skillService,
@@ -53,7 +55,8 @@ public class SkillExecutionService {
             PendingConfirmationStore confirmationStore,
             AsyncTaskPollingService asyncTaskPollingService,
             AsyncTaskPollingScheduler asyncTaskPollingScheduler,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            FileToolService fileToolService
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -66,6 +69,7 @@ public class SkillExecutionService {
         this.asyncTaskPollingService = asyncTaskPollingService;
         this.asyncTaskPollingScheduler = asyncTaskPollingScheduler;
         this.objectMapper = objectMapper;
+        this.fileToolService = fileToolService;
     }
 
     public Object execute(ExecuteRequest request) throws Exception {
@@ -108,6 +112,25 @@ public class SkillExecutionService {
                 effectiveParameters = mergeParameters(conf.parameters, request.adjustedParams);
             }
             confirmationStore.remove(request.requestId);
+
+            // 二次确认的关键：把 confirmed=true 注入到 parameters，
+            // 这样下层 handler（如 FileManageService.fileDelete 读 params.confirmed）才能感知。
+            // 之前 effectiveParameters 没带 confirmed 标记，导致 file_delete/file_clear_all
+            // 第二次仍走 "返回 requiresConfirmation" 分支，无法真正执行。
+            if (effectiveParameters instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> paramMap = (Map<String, Object>) effectiveParameters;
+                if (!paramMap.containsKey("confirmed")) {
+                    paramMap.put("confirmed", Boolean.TRUE);
+                }
+            } else {
+                Map<String, Object> wrapped = new LinkedHashMap<String, Object>();
+                wrapped.put("confirmed", Boolean.TRUE);
+                if (effectiveParameters != null) {
+                    wrapped.put("_originalParams", effectiveParameters);
+                }
+                effectiveParameters = wrapped;
+            }
         }
 
         effectiveParameters = mergeDefaults(effectiveParameters, config);
@@ -126,6 +149,8 @@ public class SkillExecutionService {
                 return executeSshSkill(skill, config, effectiveParameters, request.userId);
             case "template":
                 return executeTemplateSkill(config, effectiveParameters);
+            case "file_tool":
+                return executeFileToolSkill(config, effectiveParameters, request.userId, request.conversationId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }
@@ -590,6 +615,116 @@ public class SkillExecutionService {
         return result;
     }
 
+    /**
+     * 分发 file_tool 类技能到 {@link FileToolService} 统一调度。
+     * <p>
+     * 支持两种 configuration 模式：
+     * </p>
+     * <ol>
+     *   <li><b>细粒度模式（legacy）</b>：{@code config.toolName} = "word_read" / "txt_distinct_lines" 等具体工具名
+     *       —— 老的 file_* / word_* / txt_* 工具走这条路径</li>
+     *   <li><b>family 整合模式（新）</b>：{@code config.family} = "word" / "txt" 等，
+     *       从 {@code parameters.action} 拼出内部 toolName = "{family}_{action}"（如 word_read），
+     *       委派给现有 {@link FileToolService} 调度 —— 内部 handler 注册表一行不动</li>
+     * </ol>
+     * <p>
+     * family 模式的好处是：对外（LLM）只暴露 1 个工具（如 word_ops），
+     * 对内（gateway 调度）仍复用已注册的 word_read/write/... 等细粒度 handler。
+     * </p>
+     */
+    @SuppressWarnings("unchecked")
+    private Object executeFileToolSkill(Map<String, Object> config, Object parameters, String userId,
+                                        String conversationId) {
+        String toolName = resolveFileToolName(config, parameters);
+        Map<String, Object> params = parameters instanceof Map
+                ? (Map<String, Object>) parameters
+                : new LinkedHashMap<String, Object>();
+        // open spec: conversation-file-isolation — 把 conversationId 传入 4 参 overload，
+        // 让 FileToolService 解析 enabled_files 并按会话过滤
+        FileToolResponse response = fileToolService.execute(userId, toolName, params, conversationId);
+
+        // file_tool 内部 file_delete / file_clear_all 返回 { requiresConfirmation: true, ... }
+        // 必须把这个内部信号转成顶层 CONFIRMATION_REQUIRED 协议，
+        // 否则 agent-core 看到 success=true 就当成操作已完成
+        if (response.isSuccess() && response.getOutput() instanceof Map) {
+            Map<String, Object> outputMap = (Map<String, Object>) response.getOutput();
+            Object rcFlag = outputMap.get("requiresConfirmation");
+            if (Boolean.TRUE.equals(rcFlag)) {
+                String requestId = confirmationStore.put(
+                        null,                    // skillId 留空（file_tool 不绑定 skills.id）
+                        toolName,                // 用 toolName 当 skillName
+                        parameters,
+                        userId
+                );
+                Map<String, Object> confirmResponse = new LinkedHashMap<String, Object>();
+                confirmResponse.put("status", "CONFIRMATION_REQUIRED");
+                confirmResponse.put("requestId", requestId);
+                confirmResponse.put("skillName", toolName);
+                confirmResponse.put("skillId", null);
+                confirmResponse.put("parameters", parameters);
+                confirmResponse.put("expiresInSeconds", 300);
+                return confirmResponse;
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<String, Object>();
+        if (response.isSuccess()) {
+            result.put("success", true);
+            result.put("output", response.getOutput());
+        } else {
+            result.put("success", false);
+            result.put("message", response.getMessage());
+        }
+        if (response.getFileRef() != null) {
+            result.put("fileRef", response.getFileRef());
+        }
+        return result;
+    }
+
+    /**
+     * 解析 file_tool 实际要调用的内部 toolName。
+     * <p>
+     * 优先级：先看 {@code config.family}（整合模式），再看 {@code config.toolName}（legacy 模式）。
+     * </p>
+     *
+     * @throws IllegalArgumentException 配置错误或缺 action 时
+     */
+    private String resolveFileToolName(Map<String, Object> config, Object parameters) {
+        // 模式 1：family 整合模式（新）
+        Object familyObj = config.get("family");
+        if (familyObj != null) {
+            String family = String.valueOf(familyObj).trim();
+            if (family.isEmpty()) {
+                throw new IllegalArgumentException("file_tool family-mode configuration has empty 'family'");
+            }
+            Map<String, Object> paramMap = parameters instanceof Map
+                    ? (Map<String, Object>) parameters : new LinkedHashMap<String, Object>();
+            Object actionObj = paramMap.get("action");
+            if (actionObj == null) {
+                throw new IllegalArgumentException(
+                        "file_tool family '" + family + "' requires 'action' parameter " +
+                        "(e.g. action=read / write / extract_content / search_keyword / replace_text / template_fill)");
+            }
+            String action = String.valueOf(actionObj).trim();
+            if (action.isEmpty()) {
+                throw new IllegalArgumentException("file_tool family '" + family + "' has empty 'action'");
+            }
+            return family + "_" + action;   // 例："word" + "_" + "read" = "word_read"
+        }
+
+        // 模式 2：legacy 细粒度模式
+        Object toolNameObj = config.get("toolName");
+        if (toolNameObj == null) {
+            throw new IllegalArgumentException(
+                    "file_tool configuration must contain either 'family' (integration mode) or 'toolName' (legacy mode)");
+        }
+        String toolName = String.valueOf(toolNameObj).trim();
+        if (toolName.isEmpty()) {
+            throw new IllegalArgumentException("file_tool legacy-mode has empty 'toolName'");
+        }
+        return toolName;
+    }
+
     public static class ExecuteRequest {
         public Long skillId;
         public Object parameters;
@@ -598,6 +733,8 @@ public class SkillExecutionService {
         public String userId;
         public Object adjustedParams;
         public String sessionId;
+        /** conversation-file-isolation: 当前对话 ID（用于 file_tool 解析 enabled_files） */
+        public String conversationId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot run_id (NULL=普通 async) */
         public String parentToolId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot skill_id (NULL=非 Bxdcbot 调起) */
@@ -609,6 +746,10 @@ public class SkillExecutionService {
 
         public String getSessionId() {
             return sessionId;
+        }
+
+        public String getConversationId() {
+            return conversationId;
         }
     }
 }
