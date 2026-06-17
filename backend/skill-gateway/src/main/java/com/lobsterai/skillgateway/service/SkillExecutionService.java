@@ -733,6 +733,8 @@ public class SkillExecutionService {
         public String userId;
         public Object adjustedParams;
         public String sessionId;
+        /** conversation-file-isolation: 当前对话 ID（用于 file_tool 解析 enabled_files） */
+        public String conversationId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot run_id (NULL=普通 async) */
         public String parentToolId;
         /** bxdcbot-multi-turn-async: 父 Bxdcbot skill_id (NULL=非 Bxdcbot 调起) */
@@ -744,6 +746,10 @@ public class SkillExecutionService {
 
         public String getSessionId() {
             return sessionId;
+        }
+
+        public String getConversationId() {
+            return conversationId;
         }
     }
 }

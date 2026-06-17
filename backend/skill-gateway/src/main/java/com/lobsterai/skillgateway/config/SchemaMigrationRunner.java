@@ -167,6 +167,11 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "schema_properties", existingColumns,
                 "ALTER TABLE skills ADD COLUMN schema_properties TEXT DEFAULT NULL " +
                 "COMMENT 'Skill 实体持久化的 JSON schema 配置（lskrat 6-08 加，未同步 SQL）'");
+        // skill_owner_type：zhangzhuang 6-16 merge 入 wuqilei PR 改的，schema-mysql.sql 已加但现有 skills 表缺列
+        // 1=用户技能 / 2=系统技能 / 0=未指定
+        ensureColumn(conn, table, "skill_owner_type", existingColumns,
+                "ALTER TABLE skills ADD COLUMN skill_owner_type TINYINT(1) DEFAULT 1 " +
+                "COMMENT '1=用户技能, 2=系统技能, 0=未指定（zhangzhuang merge wuqilei 1afb8db 引入）'");
     }
 
     /**
