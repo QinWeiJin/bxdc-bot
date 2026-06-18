@@ -84,6 +84,11 @@ function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   return '调用中'
 }
 
+function formatToolSummary(summary?: string) {
+  if (!summary) return ''
+  return summary.length > 60 ? summary.substring(0, 60) + '...' : summary
+}
+
 function formatPollingStatus(ps: PollingStatus): string {
   if (ps.status === 'COMPLETED') return '轮询结束'
   if (ps.status === 'FAILED' || ps.status === 'TIMEOUT') return '轮询错误'

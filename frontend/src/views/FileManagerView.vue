@@ -68,7 +68,7 @@ async function handleUpload(event: Event) {
     input.value = ''
     return
   }
-  const allowed = ['.doc', '.docx', '.xls', '.xlsx', '.csv', '.ppt', '.pptx', '.txt', '.md', '.py', '.png', '.jpg', '.jpeg', '.webp']
+  const allowed = ['.doc', '.docx', '.xls', '.xlsx', '.txt', '.md']
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
   if (!allowed.includes(ext)) {
     MessagePlugin.error('不支持的文件类型')

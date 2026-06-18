@@ -72,6 +72,9 @@ public class FileUploadController {
     /** 单文件最大 10 MiB（与前端 10MB 校验对齐） */
     private static final long MAX_FILE_SIZE = 10L * 1024L * 1024L;
 
+    /** 允许上传的文件扩展名 */
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = java.util.Set.of("doc", "docx", "xls", "xlsx", "txt", "md");
+
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
     private final UserFileMapper userFileMapper;
@@ -119,6 +122,12 @@ public class FileUploadController {
         String originalFileName = file.getOriginalFilename();
         if (originalFileName == null || originalFileName.trim().isEmpty()) {
             return error(HttpStatus.BAD_REQUEST, "FILE_NO_NAME", "文件名为空");
+        }
+        // 文件类型校验：仅允许 doc, docx, xls, xlsx, txt, md
+        String ext = extractExtension(originalFileName);
+        if (ext == null || !ALLOWED_EXTENSIONS.contains(ext)) {
+            return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_TYPE_NOT_ALLOWED",
+                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/txt/md");
         }
 
         // 2. userId 校验（FileAccessInterceptor 已保证 X-User-Id 存在）

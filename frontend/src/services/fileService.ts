@@ -39,7 +39,10 @@ export const fileService = {
     const blobUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = blobUrl
-    a.download = 'download'
+    // 从 Content-Disposition header 提取文件名，与 FTP 展示名称保持一致
+    const disposition = res.headers.get('Content-Disposition')
+    const match = disposition?.match(/filename\*=UTF-8''(.+)/) || disposition?.match(/filename="?([^";]+)"?/)
+    a.download = match?.[1] ? decodeURIComponent(match[1]) : 'download'
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
